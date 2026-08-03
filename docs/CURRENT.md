@@ -28,7 +28,7 @@ M1.4 adds exhaustive effect-runtime dispositions, typed action-economy grants, d
 
 M1.4 is a rules-engine and content-resolution foundation, not the M2.1 product slice: it contains no character persistence, character service, play sheet, level-up workflow, or transfer workflow. The private Brammel pilot was not rerun for M1.4; its local regression test stays skipped unless the pack path is supplied. See [M1.4_RULES_ENGINE_COVERAGE.md](M1.4_RULES_ENGINE_COVERAGE.md) for the gate.
 
-## M2.1 delivered
+## M2.1 implemented, pending certification
 
 M2.1 turns that foundation into the first working character product, bounded to levels 1 and 2 of one original synthetic class.
 
@@ -40,7 +40,23 @@ The synthetic slice supplies Vanguard, Riverborn, Caravan Warden, Guarded Hand, 
 
 The product surfaces are mobile first: a real empty library, the exact nine-step builder with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
 
-Unknown required inputs render as `—` with a recovery action rather than zero. Overrides accept only typed `replace` and `add` against an allow-listed path and are marked for review rather than discarded when the baseline moves.
+Unknown required inputs render as `—` with a recovery action rather than zero. Overrides accept only typed `replace` and `add` against a target the resolver genuinely applies; an unsupported target is refused rather than stored inert, and a moved baseline marks the override for review rather than discarding it.
+
+Undo is exact: every reversible action stores the prior values of the fields it changed, so clamped healing and temporary-hit-point absorption reverse correctly. The character fingerprint is a canonical recursive hash over an explicit field list plus the override set, so a nested change cannot be missed. Transfer, Replace and restore all carry the complete aggregate, including typed overrides.
+
+The authoritative services are generic: they discover hit dice, saves, skills, masteries, equipment choices and ability-generation methods from content, and resolve each character only against its own ruleset's active sources. A second synthetic ruleset in the test suite proves it, and a repository-wide check keeps first-slice IDs out of the product layer.
+
+### Verification ladder
+
+M2.1 is **not** marked complete. Each claim below is recorded at the level it has actually reached.
+
+| Level | Status |
+| --- | --- |
+| Implemented | Every mandatory M2.1 acceptance criterion has code behind it. |
+| Verified locally | `npm ci`, typecheck, unit and integration tests, both builds, Pages verification, the full browser matrix, audit and privacy scan all pass from a clean worktree. |
+| Verified by GitHub CI | A Verify workflow runs the same clean sequence on the pushed head. Its result is reported on the pull request; do not treat a local run as CI evidence. |
+| Verified in a browser | Chromium, at 360, 390, 412, 768, 1024 and 1440 CSS px, plus offline, reduced motion, forced colours and axe checks. |
+| Requires physical Android validation | Not done. Touch targets are verified in CSS pixels only; real-device performance, install behaviour and storage eviction are unverified. Playwright is not evidence of physical-device behaviour. |
 
 ## Device and installation behavior
 
