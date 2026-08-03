@@ -54,7 +54,9 @@ flowchart TD
 
 Effects are a discriminated union. Conditions use explicit `all/any/not` and named predicates. Values are literals, safe paths or allow-listed named formulas—never executable JavaScript and never `eval`.
 
-Effects run in deterministic priority/ID order. The compile-time capability matrix assigns `automatic`, `choice-driven`, or `manual-adjudication` to every allowed variant. Every effect reports applied, gated, choice-required, review-required, or error with a reason; silent ignore is forbidden. Choice, equipment, and character derivation are separate pure resolution layers feeding the effect runtime.
+Effects run in deterministic priority/ID order. The compile-time capability matrix assigns `automatic`, `choice-driven`, or `manual-adjudication` to every allowed variant. Every effect reports applied, gated, choice-required, review-required, or error with a reason; silent ignore is forbidden. Choice, equipment, and character derivation are separate pure resolution layers feeding the effect runtime. Grants keep their category: action-economy grants carry an explicit attack/action/bonus-action/reaction kind, and the `min`/`max` operations are lower and upper bounds rather than arithmetic minimum and maximum.
+
+Imports have one confirmation boundary. Preview and confirmation run the same complete-set validation; confirmation reruns it against confirmation-time database state inside a single flat Dexie transaction and writes only if the whole set still resolves. Single-file confirmation is a one-file set, so it inherits the same guarantees.
 
 ## Private content packs
 

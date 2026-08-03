@@ -24,7 +24,9 @@ M1.2 makes that static PWA portable between domain-root hosting and the temporar
 
 M1.3 adds private-library schema v2, typed content progressions and relations, dependency-set imports, deterministic conflict metadata, coverage labels, local-only ingestion boundaries, and the controlled external Brammel pilot.
 
-M1.4 adds exhaustive effect-runtime dispositions, declarative dice/roll rules, first-class nested equipment bundles, choice resolution, baseline multiclass progression and spell-slot contribution, derived character state, and visible unsupported/review-required states. These are additive schema-v2 capabilities; no private content is committed.
+M1.4 adds exhaustive effect-runtime dispositions, typed action-economy grants, declarative dice/roll rules, first-class nested equipment bundles, choice resolution, pure species/lineage/background relation activation, baseline multiclass progression and spell-slot contribution, derived character state, an atomic import-set confirmation boundary, and visible unsupported/review-required states. These are additive schema-v2 capabilities; no private content is committed and no character table changed.
+
+M1.4 is a rules-engine and content-resolution foundation, not the M2.1 product slice: it contains no character persistence, character service, play sheet, level-up workflow, or transfer workflow. The private Brammel pilot was not rerun for M1.4; its local regression test stays skipped unless the pack path is supplied. See [M1.4_RULES_ENGINE_COVERAGE.md](M1.4_RULES_ENGINE_COVERAGE.md) for the gate.
 
 ## Device and installation behavior
 
