@@ -707,7 +707,7 @@ describe("CharacterTransferService", () => {
     const { json, manifest } = await exportBrammel();
 
     expect(manifest).toMatchObject({ characterId: "character:brammel", level: 1, classLabel: "Vanguard", restricted: false, formatVersion: 1 });
-    expect(manifest.characterFingerprint).toMatch(/^cfp1:/);
+    expect(manifest.characterFingerprint).toMatch(/^cfp2:/);
     const parsed = JSON.parse(json);
     expect(parsed.kind).toBe("runefolio-character-transfer");
     expect(parsed.dependencies.length).toBeGreaterThan(0);

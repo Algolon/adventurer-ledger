@@ -20,6 +20,7 @@ import type {
 } from "@/src/domain/character-record";
 import type { ID, ISODate } from "@/src/domain/model";
 import { computeContentFingerprint, resolveDerivedCharacter } from "@/src/services/derived-resolver";
+import { canonicalHash } from "@/src/services/canonical";
 import { derivedSnapshotOf, type ServiceContext } from "@/src/services/character-services";
 import {
   invalid,
@@ -112,15 +113,53 @@ export const transferDocumentSchema = z.object({
 
 export type TransferDocument = z.infer<typeof transferDocumentSchema>;
 
+/**
+ * The durable fields that identify a character's state for conflict detection.
+ *
+ * Volatile bookkeeping is deliberately excluded: `revision`, `createdAt`,
+ * `updatedAt`, `lastPlayedAt` and `contentFingerprint` change without the
+ * character changing, and including them would report a spurious conflict — or,
+ * for `contentFingerprint`, turn an unrelated content update into one.
+ */
+const FINGERPRINTED_FIELDS = [
+  "id",
+  "rulesetProfileId",
+  "presentation",
+  "name",
+  "nickname",
+  "pronouns",
+  "level",
+  "classLevels",
+  "speciesId",
+  "backgroundId",
+  "abilityMethod",
+  "abilityScores",
+  "choiceSelections",
+  "equipmentSelections",
+  "manualValues",
+  "manualActions",
+  "acknowledgedIssueCodes",
+  "status",
+  "kind",
+  "tags",
+] as const satisfies readonly (keyof CharacterRecord)[];
+
+/**
+ * Lists the domain treats as sets. `classLevels` and `manualActions` keep their
+ * order because position is meaningful in both.
+ */
+const CHARACTER_SET_PATHS = ["tags", "acknowledgedIssueCodes", "choiceSelections.*", "equipmentSelections.*"] as const;
+
 /** Stable fingerprint over the durable character, used for conflict detection. */
 export function computeCharacterFingerprint(character: CharacterRecord): string {
-  const canonical = JSON.stringify(character, Object.keys(character).sort());
-  let hash = 0x811c9dc5;
-  for (const symbol of canonical) {
-    hash ^= symbol.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
+  const subject: Record<string, unknown> = {};
+  for (const field of FINGERPRINTED_FIELDS) {
+    const value = character[field];
+    if (value !== undefined) subject[field] = value;
   }
-  return `cfp1:${hash.toString(16).padStart(8, "0")}`;
+  // Versioned prefix so the algorithm can change deliberately rather than
+  // silently reinterpreting existing transfer files.
+  return `cfp2:${canonicalHash(subject, { setPaths: CHARACTER_SET_PATHS })}`;
 }
 
 export interface TransferManifest {

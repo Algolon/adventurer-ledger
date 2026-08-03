@@ -375,7 +375,7 @@ test.describe("transfer", () => {
 
     expect(document.kind).toBe("runefolio-character-transfer");
     expect(document.formatVersion).toBe(1);
-    expect(document.characterFingerprint).toMatch(/^cfp1:/);
+    expect(document.characterFingerprint).toMatch(/^cfp2:/);
     expect(document.dependencies.length).toBeGreaterThan(0);
 
     // Re-importing the same file onto the same device is Already current.
