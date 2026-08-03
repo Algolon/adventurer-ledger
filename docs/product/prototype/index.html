@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Runefolio M2.1 low-fidelity prototype</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="prototype-frame">
+      <aside class="wide-rail" aria-label="Primary navigation">
+        <a class="brand" href="#library" data-route="library">Runefolio</a>
+        <nav>
+          <button type="button" data-route="library">Characters</button>
+          <button type="button" data-route="play">Active sheet</button>
+          <button type="button" disabled>Compendium</button>
+          <button type="button" disabled>Settings</button>
+        </nav>
+        <p>Prototype · local device</p>
+      </aside>
+
+      <div class="app" id="runefolio-prototype">
+        <header class="app-bar">
+          <button class="back-button" id="back-button" type="button" aria-label="Go back">‹</button>
+          <div class="app-heading">
+            <strong id="screen-title">Characters</strong>
+            <small id="screen-status">On this device</small>
+          </div>
+          <button class="menu-button" id="menu-button" type="button" aria-expanded="false" aria-controls="character-menu">Menu</button>
+          <div class="popover" id="character-menu" hidden>
+            <button type="button" data-route="override">View AC override</button>
+            <button type="button" data-route="transfer">Transfer file</button>
+          </div>
+        </header>
+
+        <main id="main-content" tabindex="-1">
+          <section class="screen" id="library-screen" data-screen="library" aria-labelledby="library-title">
+            <div class="screen-intro">
+              <p class="eyebrow">Character library</p>
+              <h1 id="library-title">Your characters</h1>
+              <p>Characters and drafts saved in this browser appear here.</p>
+            </div>
+            <div class="empty-state">
+              <span class="empty-mark" aria-hidden="true">◇</span>
+              <h2>No characters on this device</h2>
+              <p>Create a guided character or import a standard character file.</p>
+              <button class="primary-action" id="new-character" type="button">New character</button>
+              <button class="secondary-action" type="button" data-route="transfer">Import character file</button>
+            </div>
+          </section>
+
+          <section class="screen builder-screen" id="builder-screen" data-screen="builder" aria-labelledby="builder-title" hidden>
+            <div class="builder-progress">
+              <div>
+                <p class="eyebrow" id="step-counter">Step 1 of 9</p>
+                <h1 id="builder-title" tabindex="-1">Start / ruleset</h1>
+              </div>
+              <span class="issue-count" id="issue-count">2 blocking issues</span>
+            </div>
+            <progress id="build-progress" max="9" value="1">1 of 9</progress>
+
+            <fieldset class="mode-switch">
+              <legend>Build mode</legend>
+              <label><input type="radio" name="mode" value="guided" checked> Guided</label>
+              <label><input type="radio" name="mode" value="flexible"> Flexible</label>
+            </fieldset>
+            <p class="mode-note" id="mode-note" role="status">Recommendations and explanations are shown. Existing choices are preserved when mode changes.</p>
+
+            <details class="step-menu">
+              <summary>All steps</summary>
+              <ol id="step-list"></ol>
+            </details>
+
+            <div class="step-panels">
+              <section class="step-panel" data-step="0">
+                <h2>Choose a starting ruleset</h2>
+                <p>One original synthetic ruleset keeps every fixture safe to publish and test.</p>
+                <label class="choice-card">
+                  <input type="radio" name="ruleset" value="synthetic" checked>
+                  <span><strong>Runefolio 2024-style synthetic</strong><small>Level 1–2 · local test content</small></span>
+                  <span class="tag">Recommended</span>
+                </label>
+              </section>
+
+              <section class="step-panel" data-step="1" hidden>
+                <h2>Choose a class</h2>
+                <p>What should Brammel be able to do during a session?</p>
+                <label class="choice-card">
+                  <input type="radio" name="class-choice" value="vanguard">
+                  <span><strong>Vanguard of the Patient Road and Steadfast Gate</strong><small>Durable weapon play with one limited recovery resource.</small></span>
+                  <span class="tag">Recommended</span>
+                </label>
+                <label class="choice-card warning-choice">
+                  <input type="radio" name="class-choice" value="manual">
+                  <span><strong>Enter a neutral manual character</strong><small>Requires explicit abilities, HP, AC, initiative, and one action.</small></span>
+                  <span class="tag">Manual</span>
+                </label>
+              </section>
+
+              <section class="step-panel" data-step="2" hidden>
+                <h2>Choose an origin</h2>
+                <p>Origin groups species, background, language, and proficiency choices.</p>
+                <label class="choice-card">
+                  <input type="radio" name="origin-choice" value="river-warden">
+                  <span><strong>Riverborn · Caravan Warden of the Far Northern Trade Road</strong><small>One language choice and two synthetic skill choices remain visible.</small></span>
+                  <span class="tag">Original</span>
+                </label>
+                <div class="incomplete-panel" role="note">
+                  <strong>Representative warning</strong>
+                  <span>A longer language choice must wrap safely and remain visible in Review.</span>
+                </div>
+              </section>
+
+              <section class="step-panel" data-step="3" hidden>
+                <h2>Assign abilities</h2>
+                <p>Standard array is selected. Flexible mode may preserve explicit manual scores.</p>
+                <div class="stat-grid compact">
+                  <span><b>STR</b> 16</span><span><b>DEX</b> 12</span><span><b>CON</b> 14</span>
+                  <span><b>INT</b> 10</span><span><b>WIS</b> 13</span><span><b>CHA</b> 8</span>
+                </div>
+              </section>
+
+              <section class="step-panel" data-step="4" hidden>
+                <h2>Resolve class choices</h2>
+                <label class="choice-card"><input type="checkbox" checked><span><strong>Guarded Hand</strong><small>Original fighting-style-like choice.</small></span></label>
+                <label class="choice-card"><input type="checkbox" checked><span><strong>Measured Cut</strong><small>Original weapon-choice-like option for the Longblade.</small></span></label>
+              </section>
+
+              <section class="step-panel" data-step="5" hidden>
+                <h2>Spells &amp; resources</h2>
+                <div class="not-needed"><strong>Not needed</strong><span>This class has no spells at level 1.</span></div>
+                <div class="resource-preview"><span>Rallying Breath</span><strong>1 / 1 use</strong></div>
+              </section>
+
+              <section class="step-panel" data-step="6" hidden>
+                <h2>Choose equipment</h2>
+                <label class="choice-card"><input type="checkbox" checked><span><strong>Longblade, Round Guard, and Travel Mail</strong><small>Equipped preview: AC 16 · Longblade Strike +5.</small></span></label>
+              </section>
+
+              <section class="step-panel" data-step="7" hidden>
+                <h2>Add identity</h2>
+                <label class="field-label" for="character-name">Character name</label>
+                <input class="text-input" id="character-name" value="Brammel “Boss” Voss">
+                <p>“Boss” is a nickname only and has no mechanical effect.</p>
+              </section>
+
+              <section class="step-panel" data-step="8" hidden>
+                <h2>Review</h2>
+                <div class="review-card">
+                  <span><strong id="review-name">Brammel “Boss” Voss</strong><small id="review-class">Class not chosen · Level 1</small></span>
+                  <span class="tag" id="review-state">Incomplete</span>
+                </div>
+                <dl class="review-list">
+                  <div><dt>Ruleset</dt><dd>Runefolio synthetic</dd></div>
+                  <div><dt>Origin</dt><dd id="review-origin">Not chosen</dd></div>
+                  <div><dt>Abilities</dt><dd>Complete</dd></div>
+                  <div><dt>Spells</dt><dd>Not needed</dd></div>
+                </dl>
+                <div class="warning-banner" id="review-warning" role="status">
+                  <strong>2 issues remain</strong>
+                  <span>Choose a class and origin. This draft remains saved.</span>
+                </div>
+              </section>
+            </div>
+
+            <footer class="task-footer">
+              <button class="secondary-action" id="previous-step" type="button">Back</button>
+              <button class="primary-action" id="next-step" type="button">Continue</button>
+            </footer>
+          </section>
+
+          <section class="screen" id="play-screen" data-screen="play" aria-labelledby="play-title" hidden>
+            <div class="character-summary">
+              <span><p class="eyebrow">Active sheet · ready offline</p><h1 id="play-title">Brammel “Boss” Voss</h1><p>Level 1 Vanguard · Runefolio synthetic</p></span>
+              <button type="button" data-route="transfer">Transfer file</button>
+            </div>
+            <div class="headline-stats">
+              <button type="button" data-route="override"><span>AC</span><strong>17</strong><small>Override</small></button>
+              <div><span>Initiative</span><strong>+1</strong><small>Modifier</small></div>
+              <div><span>Speed</span><strong>30</strong><small>feet</small></div>
+            </div>
+            <section class="play-card">
+              <div class="section-heading"><h2>Hit points</h2><strong>11 / 11</strong></div>
+              <div class="action-row"><button type="button">Apply damage</button><button type="button">Apply healing</button></div>
+            </section>
+            <section class="play-card">
+              <div class="section-heading"><h2>Favorite action</h2><span class="tag">Action</span></div>
+              <div class="action-detail"><span><strong>Longblade Strike</strong><small>Attack +5 · damage 1d8 + 3</small></span><button type="button" id="copy-expression" data-expression="1d20 + 5">Copy expression</button></div>
+              <p class="copy-status" id="copy-status" role="status"></p>
+            </section>
+            <section class="play-card">
+              <div class="section-heading"><h2>Rallying Breath</h2><strong>1 / 1</strong></div>
+              <p>Limited Vanguard resource · recovers on the configured rest.</p>
+              <button type="button">Spend use</button>
+            </section>
+            <nav class="bottom-tabs" aria-label="Character sheet sections">
+              <button type="button" aria-current="page">Play</button><button type="button">Actions</button><button type="button">Inventory</button><button type="button">More</button>
+            </nav>
+          </section>
+
+          <section class="screen" id="override-screen" data-screen="override" aria-labelledby="override-title" hidden>
+            <p class="eyebrow">Value detail</p>
+            <h1 id="override-title">Armor Class override</h1>
+            <div class="effective-value"><span>Effective AC</span><strong>17</strong></div>
+            <dl class="detail-list">
+              <div><dt>Stable target</dt><dd><code>derived.defenses.armorClass</code></dd></div>
+              <div><dt>Automatic baseline</dt><dd>16</dd></div>
+              <div><dt>Operation</dt><dd><code>add</code></dd></div>
+              <div><dt>Typed value</dt><dd>+1</dd></div>
+              <div><dt>Scope</dt><dd>Persistent</dd></div>
+              <div><dt>Reason</dt><dd>Table ruling</dd></div>
+              <div><dt>Provenance</dt><dd>Manual · this character</dd></div>
+            </dl>
+            <p class="info-banner">If equipment changes, Runefolio recalculates the automatic baseline and keeps this +1 visible for review.</p>
+            <button class="secondary-action" type="button" data-route="play">Return to sheet</button>
+          </section>
+
+          <section class="screen" id="transfer-screen" data-screen="transfer" aria-labelledby="transfer-title" hidden>
+            <p class="eyebrow">File transfer preview</p>
+            <h1 id="transfer-title">Brammel “Boss” Voss</h1>
+            <p>Review the standard character file before saving or importing it on another device.</p>
+            <dl class="detail-list">
+              <div><dt>Character</dt><dd><code>character:brammel-voss</code></dd></div>
+              <div><dt>Level / class</dt><dd>1 · Vanguard</dd></div>
+              <div><dt>Ruleset</dt><dd>Runefolio synthetic</dd></div>
+              <div><dt>Dependencies</dt><dd>10 safe IDs · 0 embedded entries</dd></div>
+              <div><dt>Fingerprint</dt><dd><code>rf-m21-a71c</code></dd></div>
+            </dl>
+            <div class="warning-banner" role="note"><strong>Excluded from this standard file</strong><span>Private full text, notes, restricted entries, and action-note bodies.</span></div>
+            <div class="transfer-actions">
+              <button class="primary-action" type="button">Create character file</button>
+              <button class="secondary-action" type="button" data-route="play">Cancel</button>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <script src="prototype.js"></script>
+  </body>
+</html>
