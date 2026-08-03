@@ -26,6 +26,12 @@ const effects = [
   { ...base, type: "unlockAtLevel", level: 2, effect: { ...base, id: "effect:nested", type: "grantFeature", featureId: "feature:test" } },
   { ...base, type: "scaleAtLevel", levels: { "5": literal }, target: "value:test" },
   ...["addWeaponMastery", "grantFightingStyle", "grantManeuver", "grantInvocation", "grantMetamagic"].map(type => ({ ...base, type, optionId: "option:test" })),
+  { ...base, type: "addDice", target: "damage:test", dice: { count: 1, faces: 8 } },
+  { ...base, type: "replaceDice", target: "damage:test", match: { count: 1, faces: 6 }, replacement: { count: 1, faces: 8 } },
+  { ...base, type: "rerollDice", target: "damage:test", rolls: [1, 2], limit: 1, keep: "higher" },
+  { ...base, type: "setMinimumRoll", target: "check:test", minimum: 10 },
+  { ...base, type: "grantEquipmentBundle", bundleId: "bundle:test" },
+  { ...base, type: "manualAdjudication", reasonCode: "SYNTHETIC_REVIEW" },
 ];
 
 describe("schema v2", () => {
@@ -39,6 +45,17 @@ describe("schema v2", () => {
     expect(contentEntrySchema.safeParse(entry).success).toBe(true);
     expect(contentEntrySchema.safeParse({ ...entry, category: "spell" }).success).toBe(false);
     expect(contentEntrySchema.safeParse({ ...entry, category: "monster", mechanics: { armorClass: 10 } }).success).toBe(false);
+  });
+  it("keeps pre-M1.4 schema-v2 packs valid with additive defaults", () => {
+    const document = syntheticPack();
+    const legacyShape = JSON.parse(JSON.stringify(document)) as Record<string, unknown>;
+    const entries = legacyShape.entries;
+    if (!Array.isArray(entries) || !entries[0] || typeof entries[0] !== "object") throw new Error("Synthetic entry is missing");
+    delete (entries[0] as Record<string, unknown>).equipmentBundles;
+    const result = validateContentPackJson(JSON.stringify(legacyShape));
+    expect(result.success).toBe(true);
+    expect(result.data?.entries[0]?.equipmentBundles).toEqual([]);
+    expect(result.data?.schemaVersion).toBe(2);
   });
   it("migrates v1 without losing synthetic text", () => {
     const current = syntheticPack(), entry = current.entries[0], pack = current.pack;

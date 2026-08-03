@@ -8,11 +8,29 @@ export type Comparison="eq"|"neq"|"gt"|"gte"|"lt"|"lte";export interface Audit{c
 
 export type Condition={all:Condition[]}|{any:Condition[]}|{not:Condition}|{type:"always"}|{type:"wearingArmor";armorType?:"light"|"medium"|"heavy"|"shield"}|{type:"hasFeature";featureId:ID}|{type:"hasTag";tag:string}|{type:"classLevel";classId:ID;operator:Comparison;value:number}|{type:"totalLevel";operator:Comparison;value:number}|{type:"ability";ability:Ability;operator:Comparison;value:number}|{type:"proficientWith";proficiencyId:ID}|{type:"customFlag";key:string;equals:string|number|boolean};
 export type Value={kind:"literal";value:number|string|boolean}|{kind:"path";path:string}|{kind:"formula";formula:string;variables:string[]};
+/**
+ * Bounding operations name the bound they establish, not the arithmetic they perform:
+ * `min` raises the current value to at least the operand (a lower bound, `Math.max`),
+ * and `max` caps the current value at most the operand (an upper bound, `Math.min`).
+ * This matches the `setMinimum`/`setMaximum` effect variants. See `mutate` in
+ * `src/rules/engine.ts` and the M1.4 coverage document.
+ */
 export type Operation="add"|"subtract"|"multiply"|"set"|"min"|"max";
+export type EffectDisposition="automatic"|"choice-driven"|"manual-adjudication";
+/** Action-economy category preserved by attack/action/bonus-action/reaction grants. */
+export type ActionGrantKind="attack"|"action"|"bonus-action"|"reaction";
+export interface DiceExpression{count:number;faces:number;modifier?:number}
+export interface EquipmentItemGrant{type:"item";itemId:ID;quantity:number;status:"granted"|"carried"|"equipped";alternativeItemIds?:ID[]}
+export interface EquipmentBundleGroup{type:"bundle";id:ID;label?:string;entries:EquipmentBundleNode[]}
+export interface EquipmentBundleChoiceOption{id:ID;label:string;entries:EquipmentBundleNode[]}
+export interface EquipmentBundleChoice{type:"choice";id:ID;label:string;min:number;max:number;options:EquipmentBundleChoiceOption[]}
+export type EquipmentBundleNode=EquipmentItemGrant|EquipmentBundleGroup|EquipmentBundleChoice;
+export interface EquipmentBundleDefinition{id:ID;label:string;entries:EquipmentBundleNode[];currencyAlternative?:{amount:number;currency:"cp"|"sp"|"ep"|"gp"|"pp"}}
 interface EffectBase{id:ID;sourceEntryId?:ID;label?:string;priority?:number;condition?:Condition}
 export type Effect=EffectBase&(
 |{type:"grantProficiency"|"grantExpertise";proficiencyId:ID}
-|{type:"grantFeature"|"replaceFeature"|"disableFeature";featureId:ID;replacementId?:ID}
+|{type:"grantFeature"|"disableFeature";featureId:ID}
+|{type:"replaceFeature";featureId:ID;replacementId:ID}
 |{type:"grantChoice";choiceId:ID}
 |{type:"modifyAbility"|"modifyAbilityMaximum";ability:Ability;operation:Operation;value:Value}
 |{type:"modifySkill"|"modifySavingThrow";target:string;operation:Operation;value:Value}
@@ -24,10 +42,16 @@ export type Effect=EffectBase&(
 |{type:"setMinimum"|"setMaximum"|"setCalculation";target:string;value:Value}
 |{type:"addAdvantage"|"addDisadvantage";target:string}
 |{type:"rechargeOnShortRest"|"rechargeOnLongRest";resourceId:ID}
-|{type:"unlockAtLevel";level:number;effect:Effect}|{type:"scaleAtLevel";levels:Record<string,Value>;target:string}
-|{type:"addWeaponMastery"|"grantFightingStyle"|"grantManeuver"|"grantInvocation"|"grantMetamagic";optionId:ID});
+|{type:"unlockAtLevel";level:number;scope?:"total"|"class";classId?:ID;effect:Effect}|{type:"scaleAtLevel";levels:Record<string,Value>;target:string;scope?:"total"|"class";classId?:ID}
+|{type:"addWeaponMastery"|"grantFightingStyle"|"grantManeuver"|"grantInvocation"|"grantMetamagic";optionId:ID}
+|{type:"addDice";target:string;dice:DiceExpression}
+|{type:"replaceDice";target:string;replacement:DiceExpression;match?:DiceExpression}
+|{type:"rerollDice";target:string;rolls:number[];limit:number;keep:"new"|"higher"|"lower"}
+|{type:"setMinimumRoll";target:string;minimum:number}
+|{type:"grantEquipmentBundle";bundleId:ID}
+|{type:"manualAdjudication";reasonCode:string;target?:string});
 export interface PrerequisiteDefinition{id:ID;label:string;condition:Condition;enforcement:"hard"|"soft"|"informational"}
-export interface ChoiceOption{id:ID;label:string;entryId?:ID;effects?:Effect[]}
+export interface ChoiceOption{id:ID;label:string;entryId?:ID;effects?:Effect[];childChoices?:ChoiceDefinition[]}
 export interface ChoiceDefinition{id:ID;label:string;min:number;max:number;repeatable:boolean;maxRepeats?:number;options:ChoiceOption[];childChoices?:ChoiceDefinition[]}
 export interface ResourceDefinition{id:ID;name:string;maximum:Value;recharge:"short-rest"|"long-rest"|"dawn"|"manual"|"none";sharedPoolId?:ID}
 export interface ProficiencyDefinition{id:ID;type:"skill"|"save"|"armor"|"weapon"|"tool"|"language";key:string;label:string}
@@ -39,7 +63,7 @@ export interface SourceLocator{sourceId:ID;page:string;section?:string;printPage
 export interface ContentLink{type:"feature"|"subclass"|"feat"|"proficiency"|"equipment"|"spell"|"spell-list"|"choice"|"effect"|"attack"|"resource"|"mastery"|"summon"|"wild-shape"|"familiar"|"companion"|"edition-equivalent"|"replacement";targetId:ID;required:boolean;level?:number}
 export interface ConflictMetadata{sourcePriority:number;conflictKey?:string;resolution:"source-priority"|"newest-revision"|"explicit-selection"|"coexist"}
 export interface ContentPack extends Audit{id:ID;name:string;description?:string;version:string;schemaVersion:number;coverage:PackCoverage;rulesEditions:Edition[];visibility:"public"|"private";licenseType:LicenseType;exportRestricted:boolean;includeFullText:boolean;dependencies:ID[];optionalDependencies:ID[];sourceIds:ID[];entryIds:ID[];checksum?:string}
-export interface ContentEntry extends Audit{id:ID;slug:string;name:string;aliases:string[];category:Category;subcategory?:string;rulesEdition:Edition;sourceId:ID;sourceBook?:string;sourcePage?:string;sourceSection?:string;sourceLocator:SourceLocator;reviewStatus:ReviewStatus;licenseType:LicenseType;visibility:Visibility;fullText?:string;summary?:string;playerNotes?:string;dmNotes?:string;prerequisites:PrerequisiteDefinition[];choices:ChoiceDefinition[];effects:Effect[];links:ContentLink[];mechanics:Record<string,unknown>;conflict:ConflictMetadata;tags:string[];version:string;revision:number;errataVersion?:string;replacementOf?:ID;replacedBy?:ID;editionRelations:ID[];legacy:boolean;optional:boolean;private:boolean;exportRestricted:boolean}
+export interface ContentEntry extends Audit{id:ID;slug:string;name:string;aliases:string[];category:Category;subcategory?:string;rulesEdition:Edition;sourceId:ID;sourceBook?:string;sourcePage?:string;sourceSection?:string;sourceLocator:SourceLocator;reviewStatus:ReviewStatus;licenseType:LicenseType;visibility:Visibility;fullText?:string;summary?:string;playerNotes?:string;dmNotes?:string;prerequisites:PrerequisiteDefinition[];choices:ChoiceDefinition[];equipmentBundles?:EquipmentBundleDefinition[];effects:Effect[];links:ContentLink[];mechanics:Record<string,unknown>;conflict:ConflictMetadata;tags:string[];version:string;revision:number;errataVersion?:string;replacementOf?:ID;replacedBy?:ID;editionRelations:ID[];legacy:boolean;optional:boolean;private:boolean;exportRestricted:boolean}
 export interface ContentPackVersion extends Audit{id:ID;packId:ID;sequence:number;reason:"edit"|"import"|"delete";snapshot:ContentPack}
 export interface ContentEntryVersion extends Audit{id:ID;entryId:ID;revision:number;reason:"edit"|"import"|"delete";snapshot:ContentEntry}
 
@@ -50,6 +74,9 @@ export interface Character extends Audit{id:ID;name:string;nickname?:string;imag
 export interface CharacterVersion extends Audit{id:ID;characterId:ID;sequence:number;reason:"manual"|"level-up"|"import"|"restore"|"migration";snapshot:Character;parentVersionId?:ID}
 export interface CharacterSnapshot extends Audit{id:ID;characterId:ID;label:string;characterVersionId:ID;runtimeState:Record<string,unknown>}
 export interface CharacterResourceState extends Audit{id:ID;characterId:ID;resourceId:ID;current:number;maximumOverride?:number}
+// Bundle grant/carried/equipped status stays in the pure equipment-resolution output
+// (`ResolvedEquipmentItem` in src/rules/equipment.ts). The persisted record keeps
+// `equipped` as its single writable carry state; M1.4 adds no character migration.
 export interface CharacterInventoryItem extends Audit{id:ID;characterId:ID;itemId?:ID;customName?:string;quantity:number;equipped:boolean;attuned:boolean;notes?:string}
 export interface CharacterSpell extends Audit{id:ID;characterId:ID;spellId:ID;source:"known"|"prepared"|"always-prepared"|"item";prepared:boolean}
 export interface CharacterAttack extends Audit{id:ID;characterId:ID;name:string;attackAbility?:Ability;proficient:boolean;damage:string;notes?:string}

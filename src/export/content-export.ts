@@ -81,6 +81,7 @@ export async function createContentExport(
         summary: entry.summary,
         prerequisites: entry.prerequisites,
         choices: entry.choices,
+        equipmentBundles: entry.equipmentBundles ?? [],
         effects: entry.effects,
         links: entry.links,
         mechanics: entry.mechanics,

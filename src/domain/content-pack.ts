@@ -2,6 +2,8 @@ import { z } from "zod";
 import type {
   ChoiceDefinition,
   Condition,
+  EquipmentBundleDefinition,
+  EquipmentBundleNode,
   Effect,
   PackCoverage,
   PrerequisiteDefinition,
@@ -46,6 +48,7 @@ const effectBase = { id, sourceEntryId: id.optional(), label: z.string().max(240
 const resource = z.object({ id, name: z.string().min(1).max(240), maximum: value, recharge: z.enum(["short-rest", "long-rest", "dawn", "manual", "none"]), sharedPoolId: id.optional() }).strict();
 const ability = z.enum(["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"]);
 const target = z.string().min(1).max(160), selector = z.record(z.string().max(160)).refine(v => Object.keys(v).length <= 20);
+const dice = z.object({ count: z.number().int().min(1).max(100), faces: z.number().int().min(2).max(1000), modifier: z.number().int().min(-1000).max(1000).optional() }).strict();
 const variant = <T extends Effect["type"], S extends z.ZodRawShape>(type: T, shape: S) => z.object({ ...effectBase, type: z.literal(type), ...shape }).strict();
 const effect: z.ZodType<Effect> = z.lazy(() => z.union([
   variant("grantProficiency", { proficiencyId: id }), variant("grantExpertise", { proficiencyId: id }),
@@ -58,15 +61,29 @@ const effect: z.ZodType<Effect> = z.lazy(() => z.union([
   variant("addAttack", { definitionId: id }), variant("addAction", { definitionId: id }), variant("addBonusAction", { definitionId: id }), variant("addReaction", { definitionId: id }),
   variant("setMinimum", { target, value }), variant("setMaximum", { target, value }), variant("setCalculation", { target, value }),
   variant("addAdvantage", { target }), variant("addDisadvantage", { target }), variant("rechargeOnShortRest", { resourceId: id }), variant("rechargeOnLongRest", { resourceId: id }),
-  variant("unlockAtLevel", { level: z.number().int().min(1).max(30), effect }), variant("scaleAtLevel", { levels: z.record(value).refine(v => Object.keys(v).every(k => /^(?:[1-9]|[12][0-9]|30)$/.test(k))), target }),
+  variant("unlockAtLevel", { level: z.number().int().min(1).max(30), scope: z.enum(["total", "class"]).optional(), classId: id.optional(), effect }), variant("scaleAtLevel", { levels: z.record(value).refine(v => Object.keys(v).every(k => /^(?:[1-9]|[12][0-9]|30)$/.test(k))), target, scope: z.enum(["total", "class"]).optional(), classId: id.optional() }),
   variant("addWeaponMastery", { optionId: id }), variant("grantFightingStyle", { optionId: id }), variant("grantManeuver", { optionId: id }), variant("grantInvocation", { optionId: id }), variant("grantMetamagic", { optionId: id }),
+  variant("addDice", { target, dice }), variant("replaceDice", { target, replacement: dice, match: dice.optional() }),
+  variant("rerollDice", { target, rolls: z.array(z.number().int().min(1).max(1000)).min(1).max(100), limit: z.number().int().min(1).max(100), keep: z.enum(["new", "higher", "lower"]) }),
+  variant("setMinimumRoll", { target, minimum: z.number().int().min(0).max(1000) }),
+  variant("grantEquipmentBundle", { bundleId: id }),
+  variant("manualAdjudication", { reasonCode: z.string().regex(/^[A-Z0-9_:-]+$/).max(160), target: target.optional() }),
 ]));
 const prerequisite: z.ZodType<PrerequisiteDefinition> = z.object({ id, label: z.string().min(1).max(240), condition, enforcement: z.enum(["hard", "soft", "informational"]) }).strict();
 const choice: z.ZodType<ChoiceDefinition> = z.lazy(() => z.object({
   id, label: z.string().min(1).max(240), min: z.number().int().min(0), max: z.number().int().min(0), repeatable: z.boolean(), maxRepeats: z.number().int().positive().optional(),
-  options: z.array(z.object({ id, label: z.string().min(1).max(240), entryId: id.optional(), effects: z.array(effect).max(100).optional() }).strict()).max(500),
+  options: z.array(z.object({ id, label: z.string().min(1).max(240), entryId: id.optional(), effects: z.array(effect).max(100).optional(), childChoices: z.array(choice).max(50).optional() }).strict()).max(500),
   childChoices: z.array(choice).max(50).optional(),
 }).strict().refine(v => v.max >= v.min, "Choice maximum must not be less than minimum"));
+const equipmentNode: z.ZodType<EquipmentBundleNode> = z.lazy(() => z.union([
+  z.object({ type: z.literal("item"), itemId: id, quantity: z.number().int().positive().max(100000), status: z.enum(["granted", "carried", "equipped"]), alternativeItemIds: z.array(id).max(100).optional() }).strict(),
+  z.object({ type: z.literal("bundle"), id, label: z.string().max(240).optional(), entries: z.array(equipmentNode).min(1).max(200) }).strict(),
+  z.object({ type: z.literal("choice"), id, label: z.string().min(1).max(240), min: z.number().int().min(0), max: z.number().int().min(0), options: z.array(z.object({ id, label: z.string().min(1).max(240), entries: z.array(equipmentNode).min(1).max(200) }).strict()).min(1).max(100) }).strict().refine(node => node.max >= node.min && node.max <= node.options.length, "Equipment choice bounds are invalid"),
+]));
+const equipmentBundle: z.ZodType<EquipmentBundleDefinition> = z.object({
+  id, label: z.string().min(1).max(240), entries: z.array(equipmentNode).min(1).max(200),
+  currencyAlternative: z.object({ amount: z.number().nonnegative(), currency: z.enum(["cp", "sp", "ep", "gp", "pp"]) }).strict().optional(),
+}).strict();
 
 const source = z.object({
   id, name: z.string().min(1).max(240), abbreviation: z.string().min(1).max(32), edition,
@@ -81,19 +98,26 @@ const common = z.object({
   rulesEdition: edition, sourceId: id, sourceBook: z.string().max(240).optional(), sourcePage: z.string().max(40).optional(), sourceSection: z.string().max(240).optional(), sourceLocator: locator,
   reviewStatus: z.enum(["extracted", "text-reviewed", "mechanics-reviewed", "engine-verified"]), licenseType: license,
   visibility: z.enum(["public-srd", "public-free-rules", "public-original", "private-user-entered", "private-full-text", "private-summary", "local-reference-only", "unavailable-reference-only"]),
-  fullText: z.string().max(500000).optional(), summary: z.string().max(20000).optional(), prerequisites: z.array(prerequisite).max(100).default([]), choices: z.array(choice).max(100).default([]), effects: z.array(effect).max(500).default([]), links: z.array(link).max(1000).default([]),
+  fullText: z.string().max(500000).optional(), summary: z.string().max(20000).optional(), prerequisites: z.array(prerequisite).max(100).default([]), choices: z.array(choice).max(100).default([]), equipmentBundles: z.array(equipmentBundle).max(100).default([]), effects: z.array(effect).max(500).default([]), links: z.array(link).max(1000).default([]),
   conflict: z.object({ sourcePriority: z.number().int(), conflictKey: z.string().max(160).optional(), resolution: z.enum(["source-priority", "newest-revision", "explicit-selection", "coexist"]) }).strict(),
   tags: z.array(z.string().max(160)).max(200).default([]), version: z.string().min(1), revision: z.number().int().min(1), errataVersion: z.string().max(80).optional(), replacementOf: id.optional(), replacedBy: id.optional(), editionRelations: z.array(id).max(100).default([]), legacy: z.boolean(), optional: z.boolean(), private: z.boolean(), exportRestricted: z.boolean(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
 }).strict();
-const progression = z.array(z.object({ level: z.number().int().min(1).max(20), proficiencyBonus: z.number().int().min(2).max(10), featureIds: z.array(id), resourceChanges: z.record(z.number().int()).default({}) }).strict()).min(1).max(20);
+const progression = z.array(z.object({ level: z.number().int().min(1).max(20), proficiencyBonus: z.number().int().min(2).max(10), featureIds: z.array(id), choiceIds: z.array(id).default([]), resourceChanges: z.record(z.number().int()).default({}) }).strict()).min(1).max(20);
+const multiclass = z.object({
+  prerequisites: z.array(prerequisite).max(20).default([]),
+  grantedProficiencyIds: z.array(id).max(100).default([]),
+  spellSlotProgression: z.enum(["none", "full", "half", "third", "pact"]),
+  spellSlotRounding: z.enum(["down", "up"]).default("down"),
+  unsupportedWithClassIds: z.array(id).max(100).default([]),
+}).strict();
 const mechanicsByCategory = {
-  class: z.object({ hitDie: z.union([z.literal(6), z.literal(8), z.literal(10), z.literal(12)]), primaryAbilities: z.array(ability).min(1), savingThrows: z.array(id).length(2), progression, subclassLevel: z.number().int().min(1).max(20), subclassIds: z.array(id) }).strict(),
+  class: z.object({ hitDie: z.union([z.literal(6), z.literal(8), z.literal(10), z.literal(12)]), primaryAbilities: z.array(ability).min(1), savingThrows: z.array(id).length(2), startingProficiencyIds: z.array(id).default([]), progression, subclassLevel: z.number().int().min(1).max(20), subclassIds: z.array(id), multiclass: multiclass.optional() }).strict(),
   "class-feature": z.object({ classId: id, level: z.number().int().min(1).max(20), featureType: z.enum(["core", "optional", "subclass", "improvement", "resource"]) }).strict(),
-  subclass: z.object({ classId: id, progression: z.array(z.object({ level: z.number().int().min(1).max(20), featureIds: z.array(id).min(1) }).strict()).min(1) }).strict(),
+  subclass: z.object({ classId: id, progression: z.array(z.object({ level: z.number().int().min(1).max(20), featureIds: z.array(id).min(1), choiceIds: z.array(id).default([]) }).strict()).min(1) }).strict(),
   species: z.object({ creatureType: z.string().min(1), sizeChoices: z.array(z.string()).min(1), speed: z.number().positive(), traitIds: z.array(id), lineageIds: z.array(id).default([]) }).strict(),
   race: z.object({ creatureType: z.string().min(1), sizeChoices: z.array(z.string()).min(1), speed: z.number().positive(), traitIds: z.array(id), legacyAbilityScores: z.record(z.number().int()).default({}) }).strict(),
   lineage: z.object({ parentSpeciesIds: z.array(id), traitIds: z.array(id), replacesTraitIds: z.array(id).default([]) }).strict(),
-  background: z.object({ abilityScoreChoices: z.object({ abilities: z.array(z.string()).min(2), increasePattern: z.array(z.number().int()).min(1) }).strict(), featId: id, proficiencyIds: z.array(id), equipmentChoiceIds: z.array(id) }).strict(),
+  background: z.object({ abilityScoreChoices: z.object({ abilities: z.array(z.string()).min(2), increasePattern: z.array(z.number().int()).min(1) }).strict(), featId: id, proficiencyIds: z.array(id), equipmentChoiceIds: z.array(id), equipmentBundleIds: z.array(id).default([]) }).strict(),
   feat: z.object({ category: z.enum(["origin", "general", "epic-boon", "fighting-style", "other"]), repeatable: z.boolean() }).strict(),
   spell: z.object({ level: z.number().int().min(0).max(9), school: z.enum(["abjuration", "conjuration", "divination", "enchantment", "evocation", "illusion", "necromancy", "transmutation"]), components: z.object({ verbal: z.boolean(), somatic: z.boolean(), material: z.string().max(1000).optional(), consumed: z.boolean().default(false), costGp: z.number().nonnegative().optional() }).strict(), castingTime: z.object({ amount: z.number().positive(), unit: z.enum(["action", "bonus-action", "reaction", "minute", "hour"]), trigger: z.string().max(500).optional() }).strict(), duration: z.object({ type: z.enum(["instantaneous", "timed", "until-dispelled", "special"]), amount: z.number().positive().optional(), unit: z.enum(["round", "minute", "hour", "day"]).optional(), concentration: z.boolean() }).strict(), range: z.object({ type: z.enum(["self", "touch", "distance", "sight", "unlimited", "special"]), distance: z.number().nonnegative().optional(), unit: z.enum(["feet", "miles"]).optional() }).strict(), scaling: z.array(z.object({ level: z.number().int().min(1).max(9), effectIds: z.array(id) }).strict()).default([]), spellListIds: z.array(id).min(1) }).strict(),
   item: z.object({ itemType: z.string().min(1), rarity: z.enum(["common", "uncommon", "rare", "very-rare", "legendary", "artifact", "varies", "none"]), attunement: z.object({ required: z.boolean(), prerequisite: z.string().max(500).optional() }).strict(), weight: z.number().nonnegative().optional(), cost: z.object({ amount: z.number().nonnegative(), currency: z.enum(["cp", "sp", "ep", "gp", "pp"]) }).optional(), attackIds: z.array(id).default([]), resourceIds: z.array(id).default([]) }).strict(),
@@ -104,6 +128,12 @@ const mechanicsByCategory = {
   proficiency: z.object({ type: z.enum(["skill", "save", "armor", "weapon", "tool", "language"]), key: z.string().min(1) }).strict(),
   "spell-list": z.object({ spellIds: z.array(id), ownerIds: z.array(id) }).strict(),
 } as const;
+export const classMechanicsSchema = mechanicsByCategory.class;
+export const subclassMechanicsSchema = mechanicsByCategory.subclass;
+export const speciesMechanicsSchema = mechanicsByCategory.species;
+export const raceMechanicsSchema = mechanicsByCategory.race;
+export const lineageMechanicsSchema = mechanicsByCategory.lineage;
+export const backgroundMechanicsSchema = mechanicsByCategory.background;
 const categorized = <C extends string, M extends z.ZodTypeAny>(category: C, mechanics: M) => common.extend({ category: z.literal(category), mechanics });
 const generic = z.object({ kind: z.string().min(1), data: z.record(z.unknown()).default({}) }).strict();
 export const contentEntrySchema = z.discriminatedUnion("category", [
@@ -125,4 +155,4 @@ export const contentPackSchema = z.object({
   sources: z.array(source).max(500), entries: z.array(contentEntrySchema).max(25000),
 }).strict();
 export type ContentPackDocument = z.infer<typeof contentPackSchema>;
-export { effect as effectSchema, condition as conditionSchema, choice as choiceSchema };
+export { effect as effectSchema, condition as conditionSchema, choice as choiceSchema, equipmentBundle as equipmentBundleSchema };

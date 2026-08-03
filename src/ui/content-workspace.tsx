@@ -16,15 +16,17 @@ import type {
   Effect,
   Source,
 } from "@/src/domain/model";
+import { packCoveragePresentation } from "@/src/domain/pack-coverage";
+import { effectSchema } from "@/src/domain/content-pack";
 import { savePackEntry } from "@/src/content/save-pack-entry";
 import {
   createContentExport,
   RestrictedExportConfirmationError,
 } from "@/src/export/content-export";
 import {
-  confirmImport,
-  previewContentPack,
-  type ImportPreview,
+  confirmImportSet,
+  previewContentPackSet,
+  type ImportSetPreview,
 } from "@/src/import/content-pipeline";
 import { db } from "@/src/storage/db";
 import {
@@ -303,14 +305,7 @@ function isPackCoverage(value: string): value is ContentPack["coverage"] {
   return value === "pilot" || value === "partial" || value === "complete";
 }
 function isEffect(value: unknown): value is Effect {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "id" in value &&
-    typeof value.id === "string" &&
-    "type" in value &&
-    typeof value.type === "string"
-  );
+  return effectSchema.safeParse(value).success;
 }
 function PackEditor() {
   const [list, setList] = useState<ContentPack[]>([]),
@@ -557,7 +552,7 @@ function PackEditor() {
               <span>
                 <b>{pack.name}</b>
                 <small>
-                  {pack.id} · v{pack.version} · {pack.coverage} ·{" "}
+                  {pack.id} · v{pack.version} · {packCoveragePresentation(pack.coverage).label} ·{" "}
                   {pack.entryIds.length} entries
                 </small>
               </span>
@@ -607,18 +602,19 @@ function PackEditor() {
 
 function ImportExportPanel() {
   const [text, setText] = useState(""),
-    [preview, setPreview] = useState<ImportPreview>(),
+    [preview, setPreview] = useState<ImportSetPreview>(),
     [message, setMessage] = useState(""),
     [includeRestricted, setIncludeRestricted] = useState(false),
     [confirmed, setConfirmed] = useState(false);
+  // Always the set boundary, so the preview shows exactly what confirmation revalidates.
   const inspect = async () => {
     setMessage("");
-    setPreview(await previewContentPack(text, db));
+    setPreview(await previewContentPackSet([text], db));
   };
   const commit = async () => {
     if (!preview) return;
     try {
-      await confirmImport(preview, db);
+      await confirmImportSet(preview, db);
       setMessage("Import completed atomically.");
       setPreview(undefined);
       setText("");
