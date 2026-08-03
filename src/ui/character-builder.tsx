@@ -10,7 +10,7 @@
  * committed step. Guided recommendations are ranked and explained but never
  * applied automatically.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, CircleHelp, ListChecks, TriangleAlert } from "lucide-react";
 import { BUILDER_STEPS, recommendationsFor, type BuilderStepId, type PlannedStep } from "@/src/services/build-planner";
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
@@ -37,6 +37,31 @@ const ISSUE_LABELS: Record<string, string> = {
 
 const labelFor = (code: string) => ISSUE_LABELS[code] ?? code;
 
+/**
+ * Where reopening a draft should land.
+ *
+ * A draft that has never been edited opens at the beginning. Otherwise it
+ * resumes at whichever is further along: the step the user was last on, or the
+ * next unresolved step the library card advertises. Taking the further of the
+ * two keeps the resume point stable even if the final navigation autosave had
+ * not flushed when the tab closed.
+ */
+export function resumeStepFor(snapshot: DraftSnapshot): BuilderStepId {
+  const stored = snapshot.draft.lastStepId as BuilderStepId;
+  if (snapshot.draft.revision <= 1) return stored;
+  const position = (id: BuilderStepId) => BUILDER_STEPS.findIndex(step => step.id === id);
+  const unresolved = snapshot.plan.nextUnresolvedStepId;
+  return position(unresolved) > position(stored) ? unresolved : stored;
+}
+
+/**
+ * A draft patch, or a function producing one from the freshest persisted build.
+ * Anything derived from existing state must use the function form.
+ */
+export type DraftPatch =
+  | Partial<CharacterDraftBuild>
+  | ((current: CharacterDraftBuild) => Partial<CharacterDraftBuild>);
+
 export function CharacterBuilder({
   draftId,
   onFinished,
@@ -52,6 +77,10 @@ export function CharacterBuilder({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [commitErrors, setCommitErrors] = useState<{ code: string; label: string }[]>([]);
   const [showSteps, setShowSteps] = useState(false);
+  const revisionRef = useRef<number | null>(null);
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+  /** Freshest snapshot, readable after awaiting the save queue. */
+  const snapshotRef = useRef<DraftSnapshot | null>(null);
 
   const entriesState = useAsync(() => db.contentEntries.toArray(), []);
   const entries = useMemo<ContentEntry[]>(() => (entriesState.status === "ready" ? entriesState.value : []), [entriesState]);
@@ -60,37 +89,55 @@ export function CharacterBuilder({
     let cancelled = false;
     drafts.get(draftId).then(loaded => {
       if (cancelled || !loaded) return;
+      revisionRef.current = loaded.revision;
+      snapshotRef.current = loaded;
       setSnapshot(loaded);
-      // Resume at the last unresolved step rather than always at the start.
-      setStepId(loaded.draft.lastStepId as BuilderStepId);
+      setStepId(resumeStepFor(loaded));
     });
     return () => {
       cancelled = true;
     };
   }, [draftId, drafts]);
 
+  /**
+   * Autosaves are serialised through one queue and read the revision from a ref
+   * rather than from rendered state. Two changes in quick succession — typing a
+   * name and then pressing Continue — would otherwise both send the revision
+   * that was current at the last render, and the second would be rejected as
+   * stale even though nothing else touched the draft.
+   */
   const save = useCallback(
-    async (patch: Partial<CharacterDraftBuild>, nextStep?: BuilderStepId) => {
-      if (!snapshot) return;
-      const outcome = await drafts.update({
-        draftId,
-        expectedRevision: snapshot.revision,
-        patch,
-        ...(nextStep ? { lastStepId: nextStep } : {}),
-      });
-      if (outcome.status === "ok") {
-        setSnapshot(outcome.result);
-        setSaveError(null);
-        return;
-      }
-      // The edit stays on screen; prior persisted state is intact.
-      setSaveError(
-        outcome.status === "stale"
-          ? "This build changed in another tab. Reopen it to continue from the saved version."
-          : "The last change could not be saved on this device.",
-      );
+    (patch: DraftPatch, nextStep?: BuilderStepId) => {
+      const run = async () => {
+        const latest = snapshotRef.current;
+        if (revisionRef.current === null || !latest) return;
+        // Resolved here, not at enqueue time: a patch derived from the build must
+        // read the freshest build or it silently overwrites an earlier change.
+        const resolved = typeof patch === "function" ? patch(latest.draft.build) : patch;
+        const outcome = await drafts.update({
+          draftId,
+          expectedRevision: revisionRef.current,
+          patch: resolved,
+          ...(nextStep ? { lastStepId: nextStep } : {}),
+        });
+        if (outcome.status === "ok") {
+          revisionRef.current = outcome.result.revision;
+          snapshotRef.current = outcome.result;
+          setSnapshot(outcome.result);
+          setSaveError(null);
+          return;
+        }
+        // The edit stays on screen and prior persisted state is intact.
+        setSaveError(
+          outcome.status === "stale"
+            ? "This build changed in another tab. Reopen it to continue from the saved version."
+            : "The last change could not be saved on this device.",
+        );
+      };
+      queueRef.current = queueRef.current.then(run, run);
+      return queueRef.current;
     },
-    [draftId, drafts, snapshot],
+    [draftId, drafts],
   );
 
   if (!snapshot)
@@ -112,26 +159,38 @@ export function CharacterBuilder({
     void save({}, id);
   };
 
-  const advance = () => {
-    if (current.id === "review") return;
-    const next = steps[index + 1];
-    if (draft.presentation === "guided" && current.status === "incomplete") {
+  /**
+   * Continue waits for queued autosaves and then judges the step against the
+   * freshest plan. Reading the rendered plan instead would block the user on a
+   * choice they had just made but whose save had not yet landed.
+   */
+  const advance = async () => {
+    await queueRef.current;
+    const latest = snapshotRef.current ?? snapshot;
+    const latestSteps = latest.plan.steps;
+    const position = latestSteps.findIndex(step => step.id === stepId);
+    const step = latestSteps[position] ?? latestSteps[0];
+    if (step.id === "review") return;
+    if (latest.draft.presentation === "guided" && step.status === "incomplete") {
       // Guided mode keeps the user at the unresolved dependency.
-      setCommitErrors(current.issues.filter(i => i.severity === "error").map(i => ({ code: i.code, label: labelFor(i.code) })));
+      setCommitErrors(step.issues.filter(issue => issue.severity === "error").map(issue => ({ code: issue.code, label: labelFor(issue.code) })));
       return;
     }
     setCommitErrors([]);
+    const next = latestSteps[position + 1];
     if (next) goTo(next.id);
   };
 
   const finish = async () => {
+    // Let any in-flight autosave land so the commit sends the current revision.
+    await queueRef.current;
     const fingerprint = await query.contentFingerprint(draft.rulesetProfileId);
     const characterId = draft.editingCharacterId ?? `character:${draftId.replace(/^draft:/, "")}`;
     const existing = draft.editingCharacterId ? await query.sheet(draft.editingCharacterId) : undefined;
     const outcome = await commit.commit({
-      operationId: `commit:${draftId}:${snapshot.revision}`,
+      operationId: `commit:${draftId}:${revisionRef.current ?? snapshot.revision}`,
       draftId,
-      expectedDraftRevision: snapshot.revision,
+      expectedDraftRevision: revisionRef.current ?? snapshot.revision,
       characterId,
       ...(existing ? { expectedCharacterRevision: existing.characterRevision } : {}),
       intent: draft.editingCharacterId ? "edit" : build.classId ? "create" : "manual-sheet",
@@ -152,12 +211,17 @@ export function CharacterBuilder({
   };
 
   const togglePresentation = async () => {
+    await queueRef.current;
     const outcome = await drafts.changePresentation(
       draftId,
-      snapshot.revision,
+      revisionRef.current ?? snapshot.revision,
       draft.presentation === "guided" ? "flexible" : "guided",
     );
-    if (outcome.status === "ok") setSnapshot(outcome.result);
+    if (outcome.status === "ok") {
+      revisionRef.current = outcome.result.revision;
+      snapshotRef.current = outcome.result;
+      setSnapshot(outcome.result);
+    }
   };
 
   return (
@@ -254,7 +318,7 @@ export function CharacterBuilder({
             <ArrowRight aria-hidden="true" />
           </button>
         ) : (
-          <button type="button" className="m2-button m2-button-primary" onClick={advance}>
+          <button type="button" className="m2-button m2-button-primary" onClick={() => void advance()}>
             Continue
             <ArrowRight aria-hidden="true" />
           </button>
@@ -277,7 +341,7 @@ function StepContent({
   entries: readonly ContentEntry[];
   presentation: "guided" | "flexible";
   plan: DraftSnapshot["plan"];
-  onChange(patch: Partial<CharacterDraftBuild>): void;
+  onChange(patch: DraftPatch): void;
 }) {
   const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries) : [];
 
@@ -351,24 +415,7 @@ function StepContent({
       return <EquipmentStep build={build} entries={entries} onChange={onChange} />;
 
     case "identity":
-      return (
-        <div className="m2-step">
-          <h3>Identity</h3>
-          <p className="m2-muted">Nothing here changes a calculation. A nickname is identity only.</p>
-          <label className="m2-field">
-            <span>Name</span>
-            <input value={build.name} onChange={event => onChange({ name: event.target.value })} />
-          </label>
-          <label className="m2-field">
-            <span>Nickname</span>
-            <input value={build.nickname ?? ""} onChange={event => onChange({ nickname: event.target.value })} />
-          </label>
-          <label className="m2-field">
-            <span>Pronouns</span>
-            <input value={build.pronouns ?? ""} onChange={event => onChange({ pronouns: event.target.value })} />
-          </label>
-        </div>
-      );
+      return <IdentityStep build={build} onChange={onChange} />;
 
     case "review":
       return <ReviewStep build={build} entries={entries} plan={plan} presentation={presentation} />;
@@ -376,6 +423,57 @@ function StepContent({
     default:
       return <div className="m2-step" />;
   }
+}
+
+/**
+ * Free-text identity fields.
+ *
+ * Keystrokes stay in component state and are submitted to the draft service on
+ * blur, so a per-character write never reaches the transaction boundary. None of
+ * these fields feeds a calculation: the nickname is identity only.
+ */
+function IdentityStep({
+  build,
+  onChange,
+}: {
+  build: CharacterDraftBuild;
+  onChange(patch: DraftPatch): void;
+}) {
+  const [buffer, setBuffer] = useState({
+    name: build.name,
+    nickname: build.nickname ?? "",
+    pronouns: build.pronouns ?? "",
+  });
+
+  const commitField = (field: keyof typeof buffer) => {
+    const value = buffer[field];
+    const persisted = field === "name" ? build.name : (build[field] ?? "");
+    if (value !== persisted) onChange({ [field]: value } as Partial<CharacterDraftBuild>);
+  };
+
+  const field = (id: keyof typeof buffer, label: string) => (
+    <div className="m2-field">
+      <label htmlFor={`identity-${id}`}>
+        <span>{label}</span>
+      </label>
+      <input
+        id={`identity-${id}`}
+        value={buffer[id]}
+        onChange={event => setBuffer(current => ({ ...current, [id]: event.target.value }))}
+        onBlur={() => commitField(id)}
+      />
+    </div>
+  );
+
+  return (
+    <div className="m2-step">
+      <h3>Identity</h3>
+      <p className="m2-muted">Nothing here changes a calculation. A nickname is identity only.</p>
+      {field("name", "Name")}
+      {field("nickname", "Nickname")}
+      {field("pronouns", "Pronouns")}
+    </div>
+  );
 }
 
 function OptionStep({
@@ -450,20 +548,21 @@ function ChoiceGroups({
   build: CharacterDraftBuild;
   plan: DraftSnapshot["plan"];
   stepId: BuilderStepId;
-  onChange(patch: Partial<CharacterDraftBuild>): void;
+  onChange(patch: DraftPatch): void;
 }) {
   const groups = plan.requiredChoices.filter(choice => choice.stepId === stepId);
   if (!groups.length) return <p className="m2-muted">No choices are required here yet.</p>;
 
-  const toggle = (choiceId: string, optionId: string, max: number) => {
-    const existing = build.choiceSelections[choiceId] ?? [];
-    const next = existing.includes(optionId)
-      ? existing.filter(item => item !== optionId)
-      : max === 1
-        ? [optionId]
-        : [...existing, optionId].slice(-max);
-    onChange({ choiceSelections: { ...build.choiceSelections, [choiceId]: next } });
-  };
+  const toggle = (choiceId: string, optionId: string, max: number) =>
+    onChange(current => {
+      const existing = current.choiceSelections[choiceId] ?? [];
+      const next = existing.includes(optionId)
+        ? existing.filter(item => item !== optionId)
+        : max === 1
+          ? [optionId]
+          : [...existing, optionId].slice(-max);
+      return { choiceSelections: { ...current.choiceSelections, [choiceId]: next } };
+    });
 
   return (
     <div className="m2-step">
@@ -518,7 +617,7 @@ function AbilitiesStep({
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
   recommendations: readonly { optionId: string; why: string }[];
-  onChange(patch: Partial<CharacterDraftBuild>): void;
+  onChange(patch: DraftPatch): void;
 }) {
   const background = build.backgroundId ? entries.find(entry => entry.id === build.backgroundId) : undefined;
   const choices = (background?.mechanics as { abilityScoreChoices?: { abilities?: string[]; increasePattern?: number[] } } | undefined)
@@ -526,32 +625,41 @@ function AbilitiesStep({
   const allowed = (choices?.abilities ?? []) as Ability[];
   const pattern = choices?.increasePattern ?? [];
 
-  const commit = (base: Partial<Record<Ability, number>>, increases: Partial<Record<Ability, number>>) => {
+  const withTotals = (base: Partial<Record<Ability, number>>, increases: Partial<Record<Ability, number>>) => {
     const final: Partial<Record<Ability, number>> = {};
     for (const ability of ABILITIES) {
       const baseScore = base[ability];
       if (typeof baseScore === "number") final[ability] = baseScore + (increases[ability] ?? 0);
     }
-    onChange({ abilityBaseScores: base, abilityIncreases: increases, abilityScores: final });
+    return { abilityBaseScores: base, abilityIncreases: increases, abilityScores: final };
   };
 
-  const assign = (ability: Ability, value: number | undefined) => {
-    const base = { ...build.abilityBaseScores };
-    if (value === undefined) delete base[ability];
-    else base[ability] = value;
-    commit(base, build.abilityIncreases);
-  };
-
-  const setIncrease = (slot: number, ability: Ability | undefined) => {
-    const increases: Partial<Record<Ability, number>> = {};
-    const current = Object.entries(build.abilityIncreases) as [Ability, number][];
-    const bySlot = pattern.map((amount, index) => current.find(([, value]) => value === amount && index === current.findIndex(([, v]) => v === amount))?.[0]);
-    bySlot[slot] = ability;
-    bySlot.forEach((target, index) => {
-      if (target) increases[target] = pattern[index];
+  const assign = (ability: Ability, value: number | undefined) =>
+    onChange(current => {
+      const base = { ...current.abilityBaseScores };
+      if (value === undefined) delete base[ability];
+      else base[ability] = value;
+      return withTotals(base, current.abilityIncreases);
     });
-    commit(build.abilityBaseScores, increases);
-  };
+
+  /**
+   * Increases are stored keyed by ability, so each slot is identified by its
+   * amount. The accepted origin pattern is +2/+1, whose amounts are distinct; a
+   * future pattern with repeated amounts would need a slot-keyed draft field.
+   */
+  const increaseIn = (source: Readonly<Partial<Record<Ability, number>>>, amount: number) =>
+    (Object.entries(source).find(([, value]) => value === amount)?.[0] as Ability | undefined);
+  const increaseFor = (amount: number) => increaseIn(build.abilityIncreases, amount);
+
+  const setIncrease = (amount: number, ability: Ability | undefined) =>
+    onChange(current => {
+      const increases: Partial<Record<Ability, number>> = {};
+      for (const patternAmount of pattern) {
+        const target = patternAmount === amount ? ability : increaseIn(current.abilityIncreases, patternAmount);
+        if (target) increases[target] = patternAmount;
+      }
+      return withTotals(current.abilityBaseScores, increases);
+    });
 
   const used = ABILITIES.map(ability => build.abilityBaseScores[ability]).filter((value): value is number => typeof value === "number");
   const remaining = [...STANDARD_ARRAY];
@@ -595,38 +703,49 @@ function AbilitiesStep({
             Remaining values: {remaining.length ? remaining.join(", ") : "all assigned"}
           </p>
           <div className="m2-ability-grid">
-            {ABILITIES.map(ability => (
-              <label key={ability} className="m2-field">
-                <span>{ability[0].toUpperCase() + ability.slice(1)}</span>
-                <select
-                  value={build.abilityBaseScores[ability] ?? ""}
-                  onChange={event => assign(ability, event.target.value ? Number(event.target.value) : undefined)}
-                >
-                  <option value="">—</option>
-                  {[...new Set([...remaining, build.abilityBaseScores[ability]].filter((v): v is number => typeof v === "number"))]
-                    .sort((a, b) => b - a)
-                    .map(value => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                </select>
-                <output className="m2-ability-final">
-                  {typeof build.abilityScores[ability] === "number" ? build.abilityScores[ability] : "—"}
-                </output>
-              </label>
-            ))}
+            {ABILITIES.map(ability => {
+              const name = ability[0].toUpperCase() + ability.slice(1);
+              const total = build.abilityScores[ability];
+              return (
+                // The select and the computed total are associated explicitly:
+                // wrapping both in one label would fold the total into the
+                // select's accessible name.
+                <div key={ability} className="m2-field">
+                  <label htmlFor={`ability-${ability}`}>
+                    <span>{name}</span>
+                  </label>
+                  <select
+                    id={`ability-${ability}`}
+                    value={build.abilityBaseScores[ability] ?? ""}
+                    onChange={event => assign(ability, event.target.value ? Number(event.target.value) : undefined)}
+                  >
+                    <option value="">—</option>
+                    {[...new Set([...remaining, build.abilityBaseScores[ability]].filter((v): v is number => typeof v === "number"))]
+                      .sort((a, b) => b - a)
+                      .map(value => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                  </select>
+                  <output className="m2-ability-final" aria-label={`${name} total`}>
+                    {typeof total === "number" ? total : "—"}
+                  </output>
+                </div>
+              );
+            })}
           </div>
           {pattern.length ? (
             <fieldset className="m2-fieldset">
               <legend>Origin increases</legend>
               <div className="m2-ability-grid">
-                {pattern.map((amount, slot) => (
-                  <label key={slot} className="m2-field">
+                {pattern.map(amount => (
+                  <label key={amount} className="m2-field" htmlFor={`increase-${amount}`}>
                     <span>+{amount} to</span>
                     <select
-                      value={(Object.entries(build.abilityIncreases).find(([, value]) => value === amount)?.[0] as Ability) ?? ""}
-                      onChange={event => setIncrease(slot, event.target.value ? (event.target.value as Ability) : undefined)}
+                      id={`increase-${amount}`}
+                      value={increaseFor(amount) ?? ""}
+                      onChange={event => setIncrease(amount, event.target.value ? (event.target.value as Ability) : undefined)}
                     >
                       <option value="">—</option>
                       {allowed.map(ability => (
@@ -652,12 +771,12 @@ function AbilitiesStep({
                 max={30}
                 value={build.abilityScores[ability] ?? ""}
                 onChange={event =>
-                  onChange({
+                  onChange(current => ({
                     abilityScores: {
-                      ...build.abilityScores,
+                      ...current.abilityScores,
                       [ability]: event.target.value ? Number(event.target.value) : undefined,
                     },
-                  })
+                  }))
                 }
               />
             </label>
@@ -675,7 +794,7 @@ function EquipmentStep({
 }: {
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
-  onChange(patch: Partial<CharacterDraftBuild>): void;
+  onChange(patch: DraftPatch): void;
 }) {
   const classEntry = build.classId ? entries.find(entry => entry.id === build.classId) : undefined;
   const bundle = classEntry?.equipmentBundles?.[0];
@@ -707,7 +826,9 @@ function EquipmentStep({
                   className={selected.includes(option.id) ? "m2-option m2-option-selected" : "m2-option"}
                   aria-pressed={selected.includes(option.id)}
                   onClick={() =>
-                    onChange({ equipmentSelections: { ...build.equipmentSelections, [SYNTHETIC_EQUIPMENT_CHOICE]: [option.id] } })
+                    onChange(current => ({
+                      equipmentSelections: { ...current.equipmentSelections, [SYNTHETIC_EQUIPMENT_CHOICE]: [option.id] },
+                    }))
                   }
                 >
                   <span className="m2-option-mark" aria-hidden="true">

@@ -22,7 +22,7 @@ for (const viewport of viewports) {
     await page.setViewportSize(viewport);
     await page.goto(APP_ROOT);
     await expect(page).toHaveTitle("Runefolio");
-    const headerMark = page.locator(".page-title img");
+    const headerMark = page.locator(".m2-appbar-brand img");
     await expect(headerMark).toBeVisible();
     const imageState = await headerMark.evaluate((image: HTMLImageElement) => ({
         complete: image.complete,
@@ -39,13 +39,10 @@ for (const viewport of viewports) {
       })),
     ).toEqual({ documentWidth: viewport.width, viewportWidth: viewport.width });
 
-    if (viewport.width <= 1024) {
-      await page.getByRole("button", { name: "Toggle navigation" }).click();
-      await expect(page.locator(".brand").getByText("Runefolio")).toBeVisible();
-      await expect(page.locator(".brand img")).toBeVisible();
-    } else {
-      await expect(page.locator(".brand").getByText("Runefolio")).toBeVisible();
-    }
+    // The wordmark and mark now live in the persistent app bar at every width,
+    // so no navigation has to be opened to see the branding.
+    await expect(page.locator(".m2-appbar-brand").getByText("Runefolio")).toBeVisible();
+    await expect(page.locator(".m2-appbar-brand img")).toBeVisible();
 
     for (const colorScheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme });
