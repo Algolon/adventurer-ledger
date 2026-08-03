@@ -60,16 +60,19 @@ Evaluation phases: grants/replacements; base/set calculations; min/max; modifier
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "pack": {
     "id": "my-private-library",
     "name": "My Private D&D Library",
     "version": "1.0.0",
+    "coverage": "complete",
     "rulesEditions": ["2024", "2014"],
     "visibility": "private",
     "licenseType": "private-owned-source",
     "exportRestricted": true,
-    "includeFullText": true
+    "includeFullText": true,
+    "dependencies": [],
+    "optionalDependencies": []
   },
   "sources": [],
   "entries": []

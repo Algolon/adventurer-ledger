@@ -1,4 +1,4 @@
-import type { ContentPackDocument } from "@/src/domain/content-pack";
+import { contentPackSchema, type ContentPackDocument } from "@/src/domain/content-pack";
 import type { LedgerDB } from "@/src/storage/db";
 
 export class RestrictedExportConfirmationError extends Error {
@@ -32,18 +32,21 @@ export async function createContentExport(
     const sources = (
       await database.sources.where("id").anyOf(pack.sourceIds).toArray()
     ).filter((source) => includedSourceIds.has(source.id));
-    documents.push({
-      schemaVersion: 1,
+    documents.push(contentPackSchema.parse({
+      schemaVersion: 2,
       pack: {
         id: pack.id,
         name: pack.name,
         description: pack.description,
         version: pack.version,
+        coverage: pack.coverage,
         rulesEditions: pack.rulesEditions,
         visibility: pack.visibility,
         licenseType: pack.licenseType,
         exportRestricted: pack.exportRestricted,
         includeFullText: pack.includeFullText,
+        dependencies: pack.dependencies,
+        optionalDependencies: pack.optionalDependencies,
       },
       sources: sources.map((source) => ({
         id: source.id,
@@ -70,6 +73,8 @@ export async function createContentExport(
         sourceBook: entry.sourceBook,
         sourcePage: entry.sourcePage,
         sourceSection: entry.sourceSection,
+        sourceLocator: entry.sourceLocator,
+        reviewStatus: entry.reviewStatus,
         licenseType: entry.licenseType,
         visibility: entry.visibility,
         fullText: entry.fullText,
@@ -77,9 +82,16 @@ export async function createContentExport(
         prerequisites: entry.prerequisites,
         choices: entry.choices,
         effects: entry.effects,
+        links: entry.links,
+        mechanics: entry.mechanics,
+        conflict: entry.conflict,
         tags: entry.tags,
         version: entry.version,
         revision: entry.revision,
+        errataVersion: entry.errataVersion,
+        replacementOf: entry.replacementOf,
+        replacedBy: entry.replacedBy,
+        editionRelations: entry.editionRelations,
         legacy: entry.legacy,
         optional: entry.optional,
         private: entry.private,
@@ -87,7 +99,7 @@ export async function createContentExport(
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,
       })),
-    });
+    }));
   }
   return documents;
 }

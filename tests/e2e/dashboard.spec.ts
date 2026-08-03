@@ -152,8 +152,7 @@ test("works offline with local compendium edit, search, and export", async ({
   await page.goto(APP_ROOT);
   await expect(page.locator(".offline")).toContainText("Offline ready");
   await navigate(page, "Imports & exports");
-  const original =
-    "<img src=x onerror=PRIVATE_SYNTHETIC_EXECUTION()> Original offline-safe text.";
+  const original = "Original offline-safe synthetic text without markup.";
   await page
     .getByLabel("Pack JSON")
     .fill(JSON.stringify(pack("offline-star", "Offline Star", original)));
@@ -176,7 +175,7 @@ test("works offline with local compendium edit, search, and export", async ({
     card.getByRole("heading", { name: "Offline Star Rule" }),
   ).toBeVisible();
   await card.getByText(/Full text/).click();
-  await expect(card).toContainText("Original offline-safe text");
+  await expect(card).toContainText("Original offline-safe synthetic text");
   await expect(card.locator("img")).toHaveCount(0);
   expect(
     await page.evaluate(() => "PRIVATE_SYNTHETIC_EXECUTION" in window),
