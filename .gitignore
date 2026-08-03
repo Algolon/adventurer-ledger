@@ -1,0 +1,24 @@
+/node_modules
+/.next
+/out
+/coverage
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Private/owned-source boundary
+/private-content/
+/private-backups/
+/local-references/
+/exports/
+/imports/
+/book-imports/
+*.private.json
+*.private.enc
+*.licensed.json
+*.local.db
+*.sqlite
+*.sqlite3
+.env.local
+.env.private
