@@ -47,36 +47,107 @@ export const ABILITIES: readonly Ability[] = [
   "charisma",
 ];
 
-const STATIC_TARGET_PATHS = [
-  "proficiencyBonus",
-  "hitPoints.maximum",
-  "hitPoints.current",
-  "armorClass",
-  "initiative",
-  "speed",
-  "hitDice.total",
-] as const;
+/**
+ * The one authoritative registry of override targets.
+ *
+ * A path is supported only if the resolver actually applies it. An allow-list
+ * that accepted a path nobody implemented let a user store an override that
+ * silently did nothing, which is worse than refusing it: the value looked
+ * overridden and behaved as though it were not.
+ *
+ * Parsing is exact. A stable ID may not contain a dot, so `resource.<id>.maximum`
+ * cannot be confused with `resource.<id>.anythingElse`, and a bare `resource.<id>`
+ * is rejected rather than accepted as an inert prefix match.
+ */
+export type OverrideTargetKind =
+  | "proficiencyBonus"
+  | "hitPointsMaximum"
+  | "armorClass"
+  | "initiative"
+  | "speed"
+  | "abilityScore"
+  | "abilityModifier"
+  | "savingThrow"
+  | "check"
+  | "resourceMaximum"
+  | "attackBonus";
+
+export interface ParsedOverrideTarget {
+  kind: OverrideTargetKind;
+  /** Present for ability targets. */
+  ability?: Ability;
+  /** Present for targets addressed by a stable content ID. */
+  id?: ID;
+}
+
+/** Stable IDs are lower-case and dot-free so a suffix is never ambiguous. */
+const STABLE_ID = "[a-z0-9][a-z0-9:_-]*";
 
 /**
- * Prefixes whose remainder is a stable content ID. Ability paths are deliberately
- * absent: they are matched exhaustively against the six abilities above, so
- * `abilityScore.<anything-else>` is rejected rather than treated as an ID.
+ * A Map, not an object literal: `STATIC_TARGETS["__proto__"]` on a literal
+ * resolves to `Object.prototype` and reads as a truthy hit, which would accept
+ * `__proto__` as a valid override target.
  */
-const PREFIX_TARGET_PATHS = ["savingThrow.", "check.", "resource.", "attack."] as const;
+const STATIC_TARGETS = new Map<string, OverrideTargetKind>([
+  ["proficiencyBonus", "proficiencyBonus"],
+  ["hitPoints.maximum", "hitPointsMaximum"],
+  ["armorClass", "armorClass"],
+  ["initiative", "initiative"],
+  ["speed", "speed"],
+]);
+
+const PATTERNS: readonly { pattern: RegExp; kind: OverrideTargetKind }[] = [
+  { pattern: new RegExp(`^savingThrow\\.(${STABLE_ID})$`), kind: "savingThrow" },
+  { pattern: new RegExp(`^check\\.(${STABLE_ID})$`), kind: "check" },
+  { pattern: new RegExp(`^resource\\.(${STABLE_ID})\\.maximum$`), kind: "resourceMaximum" },
+  { pattern: new RegExp(`^attack\\.(${STABLE_ID})\\.attackBonus$`), kind: "attackBonus" },
+];
+
+/**
+ * Parses a target path, or returns undefined when it is not supported.
+ *
+ * Deliberately absent:
+ *
+ * - `hitPoints.current` — current hit points are runtime state owned by the
+ *   runtime service. A durable override on them would fight every damage and
+ *   heal, so it is refused rather than stored and ignored.
+ * - `hitDice.total` — the sheet renders hit dice as an expression such as `2d8`,
+ *   which a numeric `replace`/`add` override cannot express.
+ */
+export function parseOverrideTarget(path: string): ParsedOverrideTarget | undefined {
+  if (typeof path !== "string" || path.length > 200) return undefined;
+  const staticKind = STATIC_TARGETS.get(path);
+  if (staticKind) return { kind: staticKind };
+  for (const ability of ABILITIES) {
+    if (path === `abilityScore.${ability}`) return { kind: "abilityScore", ability };
+    if (path === `abilityModifier.${ability}`) return { kind: "abilityModifier", ability };
+  }
+  for (const { pattern, kind } of PATTERNS) {
+    const match = pattern.exec(path);
+    if (match) return { kind, id: match[1] };
+  }
+  return undefined;
+}
 
 /** Pure allow-list check. No string is ever evaluated. */
 export function isAllowedTargetPath(path: string): boolean {
-  if ((STATIC_TARGET_PATHS as readonly string[]).includes(path)) return true;
-  for (const ability of ABILITIES) {
-    if (path === `abilityScore.${ability}` || path === `abilityModifier.${ability}`) return true;
-  }
-  const prefix = PREFIX_TARGET_PATHS.find(candidate => path.startsWith(candidate));
-  if (!prefix) return false;
-  const remainder = path.slice(prefix.length);
-  if (!remainder || remainder.length > 160) return false;
-  // A stable ID plus one optional suffix segment, e.g. `resource:<id>.maximum`.
-  return /^[a-z0-9][a-z0-9:_-]*(?:\.[a-z][a-zA-Z]*)?$/.test(remainder);
+  return parseOverrideTarget(path) !== undefined;
 }
+
+/** Every supported target shape, for exhaustive testing and UI discovery. */
+export const OVERRIDE_TARGET_KINDS: readonly OverrideTargetKind[] = [
+  "proficiencyBonus",
+  "hitPointsMaximum",
+  "armorClass",
+  "initiative",
+  "speed",
+  "abilityScore",
+  "abilityModifier",
+  "savingThrow",
+  "check",
+  "resourceMaximum",
+  "attackBonus",
+];
 
 /**
  * Durable, revision-bearing committed character. Runtime play values are NOT

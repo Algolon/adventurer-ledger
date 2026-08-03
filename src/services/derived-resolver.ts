@@ -240,6 +240,7 @@ function applyOverride(
   base: DerivedValue,
   targetPath: string,
   overrides: readonly CharacterOverrideRecord[],
+  staleIds?: Set<ID>,
 ): DerivedValue {
   const override = overrides.find(item => item.targetPath === targetPath);
   if (!override) return base;
@@ -248,10 +249,14 @@ function applyOverride(
   // A target that can no longer be calculated marks the override stale for review
   // rather than executing it blindly (D-04).
   if (base.value === null) {
+    staleIds?.add(override.id);
     return { ...base, override: { operation: override.operation, value: override.value, automaticBaseline: override.automaticBaseline, stale: true } };
   }
   const applied = override.operation === "replace" ? override.value : base.value + override.value;
   const stale = override.automaticBaseline !== null && override.automaticBaseline !== base.value;
+  // Stale is reported from one source of truth: a recalculated baseline that
+  // moved counts even when the stored record still says "active".
+  if (stale) staleIds?.add(override.id);
   return {
     value: applied,
     contributors: [
@@ -283,6 +288,8 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   const byId = new Map(entries.map(item => [item.id, item]));
   const issues: SanitizedIssue[] = [];
   const missingDependencyIds = new Set<ID>();
+  /** Overrides whose recalculated baseline no longer matches the stored one. */
+  const detectedStaleOverrideIds = new Set<ID>();
   const label = (id: ID | undefined): string | null => (id ? byId.get(id)?.name ?? null : null);
 
   const classSelection = character.classLevels[0];
@@ -326,6 +333,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
       ]),
       `abilityScore.${ability}`,
       overrides,
+      detectedStaleOverrideIds,
     );
     const effectiveScore = scoreValue.value ?? raw;
     abilityScores[ability] = effectiveScore;
@@ -333,6 +341,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
       known(abilityModifier(effectiveScore), [{ kind: "base", label: `Score ${effectiveScore}`, amount: abilityModifier(effectiveScore) }]),
       `abilityModifier.${ability}`,
       overrides,
+      detectedStaleOverrideIds,
     );
     abilities[ability] = { score: scoreValue, modifier: modifierValue };
   }
@@ -370,6 +379,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     known(proficiencyBonus(character.level), [{ kind: "base", label: `Level ${character.level}`, amount: proficiencyBonus(character.level) }]),
     "proficiencyBonus",
     overrides,
+    detectedStaleOverrideIds,
   );
   const bonus = proficiencyBonusValue.value ?? 0;
 
@@ -397,7 +407,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ? known(entered, [{ kind: "manual", label: "Manual value" }])
         : unknown({ code: "MANUAL_VALUE_MISSING", fieldPath: "hitPoints.maximum", action: "Enter maximum hit points" });
   }
-  maximumHitPoints = applyOverride(maximumHitPoints, "hitPoints.maximum", overrides);
+  maximumHitPoints = applyOverride(maximumHitPoints, "hitPoints.maximum", overrides, detectedStaleOverrideIds);
 
   const currentFromRuntime = runtime?.currentHitPoints;
   const currentManual = manual["hitPoints.current"];
@@ -484,7 +494,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ? known(entered, [{ kind: "manual", label: "Manual value" }])
         : unknown({ code: "MANUAL_VALUE_MISSING", fieldPath: "armorClass", action: "Enter armour class" });
   }
-  armorClass = applyOverride(armorClass, "armorClass", overrides);
+  armorClass = applyOverride(armorClass, "armorClass", overrides, detectedStaleOverrideIds);
 
   // ---- initiative and speed -----------------------------------------------
   const dexterityModifier = modifierOf("dexterity");
@@ -503,7 +513,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ? known(entered, [{ kind: "manual", label: "Manual value" }])
         : unknown({ code: "MANUAL_VALUE_MISSING", fieldPath: "initiative", action: "Enter initiative" });
   }
-  initiative = applyOverride(initiative, "initiative", overrides);
+  initiative = applyOverride(initiative, "initiative", overrides, detectedStaleOverrideIds);
 
   const speciesEntry = character.speciesId ? byId.get(character.speciesId) : undefined;
   let speed: DerivedValue;
@@ -519,7 +529,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ? known(entered, [{ kind: "manual", label: "Manual value" }])
         : unknown({ code: "MANUAL_VALUE_MISSING", fieldPath: "speed", action: "Enter speed" });
   }
-  speed = applyOverride(speed, "speed", overrides);
+  speed = applyOverride(speed, "speed", overrides, detectedStaleOverrideIds);
 
   // ---- saves and checks ----------------------------------------------------
   const catalog = proficiencyCatalog(entries);
@@ -538,7 +548,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
             { kind: "ability", label: `${ability[0].toUpperCase()}${ability.slice(1)} modifier`, amount: modifier },
             ...(proficient ? [{ kind: "proficiency" as const, label: "Proficiency bonus", amount: bonus }] : []),
           ]);
-    return { id: definition.id, label: definition.label, ability, proficient, total: applyOverride(base, path, overrides) };
+    return { id: definition.id, label: definition.label, ability, proficient, total: applyOverride(base, path, overrides, detectedStaleOverrideIds) };
   };
   const saves = mode === "automatic" ? catalog.saves.map(item => proficiencyEntry(item, "savingThrow")) : [];
   const checks = mode === "automatic" ? catalog.skills.map(item => proficiencyEntry(item, "check")) : [];
@@ -603,6 +613,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         : known(attackTotal, attackContributors),
       `attack.${definition.id}.attackBonus`,
       overrides,
+      detectedStaleOverrideIds,
     );
     actions.push({
       id: definition.id,
@@ -654,6 +665,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
             ]),
             `resource.${resourceId}.maximum`,
             overrides,
+            detectedStaleOverrideIds,
           )
         : unknown({ code: "RESOURCE_MAXIMUM_UNKNOWN", fieldPath: `resource.${resourceId}.maximum`, action: "Restore the class source" });
     const currentUses = runtime?.resourceUses[resourceId];
@@ -706,10 +718,9 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
       ? "renderable-manual"
       : "incomplete";
 
-  const staleOverrideIds = overrides
-    .filter(item => item.status === "stale")
-    .map(item => item.id)
-    .sort((left, right) => left.localeCompare(right));
+  const staleOverrideIds = [
+    ...new Set([...overrides.filter(item => item.status === "stale").map(item => item.id), ...detectedStaleOverrideIds]),
+  ].sort((left, right) => left.localeCompare(right));
 
   const activeSourceIds = [...new Set(entries.map(item => item.sourceId))].sort((left, right) => left.localeCompare(right));
 

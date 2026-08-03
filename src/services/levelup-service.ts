@@ -326,7 +326,14 @@ export class CharacterLevelUpService {
         const replaced = await repositories.characters.replace(nextCharacter, character.revision);
         if (!replaced) return stale(command.characterId, command.expectedCharacterRevision, null);
 
-        const afterSheet = resolveDerivedCharacter({ character: nextCharacter, runtime, overrides, entries });
+        // `until-level-up` overrides expire here, in the same transaction. The
+        // pre-level restore point above already captured them, so an undo brings
+        // them back; a cancelled or failed level-up never reaches this point.
+        const expiring = overrides.filter(item => item.scope === "until-level-up");
+        for (const override of expiring) await repositories.overrides.delete(override.id);
+        const remainingOverrides = overrides.filter(item => item.scope !== "until-level-up");
+
+        const afterSheet = resolveDerivedCharacter({ character: nextCharacter, runtime, overrides: remainingOverrides, entries });
         const resourceUses: Record<ID, number> = { ...runtime.resourceUses };
         const resourceMaxima: Record<ID, number> = { ...runtime.resourceMaximaAtLastSync };
         for (const resource of preview.resources) {

@@ -1395,3 +1395,103 @@ describe("the character aggregate across transfer, replace and restore", () => {
     expect(await harness.database.characterSnapshots.count()).toBe(0);
   });
 });
+
+describe("until-level-up override scope", () => {
+  beforeEach(async () => {
+    await commitBrammel();
+  });
+
+  async function addOverride(scope: "persistent" | "until-level-up", targetPath: string, value: number, expectedRevision: number) {
+    const result = expectOk<{ characterRevision: number; overrideId: string }>(
+      await harness.overrides.set({
+        operationId: `operation:${scope}:${targetPath}`,
+        characterId: "character:brammel",
+        expectedCharacterRevision: expectedRevision,
+        targetPath,
+        operation: "replace",
+        value,
+        scope,
+      }),
+    );
+    return result;
+  }
+
+  const levelUp = async (expectedCharacterRevision: number) =>
+    harness.levelUp.confirm({
+      operationId: "operation:level-2",
+      characterId: "character:brammel",
+      expectedCharacterRevision,
+      expectedRuntimeRevision: 1,
+      targetLevel: 2,
+      expectedContentFingerprint: await harness.query.contentFingerprint(SYNTHETIC_RULESET_ID),
+      choiceSelections: { [SYNTHETIC_CHOICES.weaponMastery]: ["option:measured-cut"] },
+    });
+
+  it("expires only until-level-up overrides on a successful level-up", async () => {
+    const temporary = await addOverride("until-level-up", "armorClass", 20, 1);
+    const persistent = await addOverride("persistent", "initiative", 9, temporary.characterRevision);
+    expect(await harness.database.characterOverrides.count()).toBe(2);
+
+    const levelled = expectOk<LevelUpResult>(await levelUp(persistent.characterRevision));
+
+    const remaining = await harness.database.characterOverrides.toArray();
+    expect(remaining.map(item => item.targetPath)).toEqual(["initiative"]);
+    const sheet = await harness.query.sheet("character:brammel");
+    // The temporary override is gone, so armour class is automatic again.
+    expect(sheet?.armorClass.value).toBe(18);
+    expect(sheet?.initiative.value).toBe(9);
+
+    // The pre-level restore point still holds both.
+    const snapshot = await harness.database.characterSnapshots.get(levelled.restorePointId);
+    expect(snapshot?.overrides.map(item => item.targetPath).sort()).toEqual(["armorClass", "initiative"]);
+  });
+
+  it("restores an expired override when the level-up is undone", async () => {
+    const temporary = await addOverride("until-level-up", "armorClass", 20, 1);
+    const levelled = expectOk<LevelUpResult>(await levelUp(temporary.characterRevision));
+    expect(await harness.database.characterOverrides.count()).toBe(0);
+
+    const current = (await harness.database.characters.get("character:brammel"))!;
+    expectOk(await harness.levelUp.restore("character:brammel", levelled.restorePointId, current.revision, "operation:restore"));
+
+    const restored = await harness.database.characterOverrides.toArray();
+    expect(restored).toHaveLength(1);
+    expect(restored[0].scope).toBe("until-level-up");
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(20);
+  });
+
+  it("leaves every override untouched when the level-up is refused", async () => {
+    const temporary = await addOverride("until-level-up", "armorClass", 20, 1);
+    // An unresolved new choice makes the confirm invalid.
+    const outcome = await harness.levelUp.confirm({
+      operationId: "operation:level-blocked",
+      characterId: "character:brammel",
+      expectedCharacterRevision: temporary.characterRevision,
+      expectedRuntimeRevision: 1,
+      targetLevel: 2,
+      expectedContentFingerprint: await harness.query.contentFingerprint(SYNTHETIC_RULESET_ID),
+      choiceSelections: {},
+    });
+    expect(outcome.status).toBe("invalid");
+
+    expect(await harness.database.characterOverrides.count()).toBe(1);
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(20);
+    expect((await harness.database.characters.get("character:brammel"))?.level).toBe(1);
+  });
+
+  it("leaves every override untouched when the level-up is stale", async () => {
+    const temporary = await addOverride("until-level-up", "armorClass", 20, 1);
+    const outcome = await harness.levelUp.confirm({
+      operationId: "operation:level-stale",
+      characterId: "character:brammel",
+      expectedCharacterRevision: temporary.characterRevision + 99,
+      expectedRuntimeRevision: 1,
+      targetLevel: 2,
+      expectedContentFingerprint: await harness.query.contentFingerprint(SYNTHETIC_RULESET_ID),
+      choiceSelections: { [SYNTHETIC_CHOICES.weaponMastery]: ["option:measured-cut"] },
+    });
+    expect(outcome.status).toBe("stale");
+    expect(await harness.database.characterOverrides.count()).toBe(1);
+    expect(await harness.database.characterSnapshots.count()).toBe(0);
+  });
+});

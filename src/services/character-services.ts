@@ -18,7 +18,7 @@ import type {
   OverrideOperation,
   OverrideScope,
 } from "@/src/domain/character-record";
-import { EMPTY_DRAFT_BUILD, isAllowedTargetPath } from "@/src/domain/character-record";
+import { EMPTY_DRAFT_BUILD, isAllowedTargetPath, parseOverrideTarget } from "@/src/domain/character-record";
 import type { ContentEntry, ID } from "@/src/domain/model";
 import type { LedgerDB } from "@/src/storage/db";
 import type { CharacterRepositories } from "@/src/storage/character-repositories";
@@ -635,32 +635,39 @@ export class CharacterOverrideService {
   }
 }
 
-/** Reads the automatic value at an allow-listed path from a resolved sheet. */
+/**
+ * Reads the automatic value at a supported path from a resolved sheet.
+ *
+ * It shares `parseOverrideTarget` with validation and with the resolver, so a
+ * target cannot be accepted by one and unknown to another.
+ */
 export function baselineFor(sheet: DerivedCharacterSheet, targetPath: string): number | null {
-  if (targetPath === "proficiencyBonus") return sheet.proficiencyBonus.value;
-  if (targetPath === "armorClass") return sheet.armorClass.value;
-  if (targetPath === "initiative") return sheet.initiative.value;
-  if (targetPath === "speed") return sheet.speed.value;
-  if (targetPath === "hitPoints.maximum") return sheet.hitPoints.maximum.value;
-  if (targetPath === "hitPoints.current") return sheet.hitPoints.current.value;
-  const ability = targetPath.startsWith("abilityScore.")
-    ? targetPath.slice("abilityScore.".length)
-    : targetPath.startsWith("abilityModifier.")
-      ? targetPath.slice("abilityModifier.".length)
-      : undefined;
-  if (ability && ability in sheet.abilities) {
-    const entry = sheet.abilities[ability as keyof typeof sheet.abilities];
-    return targetPath.startsWith("abilityScore.") ? entry.score.value : entry.modifier.value;
+  const target = parseOverrideTarget(targetPath);
+  if (!target) return null;
+  switch (target.kind) {
+    case "proficiencyBonus":
+      return sheet.proficiencyBonus.value;
+    case "hitPointsMaximum":
+      return sheet.hitPoints.maximum.value;
+    case "armorClass":
+      return sheet.armorClass.value;
+    case "initiative":
+      return sheet.initiative.value;
+    case "speed":
+      return sheet.speed.value;
+    case "abilityScore":
+      return target.ability ? sheet.abilities[target.ability].score.value : null;
+    case "abilityModifier":
+      return target.ability ? sheet.abilities[target.ability].modifier.value : null;
+    case "savingThrow":
+      return sheet.saves.find(item => item.id === target.id)?.total.value ?? null;
+    case "check":
+      return sheet.checks.find(item => item.id === target.id)?.total.value ?? null;
+    case "resourceMaximum":
+      return sheet.resources.find(item => item.id === target.id)?.maximum.value ?? null;
+    case "attackBonus":
+      return sheet.actions.find(item => item.id === target.id)?.attackBonus.value ?? null;
   }
-  if (targetPath.startsWith("savingThrow."))
-    return sheet.saves.find(item => item.id === targetPath.slice("savingThrow.".length))?.total.value ?? null;
-  if (targetPath.startsWith("check."))
-    return sheet.checks.find(item => item.id === targetPath.slice("check.".length))?.total.value ?? null;
-  if (targetPath.startsWith("resource.") && targetPath.endsWith(".maximum"))
-    return sheet.resources.find(item => item.id === targetPath.slice("resource.".length, -".maximum".length))?.maximum.value ?? null;
-  if (targetPath.startsWith("attack.") && targetPath.endsWith(".attackBonus"))
-    return sheet.actions.find(item => item.id === targetPath.slice("attack.".length, -".attackBonus".length))?.attackBonus.value ?? null;
-  return null;
 }
 
 export interface LibraryCard {
