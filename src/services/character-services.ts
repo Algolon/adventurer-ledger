@@ -670,6 +670,176 @@ export function baselineFor(sheet: DerivedCharacterSheet, targetPath: string): n
   }
 }
 
+export interface DuplicateResult {
+  characterId: ID;
+  characterRevision: number;
+  versionId: ID;
+}
+
+/**
+ * Library-level character operations.
+ *
+ * Duplicate produces an independent aggregate: a new character ID with its own
+ * runtime state, its own overrides and its own empty session history. Nothing is
+ * shared with the original, so playing one cannot change the other. Archive
+ * removes a character from the active library without deleting any history.
+ */
+export class CharacterLibraryService {
+  private readonly clock: Clock;
+  private readonly log: ServiceLogger;
+
+  constructor(private readonly context: ServiceContext) {
+    this.clock = context.clock ?? systemClock;
+    this.log = context.logger ?? noopLogger;
+  }
+
+  async duplicate(
+    sourceCharacterId: ID,
+    targetCharacterId: ID,
+    operationId: ID,
+  ): Promise<ServiceOutcome<DuplicateResult>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+    const outcome = await database.transaction(
+      "rw",
+      [
+        database.characters,
+        database.characterVersions,
+        database.characterRuntimeStates,
+        database.characterOverrides,
+        database.characterActions,
+        database.characterDerivedSnapshots,
+        database.contentEntries,
+        database.rulesetProfiles,
+      ],
+      async (): Promise<ServiceOutcome<DuplicateResult>> => {
+        const source = await repositories.characters.get(sourceCharacterId);
+        if (!source) return notFound(sourceCharacterId);
+        if (await repositories.characters.get(targetCharacterId))
+          return { status: "conflict", code: "CHARACTER_ALREADY_EXISTS", recordId: targetCharacterId };
+
+        const [sourceRuntime, sourceOverrides, scope] = await Promise.all([
+          repositories.runtime.get(sourceCharacterId),
+          repositories.overrides.listByCharacter(sourceCharacterId),
+          loadRulesetScope(repositories, source.rulesetProfileId),
+        ]);
+
+        const copy: CharacterRecord = {
+          ...source,
+          id: targetCharacterId,
+          revision: 1,
+          name: `${source.name}`.trim() ? `${source.name} (Copy)` : source.name,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await repositories.characters.add(copy);
+        await repositories.versions.append({
+          id: `${targetCharacterId}@1`,
+          characterId: targetCharacterId,
+          sequence: 1,
+          reason: "initial",
+          operationId,
+          snapshot: copy,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        // Runtime ownership is remapped, never shared.
+        const runtime: CharacterRuntimeStateRecord = sourceRuntime
+          ? { ...sourceRuntime, characterId: targetCharacterId, revision: 1, createdAt: now, updatedAt: now }
+          : {
+              characterId: targetCharacterId,
+              revision: 1,
+              currentHitPoints: 0,
+              maximumHitPointsAtLastSync: 0,
+              temporaryHitPoints: 0,
+              resourceUses: {},
+              resourceMaximaAtLastSync: {},
+              conditions: [],
+              hitDiceRemaining: copy.level,
+              exhaustion: 0,
+              deathSaves: { successes: 0, failures: 0 },
+              createdAt: now,
+              updatedAt: now,
+            };
+        await repositories.runtime.put(runtime);
+
+        // Override IDs and ownership are remapped so the copy cannot alias them.
+        const copiedOverrides = sourceOverrides.map(item => ({
+          ...item,
+          id: `${targetCharacterId}:override:${item.targetPath}`,
+          characterId: targetCharacterId,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        for (const override of copiedOverrides) await repositories.overrides.put(override);
+
+        // The copy starts with no session history of its own.
+        await repositories.derivedSnapshots.put(
+          derivedSnapshotOf(
+            resolveDerivedCharacter({
+              character: copy,
+              runtime,
+              overrides: copiedOverrides,
+              entries: scope.entries,
+              ...(scope.ruleset ? { ruleset: scope.ruleset } : {}),
+            }),
+            now,
+          ),
+        );
+
+        return ok({ characterId: targetCharacterId, characterRevision: 1, versionId: `${targetCharacterId}@1` });
+      },
+    );
+    this.log({ operation: "character.duplicate", recordId: sourceCharacterId });
+    return outcome;
+  }
+
+  /** Archives or restores a character. History is never deleted. */
+  async setArchived(
+    characterId: ID,
+    expectedRevision: number,
+    archived: boolean,
+    operationId: ID,
+  ): Promise<ServiceOutcome<{ characterId: ID; characterRevision: number }>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+    const outcome = await database.transaction(
+      "rw",
+      [database.characters, database.characterVersions],
+      async (): Promise<ServiceOutcome<{ characterId: ID; characterRevision: number }>> => {
+        const character = await repositories.characters.get(characterId);
+        if (!character) return notFound(characterId);
+        if (character.revision !== expectedRevision) return stale(characterId, expectedRevision, character.revision);
+
+        const sequence = (await repositories.versions.latestSequence(characterId)) + 1;
+        // Version before replace, so archiving is auditable and reversible.
+        await repositories.versions.append({
+          id: `${characterId}@${sequence}`,
+          characterId,
+          sequence,
+          reason: "edit",
+          operationId,
+          snapshot: character,
+          createdAt: now,
+          updatedAt: now,
+        });
+        const next: CharacterRecord = {
+          ...character,
+          status: archived ? "archived" : "active",
+          revision: character.revision + 1,
+          updatedAt: now,
+        };
+        const accepted = await repositories.characters.replace(next, character.revision);
+        if (!accepted) return stale(characterId, expectedRevision, null);
+        return ok({ characterId, characterRevision: next.revision });
+      },
+    );
+    this.log({ operation: archived ? "character.archive" : "character.unarchive", recordId: characterId });
+    return outcome;
+  }
+}
+
 export interface LibraryCard {
   characterId: ID;
   name: string;

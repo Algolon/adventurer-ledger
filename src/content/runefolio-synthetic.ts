@@ -32,6 +32,7 @@ export const SYNTHETIC_IDS = {
   species: "species:riverborn",
   background: "background:caravan-warden",
   style: "style:guarded-hand",
+  heavyStyle: "style:reavers-grip",
   mastery: "mastery:measured-cut",
   weapon: "weapon:longblade",
   shield: "armor:round-guard",
@@ -187,7 +188,12 @@ const classEntry = entry({
       min: 1,
       max: 1,
       repeatable: false,
-      options: [{ id: "option:guarded-hand", label: "Guarded Hand", entryId: SYNTHETIC_IDS.style }],
+      options: [
+        { id: "option:guarded-hand", label: "Guarded Hand", entryId: SYNTHETIC_IDS.style },
+        // Deliberately out of reach for a standard-array Vanguard, so the
+        // product can demonstrate an incompatible choice and its repair.
+        { id: "option:reavers-grip", label: "Reaver's Grip", entryId: SYNTHETIC_IDS.heavyStyle },
+      ],
     },
     {
       id: SYNTHETIC_CHOICES.weaponMastery,
@@ -376,6 +382,33 @@ const styleEntry = entry({
   ],
 });
 
+const heavyStyleEntry = entry({
+  id: SYNTHETIC_IDS.heavyStyle,
+  slug: "reavers-grip",
+  name: "Reaver's Grip",
+  category: "fighting-style",
+  summary: "A two-handed grip that only a very strong arm can hold steady.",
+  mechanics: { kind: "fighting-style", data: { stance: "reaving" } },
+  prerequisites: [
+    {
+      id: "prerequisite:reavers-grip-strength",
+      label: "Strength 18 or higher",
+      condition: { type: "ability", ability: "strength", operator: "gte", value: 18 },
+      enforcement: "hard",
+    },
+  ],
+  effects: [
+    {
+      id: "effect:reavers-grip-damage",
+      type: "modifyDamage",
+      selector: { usage: "melee" },
+      operation: "add",
+      value: { kind: "literal", value: 2 },
+      label: "Reaver's Grip",
+    },
+  ],
+});
+
 const masteryEntry = entry({
   id: SYNTHETIC_IDS.mastery,
   slug: "measured-cut",
@@ -524,6 +557,7 @@ export const SYNTHETIC_ENTRIES: readonly ContentEntry[] = [
   backgroundEntry,
   backgroundFeat,
   styleEntry,
+  heavyStyleEntry,
   masteryEntry,
   attackEntry,
   resourceEntry,

@@ -1495,3 +1495,88 @@ describe("until-level-up override scope", () => {
     expect(await harness.database.characterSnapshots.count()).toBe(0);
   });
 });
+
+describe("CharacterLibraryService", () => {
+  beforeEach(async () => {
+    await commitBrammel();
+  });
+
+  it("duplicates into a fully independent aggregate", async () => {
+    // Give the original an override and some session history first.
+    expectOk(
+      await harness.overrides.set({
+        operationId: "operation:dup-override",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        targetPath: "armorClass",
+        operation: "replace",
+        value: 20,
+        scope: "persistent",
+      }),
+    );
+    await harness.runtime.apply({
+      characterId: "character:brammel",
+      expectedRuntimeRevision: 1,
+      operationId: "operation:dup-damage",
+      operation: { kind: "damage", amount: 4 },
+    });
+
+    const result = expectOk<{ characterId: string }>(
+      await harness.library.duplicate("character:brammel", "character:brammel-copy", "operation:duplicate"),
+    );
+
+    const copy = await harness.database.characters.get(result.characterId);
+    expect(copy?.name).toBe("Brammel Voss (Copy)");
+    expect(copy?.revision).toBe(1);
+
+    // Its own runtime, overrides and version 1; no shared ownership.
+    const copyRuntime = await harness.database.characterRuntimeStates.get(result.characterId);
+    expect(copyRuntime?.characterId).toBe(result.characterId);
+    const copyOverrides = await harness.database.characterOverrides.where("characterId").equals(result.characterId).toArray();
+    expect(copyOverrides).toHaveLength(1);
+    expect(copyOverrides[0].id).toContain(result.characterId);
+    // The copy has no session history of its own.
+    expect(await harness.database.characterActions.where("characterId").equals(result.characterId).count()).toBe(0);
+    expect(await harness.database.characterActions.where("characterId").equals("character:brammel").count()).toBe(1);
+
+    // Playing the copy leaves the original untouched.
+    await harness.runtime.apply({
+      characterId: result.characterId,
+      expectedRuntimeRevision: 1,
+      operationId: "operation:copy-damage",
+      operation: { kind: "damage", amount: 2 },
+    });
+    const original = await harness.database.characterRuntimeStates.get("character:brammel");
+    expect(original?.currentHitPoints).toBe(6);
+    expect((await harness.database.characterRuntimeStates.get(result.characterId))?.currentHitPoints).toBe(4);
+    expect((await harness.query.sheet(result.characterId))?.armorClass.value).toBe(20);
+  });
+
+  it("refuses to duplicate onto an existing character ID", async () => {
+    const outcome = await harness.library.duplicate("character:brammel", "character:brammel", "operation:duplicate");
+    expect(outcome.status).toBe("conflict");
+  });
+
+  it("archives without deleting history and keeps the record out of the active library", async () => {
+    const versionsBefore = await harness.database.characterVersions.count();
+    expectOk(await harness.library.setArchived("character:brammel", 1, true, "operation:archive"));
+
+    expect((await harness.database.characters.get("character:brammel"))?.status).toBe("archived");
+    const library = await harness.query.library();
+    expect(library.characters).toHaveLength(0);
+    // Archiving is versioned, and nothing was removed.
+    expect(await harness.database.characterVersions.count()).toBe(versionsBefore + 1);
+    expect(await harness.database.characterRuntimeStates.get("character:brammel")).toBeDefined();
+
+    // It can be brought back.
+    expectOk(await harness.library.setArchived("character:brammel", 2, false, "operation:unarchive"));
+    expect((await harness.query.library()).characters).toHaveLength(1);
+  });
+
+  it("rejects a stale archive and writes nothing", async () => {
+    const outcome = await harness.library.setArchived("character:brammel", 99, true, "operation:archive-stale");
+    expect(outcome.status).toBe("stale");
+    expect((await harness.database.characters.get("character:brammel"))?.status).toBe("active");
+    expect(await harness.database.characterVersions.count()).toBe(1);
+  });
+});

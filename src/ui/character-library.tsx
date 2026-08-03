@@ -20,6 +20,8 @@ export type LibraryDestination =
   | { kind: "edit"; characterId: string }
   | { kind: "level-up"; characterId: string }
   | { kind: "transfer"; characterId?: string }
+  | { kind: "duplicate"; characterId: string; revision: number }
+  | { kind: "archive"; characterId: string; revision: number }
   | { kind: "new" };
 
 const relative = (iso: string) => {
@@ -205,6 +207,22 @@ function CharacterRow({
           <li>
             <button type="button" onClick={() => onNavigate({ kind: "transfer", characterId: card.characterId })}>
               Export or transfer {card.name}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => onNavigate({ kind: "duplicate", characterId: card.characterId, revision: card.revision })}
+            >
+              Duplicate {card.name}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => onNavigate({ kind: "archive", characterId: card.characterId, revision: card.revision })}
+            >
+              Archive {card.name}
             </button>
           </li>
         </ul>

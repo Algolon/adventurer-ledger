@@ -17,6 +17,7 @@ import {
   grantingEntriesFor,
   standardArrayFor,
 } from "@/src/services/content-scope";
+import { evaluateCondition, type RuleContext } from "@/src/rules/engine";
 import type { ServiceIssue } from "@/src/services/contracts";
 
 export type BuilderStepId =
@@ -43,6 +44,14 @@ export const BUILDER_STEPS: readonly { id: BuilderStepId; label: string }[] = [
   { id: "review", label: "Review" },
 ];
 
+/** The values a manual character sheet must supply explicitly (D-03). */
+const MANUAL_MINIMUM: readonly [string, BuilderStepId][] = [
+  ["hitPoints.maximum", "class-choices"],
+  ["hitPoints.current", "class-choices"],
+  ["armorClass", "class-choices"],
+  ["initiative", "class-choices"],
+];
+
 export type StepStatus = "complete" | "incomplete" | "not-needed";
 
 export interface PlannedStep {
@@ -64,6 +73,18 @@ export interface Recommendation {
   rank: number;
 }
 
+/** Why an option cannot be taken, and what would make it available. */
+export interface OptionIncompatibility {
+  optionId: ID;
+  entryId: ID;
+  /** The unmet requirement's own label, from content. */
+  requirement: string;
+  /** Hard requirements block; soft ones are warnings the user may accept. */
+  enforcement: "hard" | "soft" | "informational";
+  /** The repair that would make the option compatible. */
+  repair: string;
+}
+
 export interface RequiredChoice {
   choiceId: ID;
   label: string;
@@ -73,6 +94,8 @@ export interface RequiredChoice {
   options: readonly { id: ID; label: string }[];
   selected: readonly ID[];
   resolved: boolean;
+  /** Options whose prerequisites the current build does not satisfy. */
+  incompatibleOptions: readonly OptionIncompatibility[];
 }
 
 export interface BuildPlan {
@@ -84,6 +107,53 @@ export interface BuildPlan {
   nextUnresolvedStepId: BuilderStepId;
   /** Every required ruleset choice resolved with no blocking issue. */
   guidedComplete: boolean;
+}
+
+/**
+ * A minimal evaluation context built from the draft, used only to test option
+ * prerequisites declaratively. It runs no effects and derives no values.
+ */
+function draftContext(build: CharacterDraftBuild): RuleContext {
+  const abilities = Object.fromEntries(
+    ABILITIES.map(ability => [ability, build.abilityScores[ability] ?? 0]),
+  ) as RuleContext["abilities"];
+  return {
+    totalLevel: build.level,
+    classLevels: build.classId ? { [build.classId]: build.level } : {},
+    abilities,
+    tags: new Set<string>(),
+    features: new Set<string>(),
+    proficiencies: new Set<string>(),
+    armor: { worn: false },
+    flags: {},
+    values: {},
+  };
+}
+
+/** Options the current build cannot satisfy, with the repair that would help. */
+export function incompatibleOptionsFor(
+  choice: ChoiceDefinition,
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+): OptionIncompatibility[] {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const context = draftContext(build);
+  const blocked: OptionIncompatibility[] = [];
+  for (const option of choice.options) {
+    const entry = option.entryId ? byId.get(option.entryId) : undefined;
+    if (!entry) continue;
+    for (const prerequisite of entry.prerequisites) {
+      if (evaluateCondition(prerequisite.condition, context)) continue;
+      blocked.push({
+        optionId: option.id,
+        entryId: entry.id,
+        requirement: prerequisite.label,
+        enforcement: prerequisite.enforcement,
+        repair: `Meet ${prerequisite.label}, or choose another option for ${choice.label}.`,
+      });
+    }
+  }
+  return blocked;
 }
 
 /** Collects the choice definitions the ruleset requires at the draft's level. */
@@ -101,6 +171,7 @@ export function requiredChoicesFor(build: CharacterDraftBuild, entries: readonly
       options: choice.options.map(option => ({ id: option.id, label: option.label })),
       selected,
       resolved: selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length,
+      incompatibleOptions: incompatibleOptionsFor(choice, build, entries),
     });
   };
 
@@ -212,7 +283,7 @@ export function planBuild(
   presentation: CharacterPresentationMode = "guided",
 ): BuildPlan {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
-  const requiredChoices = requiredChoicesFor(build, entries);
+  const requiredChoices = build.manualSheet === true ? [] : requiredChoicesFor(build, entries);
   const hasSpells = classHasSpells(build, entries);
   const resources = resourceIdsFor(build, entries);
 
@@ -228,26 +299,47 @@ export function planBuild(
     review: [],
   };
 
-  if (!build.classId) stepIssues.class.push({ code: "CLASS_NOT_CHOSEN", fieldPath: "classId", severity: "error" });
-  else if (!byId.has(build.classId))
-    stepIssues.class.push({ code: "CLASS_SOURCE_MISSING", recordId: build.classId, severity: "error" });
+  const manualSheet = build.manualSheet === true;
 
-  if (!build.speciesId) stepIssues.origin.push({ code: "SPECIES_NOT_CHOSEN", fieldPath: "speciesId", severity: "error" });
-  else if (!byId.has(build.speciesId))
-    stepIssues.origin.push({ code: "SPECIES_SOURCE_MISSING", recordId: build.speciesId, severity: "error" });
-  if (!build.backgroundId)
-    stepIssues.origin.push({ code: "BACKGROUND_NOT_CHOSEN", fieldPath: "backgroundId", severity: "error" });
-  else if (!byId.has(build.backgroundId))
-    stepIssues.origin.push({ code: "BACKGROUND_SOURCE_MISSING", recordId: build.backgroundId, severity: "error" });
+  if (manualSheet) {
+    // A manual sheet needs its own explicit minimum (D-03) and no class.
+    for (const [path, step] of MANUAL_MINIMUM)
+      if (typeof build.manualValues[path] !== "number")
+        stepIssues[step].push({ code: "MANUAL_VALUE_MISSING", fieldPath: path, severity: "error" });
+    if (!build.manualActions.length)
+      stepIssues["class-choices"].push({ code: "MANUAL_ACTION_MISSING", fieldPath: "manualActions", severity: "error" });
+  } else {
+    if (!build.classId) stepIssues.class.push({ code: "CLASS_NOT_CHOSEN", fieldPath: "classId", severity: "error" });
+    else if (!byId.has(build.classId))
+      stepIssues.class.push({ code: "CLASS_SOURCE_MISSING", recordId: build.classId, severity: "error" });
+
+    if (!build.speciesId) stepIssues.origin.push({ code: "SPECIES_NOT_CHOSEN", fieldPath: "speciesId", severity: "error" });
+    else if (!byId.has(build.speciesId))
+      stepIssues.origin.push({ code: "SPECIES_SOURCE_MISSING", recordId: build.speciesId, severity: "error" });
+    if (!build.backgroundId)
+      stepIssues.origin.push({ code: "BACKGROUND_NOT_CHOSEN", fieldPath: "backgroundId", severity: "error" });
+    else if (!byId.has(build.backgroundId))
+      stepIssues.origin.push({ code: "BACKGROUND_SOURCE_MISSING", recordId: build.backgroundId, severity: "error" });
+  }
 
   stepIssues.abilities.push(...abilityIssues(build, entries));
 
-  for (const choice of requiredChoices)
+  for (const choice of requiredChoices) {
     if (!choice.resolved)
       stepIssues[choice.stepId].push({ code: "CHOICE_UNRESOLVED", recordId: choice.choiceId, severity: "error" });
+    // A selected option the build cannot satisfy is reported, never replaced.
+    for (const incompatible of choice.incompatibleOptions) {
+      if (!choice.selected.includes(incompatible.optionId)) continue;
+      stepIssues[choice.stepId].push({
+        code: "CHOICE_OPTION_INCOMPATIBLE",
+        recordId: incompatible.optionId,
+        severity: incompatible.enforcement === "hard" ? "error" : "warning",
+      });
+    }
+  }
 
   // Equipment choices come from whatever bundles the build's entries grant.
-  for (const choice of requiredEquipmentChoices(build, entries)) {
+  for (const choice of manualSheet ? [] : requiredEquipmentChoices(build, entries)) {
     const selected = build.equipmentSelections[choice.choiceId] ?? [];
     const resolved =
       selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length;

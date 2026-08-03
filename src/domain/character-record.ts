@@ -345,6 +345,12 @@ export interface CharacterDraftRecord extends Audit {
 /** The mutable build payload of a draft. Mirrors the durable record's choice surface. */
 export interface CharacterDraftBuild {
   name: string;
+  /**
+   * The user deliberately chose a manual character sheet. It is explicit rather
+   * than inferred from "no class", so a half-finished automatic build is never
+   * silently reclassified as a manual one.
+   */
+  manualSheet?: boolean;
   nickname?: string;
   pronouns?: string;
   level: number;
@@ -367,6 +373,7 @@ export interface CharacterDraftBuild {
 
 export const EMPTY_DRAFT_BUILD: CharacterDraftBuild = {
   name: "",
+  manualSheet: false,
   level: 1,
   abilityMethod: "standard-array",
   abilityScores: {},

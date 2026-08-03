@@ -42,7 +42,7 @@ export default function Home() {
 }
 
 function Shell() {
-  const { drafts, query, refresh } = useServices();
+  const { drafts, query, library, refresh } = useServices();
   const [view, setView] = useState<View>("characters");
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
@@ -103,9 +103,23 @@ function Shell() {
           if (destination.characterId) setActiveCharacterId(destination.characterId);
           setView("transfer");
           return;
+        case "duplicate":
+          void library
+            .duplicate(
+              destination.characterId,
+              `${destination.characterId}:copy:${Date.now().toString(36)}`,
+              `ui:duplicate:${Date.now()}`,
+            )
+            .then(refresh);
+          return;
+        case "archive":
+          void library
+            .setArchived(destination.characterId, destination.revision, true, `ui:archive:${Date.now()}`)
+            .then(refresh);
+          return;
       }
     },
-    [defaultRulesetId, drafts, query, startNewCharacter],
+    [defaultRulesetId, drafts, library, query, refresh, startNewCharacter],
   );
 
   // A modal task owns the whole surface and supplies its own task footer.

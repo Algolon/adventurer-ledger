@@ -30,9 +30,12 @@ const ISSUE_LABELS: Record<string, string> = {
   ABILITY_SCORE_MISSING: "Set every ability score",
   STANDARD_ARRAY_MISMATCH: "These scores do not match the standard array plus the origin increases",
   CHOICE_UNRESOLVED: "Resolve the outstanding choice",
+  CHOICE_OPTION_INCOMPATIBLE: "A selected option does not meet its requirement",
   EQUIPMENT_CHOICE_REQUIRED: "Choose your travelling gear",
   NAME_NOT_SET: "Name the character (optional)",
   MANUAL_MINIMUM_NOT_MET: "A manual sheet needs abilities, hit points, armour class, initiative and one action",
+  MANUAL_VALUE_MISSING: "Enter every required manual value",
+  MANUAL_ACTION_MISSING: "Add at least one action",
 };
 
 const labelFor = (code: string) => ISSUE_LABELS[code] ?? code;
@@ -81,6 +84,8 @@ export function CharacterBuilder({
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   /** Freshest snapshot, readable after awaiting the save queue. */
   const snapshotRef = useRef<DraftSnapshot | null>(null);
+  /** Focus moves here when a submit produces issues, so it is announced. */
+  const errorSummaryRef = useRef<HTMLDivElement>(null);
 
   const rulesetId = snapshot?.draft.rulesetProfileId;
   const entriesState = useAsync(
@@ -110,6 +115,10 @@ export function CharacterBuilder({
    * that was current at the last render, and the second would be rejected as
    * stale even though nothing else touched the draft.
    */
+  useEffect(() => {
+    if (commitErrors.length) errorSummaryRef.current?.focus();
+  }, [commitErrors]);
+
   const save = useCallback(
     (patch: DraftPatch, nextStep?: BuilderStepId) => {
       const run = async () => {
@@ -198,7 +207,7 @@ export function CharacterBuilder({
       expectedDraftRevision: revisionRef.current ?? snapshot.revision,
       characterId,
       ...(existing ? { expectedCharacterRevision: existing.characterRevision } : {}),
-      intent: draft.editingCharacterId ? "edit" : build.classId ? "create" : "manual-sheet",
+      intent: draft.editingCharacterId ? "edit" : build.manualSheet ? "manual-sheet" : "create",
       acknowledgedIssueCodes: [...build.acknowledgedIssueCodes],
       expectedContentFingerprint: fingerprint,
     });
@@ -259,7 +268,7 @@ export function CharacterBuilder({
       ) : null}
 
       {commitErrors.length ? (
-        <div className="m2-error-summary" role="alert" tabIndex={-1}>
+        <div className="m2-error-summary" role="alert" tabIndex={-1} ref={errorSummaryRef}>
           <TriangleAlert aria-hidden="true" />
           <div>
             <strong>
@@ -383,13 +392,39 @@ function StepContent({
 
     case "class":
       return (
-        <OptionStep
-          legend="Class"
-          options={entries.filter(entry => entry.category === "class").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
-          selected={build.classId ? [build.classId] : []}
-          recommendations={recommendations}
-          onSelect={id => onChange({ classId: id })}
-        />
+        <div className="m2-step">
+          <OptionStep
+            legend="Class"
+            options={entries.filter(entry => entry.category === "class").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
+            selected={build.manualSheet ? [] : build.classId ? [build.classId] : []}
+            recommendations={recommendations}
+            onSelect={id => onChange({ classId: id, manualSheet: false })}
+          />
+          <fieldset className="m2-fieldset">
+            <legend>Or build a manual sheet</legend>
+            <ul className="m2-options">
+              <li>
+                <button
+                  type="button"
+                  className={build.manualSheet ? "m2-option m2-option-selected" : "m2-option"}
+                  aria-pressed={build.manualSheet === true}
+                  onClick={() => onChange({ manualSheet: !build.manualSheet, classId: undefined })}
+                >
+                  <span className="m2-option-mark" aria-hidden="true">
+                    {build.manualSheet ? <Check /> : "○"}
+                  </span>
+                  <span>
+                    <b>Manual character sheet</b>
+                    <small>
+                      Record values you worked out yourself. The sheet is clearly marked Manual and never claims to be
+                      automatically rules-justified.
+                    </small>
+                  </span>
+                </button>
+              </li>
+            </ul>
+          </fieldset>
+        </div>
       );
 
     case "origin":
@@ -417,7 +452,11 @@ function StepContent({
       return <AbilitiesStep build={build} entries={entries} recommendations={recommendations} onChange={onChange} />;
 
     case "class-choices":
-      return <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />;
+      return build.manualSheet ? (
+        <ManualSheetStep build={build} onChange={onChange} />
+      ) : (
+        <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />
+      );
 
     case "equipment":
       return <EquipmentStep build={build} entries={entries} onChange={onChange} />;
@@ -591,6 +630,7 @@ function ChoiceGroups({
           <ul className="m2-options">
             {choice.options.map(option => {
               const isSelected = choice.selected.includes(option.id);
+              const incompatible = choice.incompatibleOptions.find(item => item.optionId === option.id);
               return (
                 <li key={option.id}>
                   <button
@@ -604,8 +644,17 @@ function ChoiceGroups({
                     </span>
                     <span>
                       <b>{option.label}</b>
+                      {incompatible ? <small>Requires {incompatible.requirement}</small> : null}
                     </span>
+                    {incompatible ? <span className="m2-badge m2-badge-incomplete">Incompatible</span> : null}
                   </button>
+                  {incompatible && isSelected ? (
+                    <p className="m2-inline-issue" role="status">
+                      <TriangleAlert aria-hidden="true" />
+                      {option.label} does not meet {incompatible.requirement}. {incompatible.repair} Nothing has been
+                      changed for you; switch to flexible mode to keep this choice with its issue recorded.
+                    </p>
+                  ) : null}
                 </li>
               );
             })}
@@ -791,6 +840,102 @@ function AbilitiesStep({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Manual-sheet values.
+ *
+ * These are the explicit minimum from D-03. Nothing here is derived, and the
+ * resulting sheet carries a Manual badge so it cannot be mistaken for an
+ * automatically justified character.
+ */
+function ManualSheetStep({
+  build,
+  onChange,
+}: {
+  build: CharacterDraftBuild;
+  onChange(patch: DraftPatch): void;
+}) {
+  const FIELDS: readonly [string, string][] = [
+    ["hitPoints.maximum", "Maximum hit points"],
+    ["hitPoints.current", "Current hit points"],
+    ["armorClass", "Armour class"],
+    ["initiative", "Initiative"],
+    ["speed", "Speed (optional)"],
+  ];
+
+  const setValue = (path: string, raw: string) =>
+    onChange(current => {
+      const manualValues = { ...current.manualValues };
+      if (raw === "") delete manualValues[path];
+      else manualValues[path] = Number(raw);
+      return { manualValues };
+    });
+
+  const addAction = () =>
+    onChange(current => ({
+      manualActions: [
+        ...current.manualActions,
+        { id: `manual-action:${current.manualActions.length + 1}`, label: "New action", expression: "" },
+      ],
+    }));
+
+  return (
+    <div className="m2-step">
+      <h3>Manual values</h3>
+      <p className="m2-muted">
+        This character has no class, so nothing is calculated. Enter the values your table agreed.
+      </p>
+      <div className="m2-ability-grid">
+        {FIELDS.map(([path, label]) => (
+          <div className="m2-field" key={path}>
+            <label htmlFor={`manual-${path}`}>
+              <span>{label}</span>
+            </label>
+            <input
+              id={`manual-${path}`}
+              type="number"
+              value={build.manualValues[path] ?? ""}
+              onChange={event => setValue(path, event.target.value)}
+            />
+          </div>
+        ))}
+      </div>
+
+      <fieldset className="m2-fieldset">
+        <legend>Actions</legend>
+        {build.manualActions.length ? (
+          <ul className="m2-plain-list">
+            {build.manualActions.map((action, index) => (
+              <li key={action.id}>
+                <div className="m2-field">
+                  <label htmlFor={`manual-action-${action.id}`}>
+                    <span>Action {index + 1}</span>
+                  </label>
+                  <input
+                    id={`manual-action-${action.id}`}
+                    value={action.label}
+                    onChange={event =>
+                      onChange(current => ({
+                        manualActions: current.manualActions.map(item =>
+                          item.id === action.id ? { ...item, label: event.target.value } : item,
+                        ),
+                      }))
+                    }
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="m2-muted">A manual sheet needs at least one action.</p>
+        )}
+        <button type="button" className="m2-button" onClick={addAction}>
+          Add an action
+        </button>
+      </fieldset>
     </div>
   );
 }

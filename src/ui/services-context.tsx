@@ -21,7 +21,7 @@ import {
 import { CharacterRuntimeService } from "@/src/services/runtime-service";
 import { CharacterLevelUpService } from "@/src/services/levelup-service";
 import { CharacterTransferService } from "@/src/services/transfer-service";
-import { CharacterOverrideService } from "@/src/services/character-services";
+import { CharacterLibraryService, CharacterOverrideService } from "@/src/services/character-services";
 
 export interface CharacterServices {
   drafts: CharacterDraftService;
@@ -31,6 +31,7 @@ export interface CharacterServices {
   levelUp: CharacterLevelUpService;
   transfer: CharacterTransferService;
   overrides: CharacterOverrideService;
+  library: CharacterLibraryService;
   ready: boolean;
   /** Bumped after any mutation so dependent reads refresh. */
   revision: number;
@@ -53,6 +54,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
       levelUp: new CharacterLevelUpService(context),
       transfer: new CharacterTransferService(context),
       overrides: new CharacterOverrideService(context),
+      library: new CharacterLibraryService(context),
     };
   }, []);
 
