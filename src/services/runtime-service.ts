@@ -4,13 +4,23 @@
  * Applies bounded play mutations. A runtime action updates runtime state and
  * appends one lightweight session-action entry in a single transaction (D-05);
  * it never writes the durable character, a character version, a build override,
- * the ruleset or content. Undo is a new typed action that references the action
- * it reverses — history is never deleted.
+ * the ruleset or content.
+ *
+ * Undo is exact. Every reversible action stores the prior values of the fields
+ * it changed, and undo restores those fields rather than inferring an inverse
+ * from the requested amount. That is required for correctness, not tidiness:
+ * healing 5 at 9/10 clamps to 10 so "damage 5" would land at 5, and damage
+ * absorbed by temporary hit points cannot be reversed by healing at all.
+ *
+ * Undo appends a new typed action referencing the one it reverses; history is
+ * never deleted, and a reversed action is marked spent so it cannot be undone
+ * twice.
  */
 import type {
   CharacterActionRecord,
   CharacterRuntimeStateRecord,
   RuntimeActionKind,
+  RuntimeFragment,
 } from "@/src/domain/character-record";
 import type { ID } from "@/src/domain/model";
 import { resolveDerivedCharacter, type DerivedCharacterSheet } from "@/src/services/derived-resolver";
@@ -51,9 +61,83 @@ export interface RuntimeCommand {
 export interface RuntimeResult {
   runtime: CharacterRuntimeStateRecord;
   actionId: ID;
-  /** Present when the action can be reversed by a later undo. */
+  /** True when the stored fragment can restore the exact prior state. */
   undoable: boolean;
   warnings: readonly ServiceIssue[];
+}
+
+const NUMERIC_FIELDS = ["currentHitPoints", "temporaryHitPoints", "hitDiceRemaining", "exhaustion"] as const;
+
+const sameConditions = (
+  left: CharacterRuntimeStateRecord["conditions"],
+  right: CharacterRuntimeStateRecord["conditions"],
+) =>
+  left.length === right.length &&
+  left.every((item, index) => item.conditionId === right[index]?.conditionId && item.appliedAt === right[index]?.appliedAt);
+
+/**
+ * Bounded diff of two runtime states: only the fields that actually changed.
+ * Returns `undefined` for both sides when nothing changed, which marks the
+ * action as having no effect to reverse.
+ */
+export function runtimeFragmentDiff(
+  previous: CharacterRuntimeStateRecord,
+  next: CharacterRuntimeStateRecord,
+): { before: RuntimeFragment; after: RuntimeFragment; changed: boolean } {
+  const before: RuntimeFragment = {};
+  const after: RuntimeFragment = {};
+  let changed = false;
+
+  for (const field of NUMERIC_FIELDS) {
+    if (previous[field] !== next[field]) {
+      before[field] = previous[field];
+      after[field] = next[field];
+      changed = true;
+    }
+  }
+
+  const resourceKeys = new Set([...Object.keys(previous.resourceUses), ...Object.keys(next.resourceUses)]);
+  const beforeUses: Record<ID, number> = {};
+  const afterUses: Record<ID, number> = {};
+  let resourcesChanged = false;
+  for (const key of [...resourceKeys].sort()) {
+    const from = previous.resourceUses[key];
+    const to = next.resourceUses[key];
+    if (from === to) continue;
+    resourcesChanged = true;
+    // A resource that did not exist before is restored by removing it, which the
+    // apply step handles by writing back only the keys recorded here.
+    if (from !== undefined) beforeUses[key] = from;
+    if (to !== undefined) afterUses[key] = to;
+  }
+  if (resourcesChanged) {
+    before.resourceUses = beforeUses;
+    after.resourceUses = afterUses;
+    changed = true;
+  }
+
+  if (!sameConditions(previous.conditions, next.conditions)) {
+    before.conditions = previous.conditions.map(item => ({ ...item }));
+    after.conditions = next.conditions.map(item => ({ ...item }));
+    changed = true;
+  }
+
+  return { before, after, changed };
+}
+
+/** Writes a bounded fragment back onto a runtime state. */
+export function applyRuntimeFragment(
+  state: CharacterRuntimeStateRecord,
+  fragment: RuntimeFragment,
+): CharacterRuntimeStateRecord {
+  const next: CharacterRuntimeStateRecord = { ...state };
+  for (const field of NUMERIC_FIELDS) {
+    const value = fragment[field];
+    if (typeof value === "number") next[field] = value;
+  }
+  if (fragment.resourceUses) next.resourceUses = { ...state.resourceUses, ...fragment.resourceUses };
+  if (fragment.conditions) next.conditions = fragment.conditions.map(item => ({ ...item }));
+  return next;
 }
 
 /** Pure preview of an operation so the UI can show the result before committing. */
@@ -78,19 +162,23 @@ export function previewRuntimeOperation(
       const absorbed = Math.min(next.temporaryHitPoints, amount);
       next.temporaryHitPoints -= absorbed;
       const remaining = amount - absorbed;
-      next.currentHitPoints = clamp(next.currentHitPoints - remaining, 0, maximumHitPoints, "HIT_POINTS_CLAMPED", "hitPoints.current");
-      return { next, delta: -amount, warnings };
+      const from = next.currentHitPoints;
+      next.currentHitPoints = clamp(from - remaining, 0, maximumHitPoints, "HIT_POINTS_CLAMPED", "hitPoints.current");
+      // The reported delta is what was applied, not what was requested.
+      return { next, delta: next.currentHitPoints - from - absorbed, warnings };
     }
     case "heal": {
       const amount = Math.max(0, Math.trunc(operation.amount));
-      next.currentHitPoints = clamp(next.currentHitPoints + amount, 0, maximumHitPoints, "HIT_POINTS_CLAMPED", "hitPoints.current");
-      return { next, delta: amount, warnings };
+      const from = next.currentHitPoints;
+      next.currentHitPoints = clamp(from + amount, 0, maximumHitPoints, "HIT_POINTS_CLAMPED", "hitPoints.current");
+      return { next, delta: next.currentHitPoints - from, warnings };
     }
     case "temporary-hit-points": {
       const amount = Math.max(0, Math.trunc(operation.amount));
       // Temporary hit points replace rather than stack.
+      const from = next.temporaryHitPoints;
       next.temporaryHitPoints = amount;
-      return { next, delta: amount, warnings };
+      return { next, delta: amount - from, warnings };
     }
     case "resource-spend":
     case "resource-recover": {
@@ -141,32 +229,6 @@ export function previewRuntimeOperation(
   }
 }
 
-/** The inverse of an action, when one exists that is safe to apply. */
-export function inverseOperation(action: CharacterActionRecord): RuntimeOperation | undefined {
-  switch (action.kind) {
-    case "damage":
-      return action.delta === undefined ? undefined : { kind: "heal", amount: Math.abs(action.delta) };
-    case "heal":
-      return action.delta === undefined ? undefined : { kind: "damage", amount: Math.abs(action.delta) };
-    case "resource-spend":
-      return action.targetId && action.delta !== undefined
-        ? { kind: "resource-recover", resourceId: action.targetId, amount: Math.abs(action.delta) }
-        : undefined;
-    case "resource-recover":
-      return action.targetId && action.delta !== undefined
-        ? { kind: "resource-spend", resourceId: action.targetId, amount: Math.abs(action.delta) }
-        : undefined;
-    case "condition-add":
-      return action.targetId ? { kind: "condition-remove", conditionId: action.targetId } : undefined;
-    case "condition-remove":
-      return action.targetId ? { kind: "condition-add", conditionId: action.targetId } : undefined;
-    // A rest and a temporary-hit-point set are not safely reversible from the
-    // delta alone, so no inverse is offered.
-    default:
-      return undefined;
-  }
-}
-
 export class CharacterRuntimeService {
   private readonly clock: Clock;
   private readonly log: ServiceLogger;
@@ -177,7 +239,11 @@ export class CharacterRuntimeService {
   }
 
   async apply(command: RuntimeCommand): Promise<ServiceOutcome<RuntimeResult>> {
-    const outcome = await this.mutate(command.characterId, command.expectedRuntimeRevision, command.operationId, command.operation, command.note);
+    const outcome = await this.mutate(command.characterId, command.expectedRuntimeRevision, command.operationId, {
+      kind: "operation",
+      operation: command.operation,
+      ...(command.note ? { note: command.note } : {}),
+    });
     this.log({
       operation: `runtime.${command.operation.kind}`,
       recordId: command.characterId,
@@ -187,15 +253,24 @@ export class CharacterRuntimeService {
     return outcome;
   }
 
-  /** Undo the most recent reversible action. It appends history rather than deleting it. */
+  /**
+   * Undoes the most recent reversible action by restoring its stored prior
+   * fragment. It appends history rather than deleting it, and marks the reversed
+   * action spent so the same action cannot be undone twice.
+   */
   async undoLast(characterId: ID, expectedRuntimeRevision: number, operationId: ID): Promise<ServiceOutcome<RuntimeResult>> {
     const { repositories } = this.context;
-    const recent = await repositories.actions.listByCharacter(characterId, 25);
+    const recent = await repositories.actions.listByCharacter(characterId, 50);
     const target = recent.find(action => action.reversible && action.kind !== "undo");
     if (!target) return invalid([{ code: "NOTHING_TO_UNDO", recordId: characterId, severity: "warning" }]);
-    const inverse = inverseOperation(target);
-    if (!inverse) return invalid([{ code: "ACTION_NOT_REVERSIBLE", recordId: target.id, severity: "warning" }]);
-    const outcome = await this.mutate(characterId, expectedRuntimeRevision, operationId, inverse, undefined, target.id);
+    if (!target.before)
+      return invalid([{ code: "ACTION_NOT_REVERSIBLE", recordId: target.id, severity: "warning" }]);
+
+    const outcome = await this.mutate(characterId, expectedRuntimeRevision, operationId, {
+      kind: "restore",
+      fragment: target.before,
+      reversesActionId: target.id,
+    });
     this.log({ operation: "runtime.undo", recordId: characterId, expectedRevision: expectedRuntimeRevision });
     return outcome;
   }
@@ -204,9 +279,9 @@ export class CharacterRuntimeService {
     characterId: ID,
     expectedRuntimeRevision: number,
     operationId: ID,
-    operation: RuntimeOperation,
-    note?: string,
-    reversesActionId?: ID,
+    intent:
+      | { kind: "operation"; operation: RuntimeOperation; note?: string }
+      | { kind: "restore"; fragment: RuntimeFragment; reversesActionId: ID },
   ): Promise<ServiceOutcome<RuntimeResult>> {
     const { database, repositories } = this.context;
     const now = this.clock();
@@ -224,50 +299,62 @@ export class CharacterRuntimeService {
         if (!character) return notFound(characterId);
         const runtime = await repositories.runtime.get(characterId);
         if (!runtime) return notFound(characterId);
+        // The revision is validated inside the transaction that writes.
         if (runtime.revision !== expectedRuntimeRevision)
           return stale(characterId, expectedRuntimeRevision, runtime.revision);
 
-        // The resolver supplies the bounds and recharge behaviour; the runtime
-        // service applies no rules of its own.
-        const [entries, overrides] = await Promise.all([
-          repositories.content.listEntries(),
-          repositories.overrides.listByCharacter(characterId),
-        ]);
-        const sheet = resolveDerivedCharacter({ character, runtime, overrides, entries });
+        let proposed: CharacterRuntimeStateRecord;
+        let delta: number | undefined;
+        let targetId: ID | undefined;
+        let warnings: ServiceIssue[] = [];
 
-        const preview = previewRuntimeOperation(runtime, sheet, operation);
-        if (preview.warnings.some(warning => warning.severity === "error")) return invalid(preview.warnings);
+        if (intent.kind === "operation") {
+          // The resolver supplies the bounds and recharge behaviour; the runtime
+          // service applies no rules of its own.
+          const [entries, overrides] = await Promise.all([
+            repositories.content.listEntries(),
+            repositories.overrides.listByCharacter(characterId),
+          ]);
+          const sheet = resolveDerivedCharacter({ character, runtime, overrides, entries });
+          const preview = previewRuntimeOperation(runtime, sheet, intent.operation);
+          if (preview.warnings.some(warning => warning.severity === "error")) return invalid(preview.warnings);
+          proposed = preview.next;
+          delta = preview.delta;
+          targetId = preview.targetId;
+          warnings = preview.warnings;
+        } else {
+          proposed = applyRuntimeFragment(runtime, intent.fragment);
+        }
 
-        const next: CharacterRuntimeStateRecord = { ...preview.next, revision: runtime.revision + 1, updatedAt: now };
+        const diff = runtimeFragmentDiff(runtime, proposed);
+        const next: CharacterRuntimeStateRecord = { ...proposed, revision: runtime.revision + 1, updatedAt: now };
         const accepted = await repositories.runtime.replace(next, expectedRuntimeRevision);
         if (!accepted) return stale(characterId, expectedRuntimeRevision, null);
 
         const sequence = (await repositories.actions.latestSequence(characterId)) + 1;
-        const kind: RuntimeActionKind = reversesActionId ? "undo" : operation.kind;
+        const kind: RuntimeActionKind = intent.kind === "restore" ? "undo" : intent.operation.kind;
         const action: CharacterActionRecord = {
           id: `${characterId}:action:${sequence}`,
           characterId,
           sequence,
           operationId,
           kind,
-          ...(preview.delta !== undefined ? { delta: preview.delta } : {}),
-          ...(preview.targetId ? { targetId: preview.targetId } : {}),
+          ...(delta !== undefined ? { delta } : {}),
+          ...(targetId ? { targetId } : {}),
           resultingRuntimeRevision: next.revision,
-          ...(reversesActionId ? { reversesActionId } : {}),
-          reversible: !reversesActionId,
-          ...(note ? { note } : {}),
+          // An action is only reversible when its prior values were captured.
+          ...(diff.changed ? { before: diff.before, after: diff.after } : {}),
+          ...(intent.kind === "restore" ? { reversesActionId: intent.reversesActionId } : {}),
+          reversible: intent.kind === "operation" && diff.changed,
+          ...(intent.kind === "operation" && intent.note ? { note: intent.note } : {}),
           createdAt: now,
           updatedAt: now,
         };
         await repositories.actions.append(action);
-        if (reversesActionId) await repositories.actions.markConsumed(reversesActionId);
+        // Marking the reversed action spent prevents undoing it twice.
+        if (intent.kind === "restore") await repositories.actions.markConsumed(intent.reversesActionId);
 
-        return ok({
-          runtime: next,
-          actionId: action.id,
-          undoable: !reversesActionId && inverseOperation(action) !== undefined,
-          warnings: preview.warnings,
-        });
+        return { status: "ok", result: { runtime: next, actionId: action.id, undoable: action.reversible, warnings } };
       },
     );
   }

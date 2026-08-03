@@ -1054,3 +1054,159 @@ describe("CharacterOverrideService", () => {
     expect(exported.json).not.toContain("private table ruling");
   });
 });
+
+describe("exact runtime undo", () => {
+  beforeEach(async () => {
+    await commitBrammel();
+  });
+
+  const runtimeOf = () => harness.database.characterRuntimeStates.get("character:brammel");
+  const apply = (revision: number, operation: Parameters<Harness["runtime"]["apply"]>[0]["operation"], operationId: string) =>
+    harness.runtime.apply({ characterId: "character:brammel", expectedRuntimeRevision: revision, operationId, operation });
+
+  it("restores temporary hit points that absorbed damage", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "temporary-hit-points", amount: 4 }, "operation:temp"));
+    expectOk<RuntimeResult>(await apply(2, { kind: "damage", amount: 6 }, "operation:hit"));
+    expect(await runtimeOf()).toMatchObject({ currentHitPoints: 8, temporaryHitPoints: 0 });
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 3, "operation:undo"));
+    // Healing six would leave temporary hit points at zero; the exact prior
+    // values must come back instead.
+    expect(await runtimeOf()).toMatchObject({ currentHitPoints: 10, temporaryHitPoints: 4 });
+  });
+
+  it("restores the pre-heal value when healing was clamped at the maximum", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 1 }, "operation:scratch"));
+    expectOk<RuntimeResult>(await apply(2, { kind: "heal", amount: 5 }, "operation:overheal"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(10);
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 3, "operation:undo"));
+    // Applying five damage would land on 5; the stored prior value is 9.
+    expect((await runtimeOf())?.currentHitPoints).toBe(9);
+  });
+
+  it("restores the pre-damage value when damage was clamped at zero", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 99 }, "operation:overkill"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(0);
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 2, "operation:undo"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(10);
+  });
+
+  it("restores exact resource uses when a spend was clamped", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 9 }, "operation:overspend"));
+    expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(0);
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 2, "operation:undo"));
+    expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(3);
+  });
+
+  it("restores the previous condition list on undo in both directions", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "condition-add", conditionId: "condition:winded" }, "operation:add"));
+    expectOk<RuntimeResult>(await apply(2, { kind: "condition-add", conditionId: "condition:braced" }, "operation:add-2"));
+    expectOk<RuntimeResult>(await apply(3, { kind: "condition-remove", conditionId: "condition:winded" }, "operation:remove"));
+    expect((await runtimeOf())?.conditions.map(item => item.conditionId)).toEqual(["condition:braced"]);
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 4, "operation:undo"));
+    expect((await runtimeOf())?.conditions.map(item => item.conditionId)).toEqual(["condition:winded", "condition:braced"]);
+  });
+
+  it("reverses a long rest exactly, including hit dice and exhaustion", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 6 }, "operation:hurt"));
+    expectOk<RuntimeResult>(await apply(2, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 2 }, "operation:spend"));
+    const before = await runtimeOf();
+    expectOk<RuntimeResult>(await apply(3, { kind: "long-rest" }, "operation:rest"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(10);
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 4, "operation:undo"));
+    const restored = await runtimeOf();
+    expect(restored?.currentHitPoints).toBe(before?.currentHitPoints);
+    expect(restored?.resourceUses[SYNTHETIC_IDS.resource]).toBe(before?.resourceUses[SYNTHETIC_IDS.resource]);
+    expect(restored?.hitDiceRemaining).toBe(before?.hitDiceRemaining);
+    expect(restored?.exhaustion).toBe(before?.exhaustion);
+  });
+
+  it("marks an action that changed nothing as not reversible", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "condition-add", conditionId: "condition:winded" }, "operation:add"));
+    const repeat = expectOk<RuntimeResult>(
+      await apply(2, { kind: "condition-add", conditionId: "condition:winded" }, "operation:add-again"),
+    );
+    expect(repeat.undoable).toBe(false);
+    const actions = await harness.database.characterActions.where("characterId").equals("character:brammel").sortBy("sequence");
+    // No `before` fragment means no claim of reversibility.
+    expect(actions[1].reversible).toBe(false);
+    expect(actions[1].before).toBeUndefined();
+  });
+
+  it("never claims reversibility without a stored prior fragment", async () => {
+    for (const operation of [
+      { kind: "damage", amount: 3 },
+      { kind: "heal", amount: 2 },
+      { kind: "temporary-hit-points", amount: 5 },
+      { kind: "short-rest" },
+      { kind: "long-rest" },
+    ] as const) {
+      const runtime = await runtimeOf();
+      await apply(runtime!.revision, operation, `operation:sweep-${operation.kind}`);
+    }
+    const actions = await harness.database.characterActions.where("characterId").equals("character:brammel").toArray();
+    for (const action of actions) expect(action.reversible).toBe(Boolean(action.before));
+  });
+
+  it("cannot undo the same action twice", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 4 }, "operation:hit"));
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 2, "operation:undo"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(10);
+
+    // The reversed action is spent and the undo itself is not reversible.
+    const second = await harness.runtime.undoLast("character:brammel", 3, "operation:undo-2");
+    expect(second.status).toBe("invalid");
+    expect((await runtimeOf())?.currentHitPoints).toBe(10);
+  });
+
+  it("walks back through the stack one action at a time", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 3 }, "operation:one"));
+    expectOk<RuntimeResult>(await apply(2, { kind: "damage", amount: 2 }, "operation:two"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(5);
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 3, "operation:undo-1"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(7);
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 4, "operation:undo-2"));
+    expect((await runtimeOf())?.currentHitPoints).toBe(10);
+  });
+
+  it("appends undo history without deleting the action it reverses", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 4 }, "operation:hit"));
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 2, "operation:undo"));
+    const actions = await harness.database.characterActions.where("characterId").equals("character:brammel").sortBy("sequence");
+    expect(actions).toHaveLength(2);
+    expect(actions[0].kind).toBe("damage");
+    expect(actions[1].kind).toBe("undo");
+    expect(actions[1].reversesActionId).toBe(actions[0].id);
+    // A runtime action never creates a durable character version.
+    expect(await harness.database.characterVersions.count()).toBe(1);
+  });
+
+  it("writes nothing when the runtime revision is stale", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 3 }, "operation:hit"));
+    const outcome = await harness.runtime.undoLast("character:brammel", 1, "operation:undo-stale");
+    expect(outcome.status).toBe("stale");
+    expect((await runtimeOf())?.currentHitPoints).toBe(7);
+    expect(await harness.database.characterActions.count()).toBe(1);
+  });
+
+  it("keeps the stored fragment free of private content", async () => {
+    expectOk<RuntimeResult>(
+      await harness.runtime.apply({
+        characterId: "character:brammel",
+        expectedRuntimeRevision: 1,
+        operationId: "operation:noted",
+        operation: { kind: "damage", amount: 2 },
+        note: "private session note",
+      }),
+    );
+    const action = (await harness.database.characterActions.toArray())[0];
+    expect(JSON.stringify(action.before)).not.toContain("private session note");
+    expect(JSON.stringify(action.after)).not.toContain("private session note");
+    // Only bounded numeric runtime fields are captured.
+    expect(Object.keys(action.before ?? {})).toEqual(["currentHitPoints"]);
+  });
+});

@@ -159,9 +159,30 @@ export type RuntimeActionKind =
   | "undo";
 
 /**
- * Lightweight reversible runtime mutation metadata. Deltas and stable IDs only —
- * never copied private notes, names or rule text. A user note is stored in
- * `note` as user content and is omitted from every list/query summary.
+ * A bounded snapshot of only the runtime fields one action changed.
+ *
+ * Storing the prior values is what makes undo exact. Inferring an inverse from
+ * the requested amount cannot be correct: healing 5 at 9/10 clamps to 10, so the
+ * inverse of "heal 5" is not "damage 5", and damage absorbed by temporary hit
+ * points cannot be undone by healing at all. Only changed fields are present, so
+ * an action record stays small and carries no unrelated state.
+ */
+export interface RuntimeFragment {
+  currentHitPoints?: number;
+  temporaryHitPoints?: number;
+  hitDiceRemaining?: number;
+  exhaustion?: number;
+  /** Only the resources whose current uses changed. */
+  resourceUses?: Readonly<Record<ID, number>>;
+  /** The whole condition list, when it changed. */
+  conditions?: readonly ConditionStateRecord[];
+}
+
+/**
+ * Lightweight reversible runtime mutation metadata. Deltas, stable IDs and
+ * bounded numeric runtime fragments only — never copied private notes, names or
+ * rule text. A user note is stored in `note` as user content and is omitted from
+ * every list/query summary.
  */
 export interface CharacterActionRecord extends Audit {
   id: ID;
@@ -169,14 +190,21 @@ export interface CharacterActionRecord extends Audit {
   sequence: number;
   operationId: ID;
   kind: RuntimeActionKind;
-  /** Signed numeric delta where the operation is numeric. */
+  /** Signed numeric delta actually applied, for display. Never used to undo. */
   delta?: number;
   targetId?: ID;
   /** Runtime revision the action produced. */
   resultingRuntimeRevision: number;
+  /** Exact prior values of every field the action changed. */
+  before?: RuntimeFragment;
+  /** Exact resulting values, so a stale replay can be detected. */
+  after?: RuntimeFragment;
   /** Set on an undo action; references the action it reverses. */
   reversesActionId?: ID;
-  /** True while this action has not itself been reversed. */
+  /**
+   * True while this action can still be reversed. It is only ever true when
+   * `before` holds enough information to restore the exact prior state.
+   */
   reversible: boolean;
   note?: string;
 }
