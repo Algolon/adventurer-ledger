@@ -8,8 +8,17 @@ export type Comparison="eq"|"neq"|"gt"|"gte"|"lt"|"lte";export interface Audit{c
 
 export type Condition={all:Condition[]}|{any:Condition[]}|{not:Condition}|{type:"always"}|{type:"wearingArmor";armorType?:"light"|"medium"|"heavy"|"shield"}|{type:"hasFeature";featureId:ID}|{type:"hasTag";tag:string}|{type:"classLevel";classId:ID;operator:Comparison;value:number}|{type:"totalLevel";operator:Comparison;value:number}|{type:"ability";ability:Ability;operator:Comparison;value:number}|{type:"proficientWith";proficiencyId:ID}|{type:"customFlag";key:string;equals:string|number|boolean};
 export type Value={kind:"literal";value:number|string|boolean}|{kind:"path";path:string}|{kind:"formula";formula:string;variables:string[]};
+/**
+ * Bounding operations name the bound they establish, not the arithmetic they perform:
+ * `min` raises the current value to at least the operand (a lower bound, `Math.max`),
+ * and `max` caps the current value at most the operand (an upper bound, `Math.min`).
+ * This matches the `setMinimum`/`setMaximum` effect variants. See `mutate` in
+ * `src/rules/engine.ts` and the M1.4 coverage document.
+ */
 export type Operation="add"|"subtract"|"multiply"|"set"|"min"|"max";
 export type EffectDisposition="automatic"|"choice-driven"|"manual-adjudication";
+/** Action-economy category preserved by attack/action/bonus-action/reaction grants. */
+export type ActionGrantKind="attack"|"action"|"bonus-action"|"reaction";
 export interface DiceExpression{count:number;faces:number;modifier?:number}
 export interface EquipmentItemGrant{type:"item";itemId:ID;quantity:number;status:"granted"|"carried"|"equipped";alternativeItemIds?:ID[]}
 export interface EquipmentBundleGroup{type:"bundle";id:ID;label?:string;entries:EquipmentBundleNode[]}

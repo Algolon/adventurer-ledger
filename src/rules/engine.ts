@@ -1,9 +1,11 @@
 import type {
   Ability,
+  ActionGrantKind,
   Condition,
   DiceExpression,
   Effect,
   EffectDisposition,
+  ID,
   ResourceDefinition,
   ValidationIssue,
   Value,
@@ -31,6 +33,34 @@ export interface RollRuleState {
   disadvantages: Set<string>;
 }
 
+/**
+ * One typed grant collection that preserves the action-economy category, so the
+ * play sheet can group attacks, actions, bonus actions and reactions without
+ * reinterpreting effect types. Ordering follows effect priority then effect ID.
+ */
+export interface GrantedAction {
+  kind: ActionGrantKind;
+  definitionId: ID;
+  effectId: ID;
+}
+
+const ACTION_GRANT_KINDS: Record<
+  Extract<Effect["type"], "addAttack" | "addAction" | "addBonusAction" | "addReaction">,
+  ActionGrantKind
+> = {
+  addAttack: "attack",
+  addAction: "action",
+  addBonusAction: "bonus-action",
+  addReaction: "reaction",
+};
+
+/** Deterministic per-kind view of the grant collection for action-economy surfaces. */
+export function actionGrantsByKind(grants: readonly GrantedAction[]): Record<ActionGrantKind, ID[]> {
+  const grouped: Record<ActionGrantKind, ID[]> = { attack: [], action: [], "bonus-action": [], reaction: [] };
+  for (const grant of grants) grouped[grant.kind].push(grant.definitionId);
+  return grouped;
+}
+
 export interface RuleTrace {
   effectId: string;
   type: Effect["type"];
@@ -45,7 +75,7 @@ export interface RuleResult {
   grantedFeatures: Set<string>;
   disabledFeatures: Set<string>;
   expertise: Set<string>;
-  actions: string[];
+  actionGrants: GrantedAction[];
   resources: string[];
   resourceDefinitions: Map<string, ResourceDefinition>;
   spells: Set<string>;
@@ -158,7 +188,7 @@ function createResult(initial: RuleContext): RuleResult {
     grantedFeatures: new Set(),
     disabledFeatures: new Set(),
     expertise: new Set(),
-    actions: [],
+    actionGrants: [],
     resources: [],
     resourceDefinitions: new Map(),
     spells: new Set(),
@@ -220,7 +250,12 @@ function applyOne(effect: Effect, result: RuleResult, options: ApplyEffectsOptio
       case "addSpell": result.spells.add(effect.spellId); if (effect.alwaysPrepared) result.alwaysPreparedSpells.add(effect.spellId); break;
       case "addSpellList": result.spellLists.add(effect.spellListId); break;
       case "addResource": result.resources.push(effect.resource.id); result.resourceDefinitions.set(effect.resource.id, effect.resource); break;
-      case "addAttack": case "addAction": case "addBonusAction": case "addReaction": result.actions.push(effect.definitionId); break;
+      case "addAttack": case "addAction": case "addBonusAction": case "addReaction": {
+        const kind = ACTION_GRANT_KINDS[effect.type];
+        if (!result.actionGrants.some(grant => grant.kind === kind && grant.definitionId === effect.definitionId))
+          result.actionGrants.push({ kind, definitionId: effect.definitionId, effectId: effect.id });
+        break;
+      }
       case "setMinimum": context.values[effect.target] = Math.max(context.values[effect.target] ?? Number.NEGATIVE_INFINITY, numeric(effect.value, context)); break;
       case "setMaximum": context.values[effect.target] = Math.min(context.values[effect.target] ?? Number.POSITIVE_INFINITY, numeric(effect.value, context)); break;
       case "setCalculation": context.values[effect.target] = numeric(effect.value, context); break;
