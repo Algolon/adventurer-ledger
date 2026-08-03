@@ -16,9 +16,10 @@ import { useAsync, useServices } from "@/src/ui/services-context";
 import { ContributorList, CopyExpression, DerivedNumber, Dialog, StateBadge, formatDerived } from "@/src/ui/primitives";
 import type { DerivedAction, DerivedCharacterSheet, DerivedValue } from "@/src/services/derived-resolver";
 import type { RuntimeOperation } from "@/src/services/runtime-service";
+import { db } from "@/src/storage/db";
 
 type DetailTarget =
-  | { kind: "value"; label: string; value: DerivedValue }
+  | { kind: "value"; label: string; value: DerivedValue; targetPath?: string }
   | { kind: "action"; action: DerivedAction }
   | { kind: "manage" };
 
@@ -31,7 +32,7 @@ export function PlaySheet({
   onLevelUp(): void;
   onEdit(): void;
 }) {
-  const { query, runtime, refresh } = useServices();
+  const { query, runtime, levelUp, refresh } = useServices();
   const state = useAsync(() => query.sheet(characterId), [characterId]);
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -73,6 +74,25 @@ export function PlaySheet({
   }, [characterId, refresh, runtime, sheet]);
 
   const favourite = useMemo(() => sheet?.actions.find(action => action.kind === "attack") ?? sheet?.actions[0], [sheet]);
+
+  const conditionsState = useAsync(
+    () => db.contentEntries.where("category").equals("condition").toArray(),
+    [],
+  );
+  const availableConditions = conditionsState.status === "ready" ? conditionsState.value : [];
+
+  const historyState = useAsync(() => query.history(characterId), [characterId]);
+  const restorePoints = historyState.status === "ready" ? historyState.value.snapshots : [];
+
+  const restore = useCallback(
+    async (snapshotId: string) => {
+      if (!sheet) return;
+      const outcome = await levelUp.restore(characterId, snapshotId, sheet.characterRevision, `ui:restore:${Date.now()}`);
+      setStatus(outcome.status === "ok" ? "Restored. The change it reverses is still in history." : "That restore point could not be applied.");
+      refresh();
+    },
+    [characterId, levelUp, refresh, sheet],
+  );
 
   if (state.status === "loading")
     return (
@@ -141,24 +161,24 @@ export function PlaySheet({
           label="Armour class"
           icon={<Shield aria-hidden="true" />}
           value={sheet.armorClass}
-          onOpen={() => setDetail({ kind: "value", label: "Armour class", value: sheet.armorClass })}
+          onOpen={() => setDetail({ kind: "value", label: "Armour class", value: sheet.armorClass, targetPath: "armorClass" })}
         />
         <StatTile
           label="Initiative"
           value={sheet.initiative}
           style="signed"
-          onOpen={() => setDetail({ kind: "value", label: "Initiative", value: sheet.initiative })}
+          onOpen={() => setDetail({ kind: "value", label: "Initiative", value: sheet.initiative, targetPath: "initiative" })}
         />
         <StatTile
           label="Speed"
           value={sheet.speed}
-          onOpen={() => setDetail({ kind: "value", label: "Speed", value: sheet.speed })}
+          onOpen={() => setDetail({ kind: "value", label: "Speed", value: sheet.speed, targetPath: "speed" })}
         />
         <StatTile
           label="Proficiency"
           value={sheet.proficiencyBonus}
           style="signed"
-          onOpen={() => setDetail({ kind: "value", label: "Proficiency bonus", value: sheet.proficiencyBonus })}
+          onOpen={() => setDetail({ kind: "value", label: "Proficiency bonus", value: sheet.proficiencyBonus, targetPath: "proficiencyBonus" })}
         />
       </div>
 
@@ -318,7 +338,14 @@ export function PlaySheet({
             <li key={entry.id}>
               <button
                 type="button"
-                onClick={() => setDetail({ kind: "value", label: entry.label, value: entry.total })}
+                onClick={() =>
+                  setDetail({
+                    kind: "value",
+                    label: entry.label,
+                    value: entry.total,
+                    targetPath: `${sheet.saves.includes(entry) ? "savingThrow" : "check"}.${entry.id}`,
+                  })
+                }
                 aria-label={`Explain ${entry.label}, ${formatDerived(entry.total, "signed")}`}
               >
                 <span>
@@ -350,6 +377,73 @@ export function PlaySheet({
         </section>
       ) : null}
 
+      <section className="m2-card" aria-labelledby="conditions-heading">
+        <div className="m2-card-head">
+          <h3 id="conditions-heading">Conditions</h3>
+        </div>
+        {sheet.conditions.length ? (
+          <ul className="m2-plain-list">
+            {sheet.conditions.map(condition => (
+              <li key={condition.conditionId}>
+                {condition.label}{" "}
+                <button
+                  type="button"
+                  className="m2-play-action"
+                  onClick={() =>
+                    void applyRuntime({ kind: "condition-remove", conditionId: condition.conditionId }, () => `Removed ${condition.label}.`)
+                  }
+                  aria-label={`Remove the ${condition.label} condition from ${sheet.name}`}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="m2-muted">No conditions are active.</p>
+        )}
+        <div className="m2-play-row">
+          {availableConditions
+            .filter(condition => !sheet.conditions.some(active => active.conditionId === condition.id))
+            .map(condition => (
+              <button
+                key={condition.id}
+                type="button"
+                className="m2-play-action"
+                onClick={() => void applyRuntime({ kind: "condition-add", conditionId: condition.id }, () => `Added ${condition.name}.`)}
+                aria-label={`Add the ${condition.name} condition to ${sheet.name}`}
+              >
+                <Plus aria-hidden="true" />
+                {condition.name}
+              </button>
+            ))}
+        </div>
+      </section>
+
+      {restorePoints.length ? (
+        <section className="m2-card" aria-labelledby="history-heading">
+          <div className="m2-card-head">
+            <h3 id="history-heading">Restore points</h3>
+          </div>
+          <ul className="m2-plain-list">
+            {restorePoints.map(point => (
+              <li key={point.id}>
+                {point.label}{" "}
+                <button
+                  type="button"
+                  className="m2-button m2-button-small"
+                  onClick={() => void restore(point.id)}
+                  aria-label={`Restore ${sheet.name} to the point named ${point.label}`}
+                >
+                  Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="m2-muted">Restoring appends to history; it never deletes the change it reverses.</p>
+        </section>
+      ) : null}
+
       <p className="m2-muted m2-ruleset-note">
         Active ruleset {sheet.activeRulesetLabel ?? sheet.activeRulesetId} · sources {sheet.activeSourceIds.join(", ")} ·{" "}
         {sheet.confidence === "calculated" ? "values calculated locally" : "some values uncertain"}
@@ -357,6 +451,148 @@ export function PlaySheet({
 
       {detail ? <DetailDialog sheet={sheet} detail={detail} onClose={() => setDetail(null)} /> : null}
     </section>
+  );
+}
+
+/**
+ * Typed override editor.
+ *
+ * The automatic baseline stays visible while the override is applied, and
+ * removing one previews the automatic value that will replace it. Only `replace`
+ * and numeric `add` are offered; the service rejects anything else without
+ * evaluating it.
+ */
+function OverrideControls({
+  characterId,
+  characterRevision,
+  targetPath,
+  label,
+  value,
+  onDone,
+}: {
+  characterId: string;
+  characterRevision: number;
+  targetPath: string;
+  label: string;
+  value: DerivedValue;
+  onDone(): void;
+}) {
+  const { overrides, refresh } = useServices();
+  const [open, setOpen] = useState(false);
+  const [operation, setOperation] = useState<"replace" | "add">("replace");
+  const [amount, setAmount] = useState(String(value.value ?? 0));
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const existing = value.override;
+  const baseline = existing?.automaticBaseline ?? value.value;
+
+  const submit = async () => {
+    const parsed = Number(amount);
+    if (!Number.isFinite(parsed)) {
+      setMessage("Enter a number.");
+      return;
+    }
+    const outcome = await overrides.set({
+      operationId: `ui:override:${characterId}:${targetPath}:${characterRevision}`,
+      characterId,
+      expectedCharacterRevision: characterRevision,
+      targetPath,
+      operation,
+      value: parsed,
+      scope: "persistent",
+      ...(reason.trim() ? { reason: reason.trim() } : {}),
+    });
+    if (outcome.status === "ok") {
+      refresh();
+      onDone();
+      return;
+    }
+    setMessage(
+      outcome.status === "invalid"
+        ? outcome.issues.map(issue => issue.code).join(", ")
+        : "This character changed elsewhere. Reopen the value to try again.",
+    );
+  };
+
+  const remove = async () => {
+    const outcome = await overrides.remove(
+      characterId,
+      `${characterId}:override:${targetPath}`,
+      characterRevision,
+      `ui:override-remove:${characterId}:${targetPath}:${characterRevision}`,
+    );
+    if (outcome.status === "ok") {
+      refresh();
+      onDone();
+      return;
+    }
+    setMessage("The override could not be removed. Nothing was changed.");
+  };
+
+  return (
+    <div className="m2-override">
+      <h4>Override</h4>
+      {existing ? (
+        <>
+          <p className="m2-muted">
+            This value is overridden ({existing.operation} {existing.value}). The automatic value was {baseline ?? "—"}
+            {existing.stale ? "; the automatic value has since moved, so this override needs review" : ""}.
+          </p>
+          <button type="button" className="m2-button" onClick={() => void remove()}>
+            Remove override, returning {label} to {baseline ?? "—"}
+          </button>
+        </>
+      ) : !open ? (
+        <button type="button" className="m2-button" onClick={() => setOpen(true)}>
+          Override {label}
+        </button>
+      ) : (
+        <>
+          <p className="m2-muted">The automatic value {baseline ?? "—"} is kept as the baseline.</p>
+          <div className="m2-field">
+            <label htmlFor={`override-op-${targetPath}`}>
+              <span>Operation</span>
+            </label>
+            <select
+              id={`override-op-${targetPath}`}
+              value={operation}
+              onChange={event => setOperation(event.target.value === "add" ? "add" : "replace")}
+            >
+              <option value="replace">Replace the automatic value</option>
+              <option value="add">Add to the automatic value</option>
+            </select>
+          </div>
+          <div className="m2-field">
+            <label htmlFor={`override-value-${targetPath}`}>
+              <span>Value</span>
+            </label>
+            <input
+              id={`override-value-${targetPath}`}
+              type="number"
+              value={amount}
+              onChange={event => setAmount(event.target.value)}
+            />
+          </div>
+          <div className="m2-field">
+            <label htmlFor={`override-reason-${targetPath}`}>
+              <span>Reason (optional, kept on this device)</span>
+            </label>
+            <input
+              id={`override-reason-${targetPath}`}
+              value={reason}
+              onChange={event => setReason(event.target.value)}
+            />
+          </div>
+          <button type="button" className="m2-button m2-button-primary" onClick={() => void submit()}>
+            Save override for {label}
+          </button>
+        </>
+      )}
+      <p className="m2-status" role="status">
+        {message ?? ""}
+      </p>
+    </div>
   );
 }
 
@@ -406,10 +642,18 @@ function DetailDialog({
     return (
       <Dialog title="Manage hit points" onClose={onClose}>
         <p>
-          The maximum is calculated from the class and Constitution. To change it, edit the build or add a typed override —
-          both are separate from the damage and healing controls on the sheet.
+          The maximum is calculated from the class and Constitution. Changing it here is a durable edit, kept separate from
+          the damage and healing controls on the sheet.
         </p>
         <ContributorList contributors={sheet.hitPoints.maximum.contributors} />
+        <OverrideControls
+          characterId={sheet.characterId}
+          characterRevision={sheet.characterRevision}
+          targetPath="hitPoints.maximum"
+          label="Maximum hit points"
+          value={sheet.hitPoints.maximum}
+          onDone={onClose}
+        />
       </Dialog>
     );
 
@@ -448,6 +692,16 @@ function DetailDialog({
       <p className="m2-big-value">
         <DerivedNumber value={detail.value} label={detail.label} />
       </p>
+      {detail.targetPath ? (
+        <OverrideControls
+          characterId={sheet.characterId}
+          characterRevision={sheet.characterRevision}
+          targetPath={detail.targetPath}
+          label={detail.label}
+          value={detail.value}
+          onDone={onClose}
+        />
+      ) : null}
       {detail.value.recovery ? (
         <p className="m2-banner m2-banner-warning" role="status">
           This value cannot be calculated yet. {detail.value.recovery.action}. Field: {detail.value.recovery.fieldPath}.

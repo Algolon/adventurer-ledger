@@ -405,6 +405,28 @@ const attackEntry = entry({
   },
 });
 
+/** Conditions the play sheet can apply. Tracking only; no derived effect in M2.1. */
+export const SYNTHETIC_CONDITION_IDS = ["condition:winded", "condition:braced"] as const;
+
+const conditionEntries: ContentEntry[] = [
+  entry({
+    id: "condition:winded",
+    slug: "winded",
+    name: "Winded",
+    category: "condition",
+    summary: "You are short of breath after a hard push.",
+    mechanics: { kind: "condition", data: { track: true } },
+  }),
+  entry({
+    id: "condition:braced",
+    slug: "braced",
+    name: "Braced",
+    category: "condition",
+    summary: "You have set your footing against the next hit.",
+    mechanics: { kind: "condition", data: { track: true } },
+  }),
+];
+
 const resourceEntry = entry({
   id: SYNTHETIC_IDS.resource,
   slug: "rallying-breath",
@@ -476,6 +498,7 @@ export const SYNTHETIC_ENTRIES: readonly ContentEntry[] = [
   masteryEntry,
   attackEntry,
   resourceEntry,
+  ...conditionEntries,
   ...equipmentEntries,
   ...proficiencyEntries,
 ];

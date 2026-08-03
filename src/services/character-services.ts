@@ -15,8 +15,10 @@ import type {
   CharacterRecord,
   CharacterRuntimeStateRecord,
   CharacterVersionRecord,
+  OverrideOperation,
+  OverrideScope,
 } from "@/src/domain/character-record";
-import { EMPTY_DRAFT_BUILD } from "@/src/domain/character-record";
+import { EMPTY_DRAFT_BUILD, isAllowedTargetPath } from "@/src/domain/character-record";
 import type { ContentEntry, ID } from "@/src/domain/model";
 import type { LedgerDB } from "@/src/storage/db";
 import type { CharacterRepositories } from "@/src/storage/character-repositories";
@@ -462,6 +464,201 @@ export function derivedSnapshotOf(sheet: DerivedCharacterSheet, now: string): Ch
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export interface SetOverrideCommand {
+  readonly operationId: ID;
+  readonly characterId: ID;
+  readonly expectedCharacterRevision: number;
+  readonly targetPath: string;
+  readonly operation: OverrideOperation;
+  readonly value: number;
+  readonly scope: OverrideScope;
+  /** Optional private explanation. Stored, never logged or exported. */
+  readonly reason?: string;
+  readonly sourceId?: ID;
+}
+
+export interface OverrideResult {
+  overrideId: ID;
+  characterRevision: number;
+  versionId: ID;
+  automaticBaseline: number | null;
+}
+
+/**
+ * Typed override writes.
+ *
+ * M2.1 accepts only `replace` and numeric `add` against an allow-listed derived
+ * path (D-04). Anything conditional, multiplicative, formula-shaped or
+ * expression-shaped is rejected here without being evaluated. The write versions
+ * the outgoing character before replacing it, so an override is auditable and
+ * reversible like any other durable edit.
+ */
+export class CharacterOverrideService {
+  private readonly clock: Clock;
+  private readonly log: ServiceLogger;
+
+  constructor(private readonly context: ServiceContext) {
+    this.clock = context.clock ?? systemClock;
+    this.log = context.logger ?? noopLogger;
+  }
+
+  async set(command: SetOverrideCommand): Promise<ServiceOutcome<OverrideResult>> {
+    const rejections: ServiceIssue[] = [];
+    if (!isAllowedTargetPath(command.targetPath))
+      rejections.push({ code: "OVERRIDE_TARGET_NOT_ALLOWED", fieldPath: command.targetPath, severity: "error" });
+    if (command.operation !== "replace" && command.operation !== "add")
+      rejections.push({ code: "OVERRIDE_OPERATION_UNSUPPORTED", fieldPath: "operation", severity: "error" });
+    if (typeof command.value !== "number" || !Number.isFinite(command.value))
+      rejections.push({ code: "OVERRIDE_VALUE_NOT_NUMERIC", fieldPath: "value", severity: "error" });
+    if (rejections.length) return invalid(rejections);
+
+    return this.write(command.characterId, command.expectedCharacterRevision, command.operationId, "override", async (character, entries, overrides) => {
+      // The automatic baseline is recalculated now, not trusted from the caller.
+      const baseline = baselineFor(
+        resolveDerivedCharacter({ character, overrides: overrides.filter(item => item.targetPath !== command.targetPath), entries }),
+        command.targetPath,
+      );
+      const existing = overrides.find(item => item.targetPath === command.targetPath);
+      const now = this.clock();
+      const record: CharacterOverrideRecord = {
+        id: existing?.id ?? `${command.characterId}:override:${command.targetPath}`,
+        characterId: command.characterId,
+        targetPath: command.targetPath,
+        operation: command.operation,
+        value: command.value,
+        automaticBaseline: baseline,
+        scope: command.scope,
+        status: "active",
+        ...(command.reason ? { reason: command.reason } : {}),
+        ...(command.sourceId ? { sourceId: command.sourceId } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      await this.context.repositories.overrides.put(record);
+      return { overrideId: record.id, automaticBaseline: baseline };
+    });
+  }
+
+  /** Removes an override. The caller previews the automatic replacement first. */
+  async remove(
+    characterId: ID,
+    overrideId: ID,
+    expectedCharacterRevision: number,
+    operationId: ID,
+  ): Promise<ServiceOutcome<OverrideResult>> {
+    return this.write(characterId, expectedCharacterRevision, operationId, "override", async (character, entries, overrides) => {
+      const target = overrides.find(item => item.id === overrideId);
+      if (!target) throw new Error(`Override ${overrideId} was not found`);
+      await this.context.repositories.overrides.delete(overrideId);
+      return {
+        overrideId,
+        automaticBaseline: baselineFor(
+          resolveDerivedCharacter({ character, overrides: overrides.filter(item => item.id !== overrideId), entries }),
+          target.targetPath,
+        ),
+      };
+    });
+  }
+
+  /** Shared durable-edit transaction: version before replace, then the change. */
+  private async write(
+    characterId: ID,
+    expectedCharacterRevision: number,
+    operationId: ID,
+    reason: CharacterVersionRecord["reason"],
+    apply: (
+      character: CharacterRecord,
+      entries: readonly ContentEntry[],
+      overrides: readonly CharacterOverrideRecord[],
+    ) => Promise<{ overrideId: ID; automaticBaseline: number | null }>,
+  ): Promise<ServiceOutcome<OverrideResult>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+    const outcome = await database.transaction(
+      "rw",
+      [
+        database.characters,
+        database.characterVersions,
+        database.characterOverrides,
+        database.characterRuntimeStates,
+        database.characterDerivedSnapshots,
+        database.contentEntries,
+      ],
+      async (): Promise<ServiceOutcome<OverrideResult>> => {
+        const character = await repositories.characters.get(characterId);
+        if (!character) return notFound(characterId);
+        if (character.revision !== expectedCharacterRevision)
+          return stale(characterId, expectedCharacterRevision, character.revision);
+
+        const [entries, overrides] = await Promise.all([
+          repositories.content.listEntries(),
+          repositories.overrides.listByCharacter(characterId),
+        ]);
+        const applied = await apply(character, entries, overrides);
+
+        const sequence = (await repositories.versions.latestSequence(characterId)) + 1;
+        // Version before replace.
+        await repositories.versions.append({
+          id: `${characterId}@${sequence}`,
+          characterId,
+          sequence,
+          reason,
+          operationId,
+          snapshot: character,
+          createdAt: now,
+          updatedAt: now,
+        });
+        const next: CharacterRecord = { ...character, revision: character.revision + 1, updatedAt: now };
+        const accepted = await repositories.characters.replace(next, character.revision);
+        if (!accepted) return stale(characterId, expectedCharacterRevision, null);
+
+        const runtime = await repositories.runtime.get(characterId);
+        const refreshed = await repositories.overrides.listByCharacter(characterId);
+        await repositories.derivedSnapshots.put(
+          derivedSnapshotOf(resolveDerivedCharacter({ character: next, runtime, overrides: refreshed, entries }), now),
+        );
+
+        return ok({
+          overrideId: applied.overrideId,
+          characterRevision: next.revision,
+          versionId: `${characterId}@${sequence}`,
+          automaticBaseline: applied.automaticBaseline,
+        });
+      },
+    );
+    this.log({ operation: `character.${reason}`, recordId: characterId, expectedRevision: expectedCharacterRevision });
+    return outcome;
+  }
+}
+
+/** Reads the automatic value at an allow-listed path from a resolved sheet. */
+export function baselineFor(sheet: DerivedCharacterSheet, targetPath: string): number | null {
+  if (targetPath === "proficiencyBonus") return sheet.proficiencyBonus.value;
+  if (targetPath === "armorClass") return sheet.armorClass.value;
+  if (targetPath === "initiative") return sheet.initiative.value;
+  if (targetPath === "speed") return sheet.speed.value;
+  if (targetPath === "hitPoints.maximum") return sheet.hitPoints.maximum.value;
+  if (targetPath === "hitPoints.current") return sheet.hitPoints.current.value;
+  const ability = targetPath.startsWith("abilityScore.")
+    ? targetPath.slice("abilityScore.".length)
+    : targetPath.startsWith("abilityModifier.")
+      ? targetPath.slice("abilityModifier.".length)
+      : undefined;
+  if (ability && ability in sheet.abilities) {
+    const entry = sheet.abilities[ability as keyof typeof sheet.abilities];
+    return targetPath.startsWith("abilityScore.") ? entry.score.value : entry.modifier.value;
+  }
+  if (targetPath.startsWith("savingThrow."))
+    return sheet.saves.find(item => item.id === targetPath.slice("savingThrow.".length))?.total.value ?? null;
+  if (targetPath.startsWith("check."))
+    return sheet.checks.find(item => item.id === targetPath.slice("check.".length))?.total.value ?? null;
+  if (targetPath.startsWith("resource.") && targetPath.endsWith(".maximum"))
+    return sheet.resources.find(item => item.id === targetPath.slice("resource.".length, -".maximum".length))?.maximum.value ?? null;
+  if (targetPath.startsWith("attack.") && targetPath.endsWith(".attackBonus"))
+    return sheet.actions.find(item => item.id === targetPath.slice("attack.".length, -".attackBonus".length))?.attackBonus.value ?? null;
+  return null;
 }
 
 export interface LibraryCard {

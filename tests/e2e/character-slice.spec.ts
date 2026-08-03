@@ -260,6 +260,58 @@ test.describe("runtime play", () => {
   });
 });
 
+test.describe("overrides, conditions and restore points", () => {
+  test("overrides a value, keeps the baseline visible, then removes it", async ({ page }) => {
+    await startNewCharacter(page);
+    await buildBrammel(page);
+
+    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Armour class" });
+    await dialog.getByRole("button", { name: "Override Armour class" }).click();
+    await dialog.getByLabel("Operation").selectOption("replace");
+    await dialog.getByLabel("Value", { exact: true }).fill("20");
+    await dialog.getByLabel(/Reason/).fill("table ruling kept on this device");
+    await dialog.getByRole("button", { name: /Save override for Armour class/ }).click();
+
+    // The overridden value renders and is marked as an override.
+    await expect(page.getByRole("button", { name: /Explain Armour class, 20/ })).toBeVisible();
+
+    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    const reopened = page.getByRole("dialog", { name: "Armour class" });
+    // The automatic baseline is retained and shown.
+    await expect(reopened.getByText(/The automatic value was 18/)).toBeVisible();
+    await reopened.getByRole("button", { name: /Remove override, returning Armour class to 18/ }).click();
+    await expect(page.getByRole("button", { name: /Explain Armour class, 18/ })).toBeVisible();
+  });
+
+  test("adds and removes a condition through the sheet", async ({ page }) => {
+    await startNewCharacter(page);
+    await buildBrammel(page);
+
+    await expect(page.getByText("No conditions are active.")).toBeVisible();
+    await page.getByRole("button", { name: /Add the Winded condition/ }).click();
+    await expect(page.getByRole("button", { name: /Remove the Winded condition/ })).toBeVisible();
+    await page.getByRole("button", { name: /Remove the Winded condition/ }).click();
+    await expect(page.getByText("No conditions are active.")).toBeVisible();
+  });
+
+  test("restores the pre-level snapshot without deleting the level-up", async ({ page }) => {
+    await startNewCharacter(page);
+    await buildBrammel(page);
+
+    await page.getByRole("button", { name: "Level up" }).click();
+    const levelDialog = page.getByRole("dialog", { name: "Level 1 to 2" });
+    await levelDialog.getByRole("button", { name: /^Measured Cut/ }).click();
+    await levelDialog.getByRole("button", { name: "Confirm level 2" }).click();
+    await expect(page.getByText("Vanguard 2")).toBeVisible();
+
+    await page.getByRole("button", { name: /Restore Brammel Voss to the point named Before level 2/ }).click();
+    await expect(page.getByText("Vanguard 1")).toBeVisible();
+    // The restore point itself is still listed; history was appended, not erased.
+    await expect(page.getByRole("heading", { name: "Restore points" })).toBeVisible();
+  });
+});
+
 test.describe("level up", () => {
   test("previews the preserve-deficit policy and commits atomically", async ({ page }) => {
     await startNewCharacter(page);

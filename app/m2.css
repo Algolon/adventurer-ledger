@@ -1062,11 +1062,12 @@
   background: var(--paper);
 }
 
-/* Wide tables scroll inside their own container, not the document. */
+/*
+ * Wide tables scroll inside `.m2-scroller`, not the document and not the table
+ * itself: a table that is its own scroll container is an unlabelled, unreachable
+ * scrollable region.
+ */
 .m2-diff {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -1186,4 +1187,25 @@
   .m2-option-mark {
     forced-color-adjust: none;
   }
+}
+
+/* Typed override editor inside a value details surface. */
+.m2-override {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.m2-override h4 {
+  margin: 0;
+  font:
+    600 16px/1.2 var(--display);
+}
+
+/* Labelled, keyboard-reachable container for content wider than the viewport. */
+.m2-scroller {
+  max-width: 100%;
+  overflow-x: auto;
 }

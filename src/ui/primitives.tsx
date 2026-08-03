@@ -99,7 +99,10 @@ export function Dialog({ title, onClose, children, footer, errorSummary }: Dialo
             </div>
           </div>
         ) : null}
-        <div className="m2-dialog-body">{children}</div>
+        {/* An intentional inner scroller must be labelled and keyboard reachable. */}
+        <div className="m2-dialog-body" tabIndex={0} role="group" aria-label={`${title} details`}>
+          {children}
+        </div>
         {footer ? <footer className="m2-dialog-foot">{footer}</footer> : null}
       </section>
     </div>

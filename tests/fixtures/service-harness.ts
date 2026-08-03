@@ -11,6 +11,7 @@ import { seedSyntheticContent } from "@/src/content/seed-synthetic";
 import {
   CharacterBuildCommitService,
   CharacterDraftService,
+  CharacterOverrideService,
   CharacterQueryService,
   type ServiceContext,
 } from "@/src/services/character-services";
@@ -30,6 +31,7 @@ export interface Harness {
   runtime: CharacterRuntimeService;
   levelUp: CharacterLevelUpService;
   transfer: CharacterTransferService;
+  overrides: CharacterOverrideService;
   logLines: ServiceLogLine[];
   /** Advances the deterministic clock by one second. */
   tick(): void;
@@ -59,6 +61,7 @@ export async function createHarness(): Promise<Harness> {
     runtime: new CharacterRuntimeService(context),
     levelUp: new CharacterLevelUpService(context),
     transfer: new CharacterTransferService(context),
+    overrides: new CharacterOverrideService(context),
     logLines,
     tick: () => {
       seconds += 1;

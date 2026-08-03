@@ -884,3 +884,173 @@ describe("CharacterTransferService", () => {
     expect(await harness.database.characters.count()).toBe(1);
   });
 });
+
+describe("CharacterOverrideService", () => {
+  beforeEach(async () => {
+    await commitBrammel();
+  });
+
+  it("records a replace override with the recalculated automatic baseline and a new version", async () => {
+    const result = expectOk<{ overrideId: string; characterRevision: number; automaticBaseline: number | null }>(
+      await harness.overrides.set({
+        operationId: "operation:override-ac",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        targetPath: "armorClass",
+        operation: "replace",
+        value: 20,
+        scope: "persistent",
+        reason: "private table ruling",
+      }),
+    );
+
+    // The baseline is recalculated, not taken from the caller.
+    expect(result.automaticBaseline).toBe(18);
+    expect(result.characterRevision).toBe(2);
+    const sheet = await harness.query.sheet("character:brammel");
+    expect(sheet?.armorClass.value).toBe(20);
+    expect(sheet?.armorClass.override).toEqual({ operation: "replace", value: 20, automaticBaseline: 18, stale: false });
+
+    // The outgoing record was versioned before the durable edit.
+    const versions = await harness.database.characterVersions.where("characterId").equals("character:brammel").sortBy("sequence");
+    expect(versions).toHaveLength(2);
+    expect(versions[1].reason).toBe("override");
+    expect(versions[1].snapshot.revision).toBe(1);
+  });
+
+  it("applies a numeric add override on top of the automatic baseline", async () => {
+    expectOk(
+      await harness.overrides.set({
+        operationId: "operation:override-add",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        targetPath: "armorClass",
+        operation: "add",
+        value: 2,
+        scope: "persistent",
+      }),
+    );
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(20);
+  });
+
+  it("rejects a target outside the allow-list without writing", async () => {
+    const outcome = await harness.overrides.set({
+      operationId: "operation:override-bad-path",
+      characterId: "character:brammel",
+      expectedCharacterRevision: 1,
+      targetPath: "biography.backstory",
+      operation: "replace",
+      value: 1,
+      scope: "persistent",
+    });
+    expect(outcome.status).toBe("invalid");
+    if (outcome.status === "invalid") expect(outcome.issues[0].code).toBe("OVERRIDE_TARGET_NOT_ALLOWED");
+    expect(await harness.database.characterOverrides.count()).toBe(0);
+    expect((await harness.database.characters.get("character:brammel"))?.revision).toBe(1);
+  });
+
+  it("rejects a non-numeric or non-typed operation without evaluating it", async () => {
+    for (const command of [
+      { targetPath: "armorClass", operation: "multiply" as never, value: 2 },
+      { targetPath: "armorClass", operation: "replace" as const, value: Number.NaN },
+    ]) {
+      const outcome = await harness.overrides.set({
+        operationId: `operation:override-${String(command.operation)}-${String(command.value)}`,
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        scope: "persistent",
+        ...command,
+      });
+      expect(outcome.status).toBe("invalid");
+    }
+    expect(await harness.database.characterOverrides.count()).toBe(0);
+  });
+
+  it("rejects a stale character revision and writes nothing", async () => {
+    const outcome = await harness.overrides.set({
+      operationId: "operation:override-stale",
+      characterId: "character:brammel",
+      expectedCharacterRevision: 99,
+      targetPath: "armorClass",
+      operation: "replace",
+      value: 20,
+      scope: "persistent",
+    });
+    expect(outcome.status).toBe("stale");
+    expect(await harness.database.characterOverrides.count()).toBe(0);
+    expect(await harness.database.characterVersions.count()).toBe(1);
+  });
+
+  it("keeps an override visible for review when upstream choices move the baseline", async () => {
+    expectOk(
+      await harness.overrides.set({
+        operationId: "operation:override-hp",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        targetPath: "hitPoints.maximum",
+        operation: "replace",
+        value: 15,
+        scope: "persistent",
+      }),
+    );
+    // Levelling up moves the automatic maximum from 10 to 12.
+    expectOk(
+      await harness.levelUp.confirm({
+        operationId: "operation:override-levelup",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 2,
+        expectedRuntimeRevision: 1,
+        targetLevel: 2,
+        expectedContentFingerprint: await harness.query.contentFingerprint(SYNTHETIC_RULESET_ID),
+        choiceSelections: { [SYNTHETIC_CHOICES.weaponMastery]: ["option:measured-cut"] },
+      }),
+    );
+
+    const sheet = await harness.query.sheet("character:brammel");
+    // The override is still applied and still visible, but flagged for review.
+    expect(sheet?.hitPoints.maximum.value).toBe(15);
+    expect(sheet?.hitPoints.maximum.override?.stale).toBe(true);
+    expect(await harness.database.characterOverrides.count()).toBe(1);
+  });
+
+  it("removes an override and returns the value to its automatic result", async () => {
+    const created = expectOk<{ overrideId: string; characterRevision: number }>(
+      await harness.overrides.set({
+        operationId: "operation:override-remove-setup",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        targetPath: "armorClass",
+        operation: "replace",
+        value: 20,
+        scope: "persistent",
+      }),
+    );
+    const removed = expectOk<{ automaticBaseline: number | null }>(
+      await harness.overrides.remove("character:brammel", created.overrideId, created.characterRevision, "operation:override-remove"),
+    );
+
+    expect(removed.automaticBaseline).toBe(18);
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(18);
+    expect(await harness.database.characterOverrides.count()).toBe(0);
+    // Removal is versioned like any other durable edit.
+    expect(await harness.database.characterVersions.count()).toBe(3);
+  });
+
+  it("keeps a private override reason out of logs and transfers", async () => {
+    expectOk(
+      await harness.overrides.set({
+        operationId: "operation:override-private",
+        characterId: "character:brammel",
+        expectedCharacterRevision: 1,
+        targetPath: "armorClass",
+        operation: "replace",
+        value: 20,
+        scope: "persistent",
+        reason: "private table ruling",
+      }),
+    );
+    expect(JSON.stringify(harness.logLines)).not.toContain("private table ruling");
+    const exported = expectOk<{ json: string }>(await harness.transfer.createTransfer("character:brammel"));
+    expect(exported.json).not.toContain("private table ruling");
+  });
+});

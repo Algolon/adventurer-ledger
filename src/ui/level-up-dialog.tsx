@@ -105,6 +105,7 @@ export function LevelUpDialog({
       </p>
 
       <h4>Automatic gains</h4>
+      <div className="m2-scroller" tabIndex={0} role="group" aria-label="Automatic gains comparison, scrollable">
       <table className="m2-diff">
         <caption className="m2-visually-hidden">Before and after comparison for level {preview.toLevel}</caption>
         <thead>
@@ -124,9 +125,11 @@ export function LevelUpDialog({
           ))}
         </tbody>
       </table>
+      </div>
 
       <h4>Current and maximum values</h4>
       <p className="m2-policy">Policy: {preview.policyLabel}. Your current value moves by the same amount as the maximum.</p>
+      <div className="m2-scroller" tabIndex={0} role="group" aria-label="Current and maximum comparison, scrollable">
       <table className="m2-diff">
         <thead>
           <tr>
@@ -151,6 +154,7 @@ export function LevelUpDialog({
           ))}
         </tbody>
       </table>
+      </div>
 
       <h4>New choices</h4>
       {preview.newChoices.length ? (
