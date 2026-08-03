@@ -12,8 +12,8 @@ describe("PWA foundation", () => {
   ])("creates scoped manifest metadata for base path %s", async (basePath, root) => {
     process.env.NEXT_PUBLIC_BASE_PATH = basePath;
     vi.resetModules();
-    const { default: manifest } = await import("@/app/manifest"),
-      value = manifest();
+    const { createManifest } = await import("@/src/pwa/manifest"),
+      value = createManifest();
     expect(value).toMatchObject({
       id: root,
       start_url: root,
@@ -25,6 +25,13 @@ describe("PWA foundation", () => {
       background_color: "#F6EBD6",
     });
     expect(value.icons?.every((icon) => icon.src.startsWith(root))).toBe(true);
+    expect(value.icons?.map((icon) => icon.src)).toEqual([
+      `${root}icons/runefolio-icon-192.png`,
+      `${root}icons/runefolio-icon-512.png`,
+      `${root}icons/runefolio-maskable-192.png`,
+      `${root}icons/runefolio-maskable-512.png`,
+    ]);
+    expect(value.icons?.some((icon) => /\/icons\/(?:icon-|maskable-)/.test(icon.src))).toBe(false);
     expect(value.icons?.filter((icon) => icon.purpose === "maskable")).toHaveLength(2);
   });
   it("keeps the active cache authoritative until a controlled update", () => {

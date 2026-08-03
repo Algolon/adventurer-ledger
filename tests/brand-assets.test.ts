@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -10,13 +11,22 @@ const brandDirectory = "public/brand",
     "runefolio-favicon.svg",
   ],
   pngDimensions = new Map([
-    ["icon-192.png", 192],
-    ["icon-512.png", 512],
-    ["maskable-192.png", 192],
-    ["maskable-512.png", 512],
-    ["apple-touch-icon.png", 180],
-    ["favicon-16.png", 16],
-    ["favicon-32.png", 32],
+    ["runefolio-icon-192.png", 192],
+    ["runefolio-icon-512.png", 512],
+    ["runefolio-maskable-192.png", 192],
+    ["runefolio-maskable-512.png", 512],
+    ["runefolio-apple-touch-icon.png", 180],
+    ["runefolio-favicon-16.png", 16],
+    ["runefolio-favicon-32.png", 32],
+  ]),
+  approvedHashes = new Map([
+    ["runefolio-icon-192.png", "5a761c39e810241622af19f60e413f00cf7bd2fe80918beca6881efedfd419a9"],
+    ["runefolio-icon-512.png", "4b7bd892d2da717300c5040d867e165aee973dc86a0c89ef4a7317a3b0b3a988"],
+    ["runefolio-maskable-192.png", "3a23c1fbed0c6bde4256f437afa276bba2387c77f95c046121dd08f0d3d3a188"],
+    ["runefolio-maskable-512.png", "5ad32a0491ed0afe80f9818236e81545d10fbec621da5cf8fc24591b8b55fc44"],
+    ["runefolio-apple-touch-icon.png", "84426066d846d0e7a0b044318122a47455e3c9895254b3c34c8c1ce54dd3bbce"],
+    ["runefolio-favicon-16.png", "7feeb25e045867286e3bd8e896b8209836ab82ce2d236ea58a46b5850eff330a"],
+    ["runefolio-favicon-32.png", "4922e3edf84a7f58930ebc062c80f333a2716a92ab5d66d76cb568d7649b4e17"],
   ]);
 
 function pngSize(name: string) {
@@ -41,6 +51,14 @@ describe("Runefolio brand assets", () => {
   it("generates every production PNG at its declared square size", () => {
     for (const [name, size] of pngDimensions)
       expect(pngSize(name)).toEqual([size, size]);
+  });
+
+  it("keeps renamed installation assets byte-identical to the approved branding", () => {
+    for (const [name, hash] of approvedHashes)
+      expect(createHash("sha256").update(readFileSync(`${iconDirectory}/${name}`)).digest("hex")).toBe(hash);
+    expect(createHash("sha256").update(readFileSync("public/runefolio-favicon.ico")).digest("hex")).toBe(
+      "12d0397614ca85014d04d20f6ece8a45743f20b1921aa96786e29a45946ab519",
+    );
   });
 
   it("keeps the verification overview available as vector and raster", () => {
