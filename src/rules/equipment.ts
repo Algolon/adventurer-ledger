@@ -37,7 +37,7 @@ export function resolveEquipmentBundles(
     }
     const selected = [...(selections[node.id] ?? [])];
     const options = new Map(node.options.map(option => [option.id, option]));
-    if (selected.length < node.min || selected.length > node.max) {
+    if (selected.length < node.min || selected.length > node.max || new Set(selected).size !== selected.length) {
       result.unresolvedChoiceIds.add(node.id);
       result.issues.push({ code: selected.length ? "EQUIPMENT_CHOICE_INVALID" : "EQUIPMENT_CHOICE_REQUIRED", severity: "error", bundleId, nodeId: node.id, message: `Equipment choice ${node.id} is unresolved` });
       return;
@@ -52,7 +52,7 @@ export function resolveEquipmentBundles(
       for (const child of option.entries) visit(child, bundleId);
     }
   };
-  for (const bundleId of requestedBundleIds) {
+  for (const bundleId of new Set(requestedBundleIds)) {
     const bundle = byId.get(bundleId);
     if (!bundle) {
       result.issues.push({ code: "EQUIPMENT_BUNDLE_MISSING", severity: "error", bundleId, message: `Equipment bundle ${bundleId} is unavailable` });

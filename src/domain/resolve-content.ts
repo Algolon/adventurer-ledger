@@ -5,6 +5,7 @@ export interface RelationResolution {
   links: ResolvedContentLink[];
   missingRequired: ResolvedContentLink[];
   conflicts: Array<{ key: string; winner: ContentEntry; alternatives: ContentEntry[]; resolution: ContentEntry["conflict"]["resolution"] }>;
+  coexistingGroups: Array<{ key: string; entries: ContentEntry[] }>;
   unresolvedConflicts: Array<{ key: string; entryIds: string[]; reason: "explicit-selection-required" | "policy-mismatch" | "selection-invalid" }>;
 }
 
@@ -21,7 +22,7 @@ export function resolveContentRelations(entries: readonly ContentEntry[], explic
     const group = groups.get(entry.conflict.conflictKey) ?? [];
     group.push(entry); groups.set(entry.conflict.conflictKey, group);
   }
-  const conflicts: RelationResolution["conflicts"] = [], unresolvedConflicts: RelationResolution["unresolvedConflicts"] = [];
+  const conflicts: RelationResolution["conflicts"] = [], coexistingGroups: RelationResolution["coexistingGroups"] = [], unresolvedConflicts: RelationResolution["unresolvedConflicts"] = [];
   for (const [key, group] of [...groups].filter(([, items]) => items.length > 1).sort(([left], [right]) => left.localeCompare(right))) {
     const policies = new Set(group.map(entry => entry.conflict.resolution));
     if (policies.size !== 1) {
@@ -47,8 +48,12 @@ export function resolveContentRelations(entries: readonly ContentEntry[], explic
       conflicts.push({ key, winner: selected, alternatives: ranked.filter(entry => entry.id !== selected.id), resolution });
       continue;
     }
+    if (resolution === "coexist") {
+      coexistingGroups.push({ key, entries: ranked });
+      continue;
+    }
     const winner = ranked[0];
     if (winner) conflicts.push({ key, winner, alternatives: ranked.slice(1), resolution });
   }
-  return { links, missingRequired, conflicts, unresolvedConflicts };
+  return { links, missingRequired, conflicts, coexistingGroups, unresolvedConflicts };
 }

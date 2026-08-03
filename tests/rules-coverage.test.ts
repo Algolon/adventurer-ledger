@@ -84,6 +84,63 @@ describe("choice, equipment, progression, and multiclass coverage", () => {
     expect(deriveCharacterState({ character: character(), entries }).issues).toContainEqual(expect.objectContaining({ code: "MULTICLASS_COMBINATION_UNSUPPORTED" }));
   });
 
+  it("rejects duplicate class rows and unavailable selected identity entries", () => {
+    const invalidCharacter: Character = {
+      ...character(),
+      classLevels: [
+        { classId: "class:sentinel", subclassId: "subclass:warden", level: 3 },
+        { classId: "class:sentinel", level: 2 },
+      ],
+      backgroundId: "background:missing",
+    };
+    const result = deriveCharacterState({ character: invalidCharacter, entries: multiclassEntries() });
+    expect(result.status).toBe("invalid");
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "DUPLICATE_CLASS_SELECTION", recordId: "class:sentinel" }),
+      expect.objectContaining({ code: "FEATURE_REFERENCE_MISSING", recordId: "background:missing" }),
+    ]));
+  });
+
+  it("requires class choices only when their class-level progression unlocks them", () => {
+    const entries = multiclassEntries(), sentinel = entries.find(item => item.id === "class:sentinel");
+    if (!sentinel) throw new Error("Synthetic class fixture is missing");
+    sentinel.choices = [{ id: "choice:future", label: "Synthetic future choice", min: 1, max: 1, repeatable: false, options: [{ id: "option:future", label: "Synthetic future option" }] }];
+    expect(deriveCharacterState({ character: character(), entries }).status).toBe("ready");
+    const mechanics = sentinel.mechanics as { progression: Array<{ level: number; choiceIds: string[] }> };
+    const row = mechanics.progression.find(item => item.level === 2);
+    if (!row) throw new Error("Synthetic progression row is missing");
+    row.choiceIds = ["choice:future"];
+    const unresolved = deriveCharacterState({ character: character(), entries });
+    expect(unresolved.status).toBe("invalid");
+    expect(unresolved.pendingChoiceIds).toEqual(new Set(["choice:future"]));
+  });
+
+  it("does not keep a valid class choice pending after applying its selected effects", () => {
+    const entries = multiclassEntries(), sentinel = entries.find(item => item.id === "class:sentinel");
+    if (!sentinel) throw new Error("Synthetic class fixture is missing");
+    sentinel.choices = [{
+      id: "choice:style", label: "Synthetic style", min: 1, max: 1, repeatable: false,
+      options: [{
+        id: "option:guard", label: "Synthetic guard",
+        effects: [{ id: "effect:guard", type: "modifyArmorClass", operation: "add", value: { kind: "literal", value: 1 } }],
+      }],
+    }];
+    sentinel.effects = [{ id: "effect:choose-style", type: "grantChoice", choiceId: "choice:style" }];
+    const mechanics = sentinel.mechanics as { progression: Array<{ level: number; choiceIds: string[] }> };
+    const row = mechanics.progression.find(item => item.level === 2);
+    if (!row) throw new Error("Synthetic progression row is missing");
+    row.choiceIds = ["choice:style"];
+
+    const result = deriveCharacterState({
+      character: character(), entries, choiceSelections: { "choice:style": ["option:guard"] },
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.pendingChoiceIds).toEqual(new Set());
+    expect(result.ruleResult.context.values.armorClass).toBe(1);
+    expect(result.ruleResult.trace).toContainEqual(expect.objectContaining({ effectId: "effect:choose-style", applied: true, reason: "Applied" }));
+  });
+
   it("resolves nested equipment choices, quantities, alternatives, and status", () => {
     const bundle: EquipmentBundleDefinition = {
       id: "bundle:starter", label: "Synthetic starter", entries: [
@@ -100,6 +157,9 @@ describe("choice, equipment, progression, and multiclass coverage", () => {
       { itemId: "armor:synthetic", quantity: 1, status: "equipped", sourceBundleId: bundle.id },
       { itemId: "weapon:synthetic", quantity: 2, status: "carried", sourceBundleId: bundle.id },
     ]);
+    const duplicate = resolveEquipmentBundles([bundle.id], [bundle], { "choice:weapon": ["option:sword", "option:sword"] }, new Set(["armor:synthetic", "weapon:synthetic"]));
+    expect(duplicate.issues).toContainEqual(expect.objectContaining({ code: "EQUIPMENT_CHOICE_INVALID" }));
+    expect(resolveEquipmentBundles([bundle.id, bundle.id], [bundle], { "choice:weapon": ["option:sword"] }, new Set(["armor:synthetic", "weapon:synthetic"])).items).toEqual(resolved.items);
   });
 });
 
@@ -136,13 +196,13 @@ describe("import and conflict visibility", () => {
     database = new LedgerDB(`equipment-set-${crypto.randomUUID()}`);
     const provider = syntheticPack();
     provider.pack.id = "pack:synthetic-items"; provider.pack.name = "Synthetic Items";
-    provider.entries = [entry("item:synthetic-kit", "item", { itemType: "kit", rarity: "none", attunement: { required: false }, attackIds: [], resourceIds: [] })] as typeof provider.entries;
+    const providerDocument = { ...provider, entries: [entry("item:synthetic-kit", "item", { itemType: "kit", rarity: "none", attunement: { required: false }, attackIds: [], resourceIds: [] })] };
     const consumer = syntheticPack();
     consumer.pack.id = "pack:synthetic-loadout"; consumer.pack.name = "Synthetic Loadout"; consumer.pack.dependencies = [provider.pack.id]; consumer.sources = [];
     consumer.entries[0].id = "rule:synthetic-loadout"; consumer.entries[0].slug = "rule-synthetic-loadout";
     consumer.entries[0].equipmentBundles = [{ id: "bundle:synthetic-loadout", label: "Synthetic loadout", entries: [{ type: "item", itemId: "item:synthetic-kit", quantity: 1, status: "equipped" }] }];
     consumer.entries[0].effects = [{ id: "effect:synthetic-loadout", type: "grantEquipmentBundle", bundleId: "bundle:synthetic-loadout" }];
-    const preview = await previewContentPackSet([JSON.stringify(consumer), JSON.stringify(provider)], database);
+    const preview = await previewContentPackSet([JSON.stringify(consumer), JSON.stringify(providerDocument)], database);
     expect(preview.canImport).toBe(true);
     await confirmImportSet(preview, database);
     await expect(database.contentPacks.count()).resolves.toBe(2);
@@ -156,5 +216,9 @@ describe("import and conflict visibility", () => {
     expect(resolveContentRelations([first, second], { "rule:collision": second.id }).conflicts[0]?.winner.id).toBe(second.id);
     const mismatch = { ...second, conflict: { ...second.conflict, resolution: "source-priority" as const } };
     expect(resolveContentRelations([first, mismatch]).unresolvedConflicts[0]?.reason).toBe("policy-mismatch");
+    const coexisting = [first, second].map(item => ({ ...item, conflict: { ...item.conflict, resolution: "coexist" as const } }));
+    const coexistence = resolveContentRelations(coexisting);
+    expect(coexistence.conflicts).toEqual([]);
+    expect(coexistence.coexistingGroups[0]?.entries.map(item => item.id)).toEqual([second.id, first.id]);
   });
 });

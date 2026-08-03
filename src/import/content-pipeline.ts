@@ -547,12 +547,20 @@ export async function previewContentPackSet(
     };
     for (const choice of entry.choices) inspectChoice(choice);
     if (entry.category === "class") {
-      const mechanics = entry.mechanics as { progression: Array<{ featureIds: string[] }>; subclassIds: string[] };
-      for (const targetId of [...mechanics.progression.flatMap(row => row.featureIds), ...mechanics.subclassIds]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Class ${entry.id} has an unresolved progression reference to ${targetId}` });
+      const mechanics = entry.mechanics as { progression: Array<{ featureIds: string[]; choiceIds: string[] }>; subclassIds: string[]; savingThrows: string[]; startingProficiencyIds: string[]; multiclass?: { grantedProficiencyIds: string[] } };
+      for (const targetId of [...mechanics.progression.flatMap(row => row.featureIds), ...mechanics.subclassIds, ...mechanics.savingThrows, ...mechanics.startingProficiencyIds, ...(mechanics.multiclass?.grantedProficiencyIds ?? [])]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Class ${entry.id} has an unresolved progression reference to ${targetId}` });
+      const knownChoiceIds = new Set(entry.choices.map(choice => choice.id));
+      for (const choiceId of mechanics.progression.flatMap(row => row.choiceIds)) if (!knownChoiceIds.has(choiceId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId: choiceId, path: "entries.mechanics.progression.choiceIds", message: `Class ${entry.id} has an unresolved progression choice ${choiceId}` });
     }
     if (entry.category === "subclass") {
-      const mechanics = entry.mechanics as { classId: string; progression: Array<{ featureIds: string[] }> };
+      const mechanics = entry.mechanics as { classId: string; progression: Array<{ featureIds: string[]; choiceIds: string[] }> };
       for (const targetId of [mechanics.classId, ...mechanics.progression.flatMap(row => row.featureIds)]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Subclass ${entry.id} has an unresolved progression reference to ${targetId}` });
+      const knownChoiceIds = new Set(entry.choices.map(choice => choice.id));
+      for (const choiceId of mechanics.progression.flatMap(row => row.choiceIds)) if (!knownChoiceIds.has(choiceId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId: choiceId, path: "entries.mechanics.progression.choiceIds", message: `Subclass ${entry.id} has an unresolved progression choice ${choiceId}` });
+    }
+    if (entry.category === "background") {
+      const mechanics = entry.mechanics as { featId: string; proficiencyIds: string[]; equipmentChoiceIds: string[] };
+      for (const targetId of [mechanics.featId, ...mechanics.proficiencyIds, ...mechanics.equipmentChoiceIds]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId, path: "entries.mechanics", message: `Background ${entry.id} has an unresolved mechanics reference to ${targetId}` });
     }
     for (const link of entry.links) if (link.required && !importedEntries.has(link.targetId) && !installedEntries.has(link.targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.links", message: `Entry ${entry.id} has an unresolved required ${link.type} reference to ${link.targetId}` });
     for (const target of [entry.replacementOf, entry.replacedBy, ...entry.editionRelations].filter((item): item is string => typeof item === "string")) if (!importedEntries.has(target) && !installedEntries.has(target)) issues.push({ code: "REPLACEMENT_INVALID", severity: "error", recordId: entry.id, path: "entries.editionRelations", message: `Entry ${entry.id} has an unresolved revision or edition relation to ${target}` });
@@ -593,6 +601,11 @@ export async function confirmImportSet(preview: ImportSetPreview, database: Ledg
   };
   for (const packId of byId.keys()) visit(packId);
   await database.transaction("rw", database.sources, database.contentPacks, database.contentEntries, database.contentPackVersions, database.contentEntryVersions, async () => {
+    for (const item of ordered) {
+      const original = previewStates.get(item);
+      if (!original) throw new Error("Import set preview state is unavailable");
+      await assertNotStale(original, database);
+    }
     for (const item of ordered) {
       abortIfNeeded(signal);
       const original = previewStates.get(item);

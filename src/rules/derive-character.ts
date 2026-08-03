@@ -6,7 +6,7 @@ import { abilityModifier, applyEffects, evaluateCondition, type RuleContext, typ
 
 export interface DerivedCharacterIssue {
   code:
-    | "CHARACTER_LEVEL_MISMATCH" | "CLASS_MISSING" | "CLASS_MECHANICS_INVALID" | "MULTICLASS_PREREQUISITE_FAILED"
+    | "CHARACTER_LEVEL_MISMATCH" | "DUPLICATE_CLASS_SELECTION" | "CLASS_MISSING" | "CLASS_MECHANICS_INVALID" | "MULTICLASS_PREREQUISITE_FAILED"
     | "MULTICLASS_COMBINATION_UNSUPPORTED" | "MULTICLASS_PACT_SLOTS_SEPARATE" | "SUBCLASS_INVALID"
     | "FEATURE_REFERENCE_MISSING" | "ENTRY_PREREQUISITE_FAILED" | "CHOICE_UNRESOLVED" | "EQUIPMENT_UNRESOLVED" | "EFFECT_REVIEW_REQUIRED" | "EFFECT_FAILED";
   severity: "error" | "review-required";
@@ -75,6 +75,8 @@ export function deriveCharacterState(input: {
   const totalClassLevels = character.classLevels.reduce((sum, item) => sum + item.level, 0);
   if (totalClassLevels !== character.level)
     issues.push({ code: "CHARACTER_LEVEL_MISMATCH", severity: "error", recordId: character.id, message: `Character ${character.id} has inconsistent total and class levels` });
+  const duplicateClassIds = character.classLevels.map(item => item.classId).filter((id, index, ids) => ids.indexOf(id) !== index);
+  for (const classId of new Set(duplicateClassIds)) issues.push({ code: "DUPLICATE_CLASS_SELECTION", severity: "error", recordId: classId, message: `Class ${classId} occurs more than once in the character progression` });
 
   character.classLevels.forEach((selection, index) => {
     const entry = byId.get(selection.classId);
@@ -122,7 +124,10 @@ export function deriveCharacterState(input: {
     }
   });
 
-  for (const id of [character.speciesId, character.lineageId, character.legacyRaceId, character.backgroundId].filter((value): value is string => typeof value === "string")) activeEntryIds.add(id);
+  for (const id of [character.speciesId, character.lineageId, character.legacyRaceId, character.backgroundId].filter((value): value is string => typeof value === "string")) {
+    if (byId.has(id)) activeEntryIds.add(id);
+    else issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: id, message: `Selected entry ${id} is unavailable` });
+  }
   for (const featureId of classFeatureIds) {
     if (byId.has(featureId)) activeEntryIds.add(featureId);
     else issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: featureId, message: `Feature ${featureId} is unavailable` });
@@ -154,7 +159,7 @@ export function deriveCharacterState(input: {
   for (const activeEntry of effectiveEntries) for (const prerequisite of activeEntry.prerequisites) if (!evaluateCondition(prerequisite.condition, context))
     issues.push({ code: "ENTRY_PREREQUISITE_FAILED", severity: prerequisite.enforcement === "hard" ? "error" : "review-required", recordId: activeEntry.id, message: `Entry ${activeEntry.id} does not satisfy prerequisite ${prerequisite.id}` });
   const effects: Effect[] = [...effectiveEntries.flatMap(entry => entry.effects), ...choiceResolution.effects];
-  const ruleResult = applyEffects(context, effects);
+  const ruleResult = applyEffects(context, effects, { resolvedChoiceIds: choiceResolution.resolvedChoiceIds });
   for (const issue of ruleResult.issues) issues.push({
     code: issue.code === "RULE_EFFECT_FAILED" ? "EFFECT_FAILED" : issue.code === "RULE_EFFECT_REVIEW_REQUIRED" ? "EFFECT_REVIEW_REQUIRED" : "CHOICE_UNRESOLVED",
     severity: issue.severity === "error" ? "error" : "review-required",

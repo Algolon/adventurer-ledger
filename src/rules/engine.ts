@@ -62,6 +62,10 @@ export interface RuleResult {
   trace: RuleTrace[];
 }
 
+export interface ApplyEffectsOptions {
+  resolvedChoiceIds?: ReadonlySet<string>;
+}
+
 export const abilityModifier = (score: number) => Math.floor((score - 10) / 2);
 export const proficiencyBonus = (level: number) => 2 + Math.floor((Math.max(1, level) - 1) / 4);
 
@@ -119,8 +123,8 @@ function mutate(left: number, operation: "add" | "subtract" | "multiply" | "set"
   }
 }
 
-const assertNever = (effect: never): never => {
-  throw new Error(`Unhandled effect variant: ${String((effect as { type?: unknown }).type)}`);
+const assertNever = (_effect: never): never => {
+  throw new Error("Unhandled effect variant");
 };
 
 function runtimeIssue(effect: Effect, code: "RULE_EFFECT_FAILED" | "RULE_EFFECT_REVIEW_REQUIRED" | "RULE_CHOICE_REQUIRED", severity: RuntimeIssue["severity"]): RuntimeIssue {
@@ -178,7 +182,7 @@ function effectLevel(effect: Extract<Effect, { type: "unlockAtLevel" | "scaleAtL
   return effect.scope === "class" && effect.classId ? context.classLevels[effect.classId] ?? 0 : context.totalLevel;
 }
 
-function applyOne(effect: Effect, result: RuleResult): void {
+function applyOne(effect: Effect, result: RuleResult, options: ApplyEffectsOptions): void {
   const capability = effectCapability(effect.type);
   if (!evaluateCondition(effect.condition, result.context)) {
     result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Condition not met" });
@@ -194,6 +198,7 @@ function applyOne(effect: Effect, result: RuleResult): void {
       case "replaceFeature":
         context.features.delete(effect.featureId); context.features.add(effect.replacementId); break;
       case "grantChoice":
+        if (options.resolvedChoiceIds?.has(effect.choiceId)) break;
         result.pendingChoices.add(effect.choiceId);
         result.issues.push(runtimeIssue(effect, "RULE_CHOICE_REQUIRED", "rules-warning"));
         result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Choice required" });
@@ -228,7 +233,7 @@ function applyOne(effect: Effect, result: RuleResult): void {
           result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Level not met" });
           return;
         }
-        applyOne(effect.effect, result);
+        applyOne(effect.effect, result, options);
         break;
       case "scaleAtLevel": {
         const level = effectLevel(effect, context);
@@ -263,9 +268,9 @@ function applyOne(effect: Effect, result: RuleResult): void {
   }
 }
 
-export function applyEffects(initial: RuleContext, effects: readonly Effect[]): RuleResult {
+export function applyEffects(initial: RuleContext, effects: readonly Effect[], options: ApplyEffectsOptions = {}): RuleResult {
   const result = createResult(initial);
   for (const effect of [...effects].sort((left, right) => (left.priority ?? 0) - (right.priority ?? 0) || left.id.localeCompare(right.id)))
-    applyOne(effect, result);
+    applyOne(effect, result, options);
   return result;
 }

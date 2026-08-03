@@ -31,7 +31,7 @@ Next.js, React, strict TypeScript, Zod, Zustand, Dexie/IndexedDB, Vitest and lat
 Executable definitions: `src/domain/model.ts`.
 
 - Provenance/content: `Source`, `ContentPack`, `ContentEntry`; specialized class, feature, subclass, species, background, feat, spell, item, weapon, armor and tool types.
-- Declarative support: `ChoiceDefinition`, `Effect`, `PrerequisiteDefinition`, `ResourceDefinition`, `ProficiencyDefinition`.
+- Declarative support: `ChoiceDefinition`, `EquipmentBundleDefinition`, `Effect`, `PrerequisiteDefinition`, `ResourceDefinition`, `ProficiencyDefinition`.
 - Configuration: `RulesetProfile`, `Campaign`.
 - Characters: `Character`, `CharacterSelection`, `CharacterVersion`, `CharacterSnapshot`, resource/inventory/spell/attack/condition state.
 - Validation/operations: `ValidationIssue`, `OverrideDecision`, `ImportJob`, `ExportJob`, `MigrationRecord`.
@@ -54,7 +54,7 @@ flowchart TD
 
 Effects are a discriminated union. Conditions use explicit `all/any/not` and named predicates. Values are literals, safe paths or allow-listed named formulas—never executable JavaScript and never `eval`.
 
-Evaluation phases: grants/replacements; base/set calculations; min/max; modifiers; advantage/tags; actions/resources; validation. Source/effect priorities guarantee deterministic order. Every effect reports applied/skipped/error with a reason; silent overwrite is forbidden.
+Effects run in deterministic priority/ID order. The compile-time capability matrix assigns `automatic`, `choice-driven`, or `manual-adjudication` to every allowed variant. Every effect reports applied, gated, choice-required, review-required, or error with a reason; silent ignore is forbidden. Choice, equipment, and character derivation are separate pure resolution layers feeding the effect runtime.
 
 ## Private content packs
 
