@@ -243,8 +243,18 @@ export interface RuntimeFragment {
   temporaryHitPoints?: number;
   hitDiceRemaining?: number;
   exhaustion?: number;
-  /** Only the resources whose current uses changed. */
+  /** Only the resources whose current uses changed, and had a value on this side. */
   resourceUses?: Readonly<Record<ID, number>>;
+  /**
+   * Resource keys that are absent on this side of the change.
+   *
+   * An absent key is a real state, not a missing one: the resolver reads it as
+   * "starts full". A value map alone cannot express it, because writing the
+   * fragment back is a merge and a merge cannot delete a key. Listing the keys
+   * separately keeps absence typed and explicit instead of encoding it as a
+   * sentinel number.
+   */
+  resourceUsesRemoved?: readonly ID[];
   /** The whole condition list, when it changed. */
   conditions?: readonly ConditionStateRecord[];
 }

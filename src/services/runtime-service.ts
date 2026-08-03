@@ -12,9 +12,22 @@
  * healing 5 at 9/10 clamps to 10 so "damage 5" would land at 5, and damage
  * absorbed by temporary hit points cannot be reversed by healing at all.
  *
+ * A resource fragment records values and absences separately. A missing
+ * `resourceUses` key is a real state that the resolver reads as "starts full",
+ * so an action that introduces a key must be reversed by deleting it again —
+ * which a value merge cannot do. `resourceUsesRemoved` carries those keys, and
+ * `fragmentRestoresExactly` proves the whole fragment round-trips before the
+ * action is allowed to call itself reversible.
+ *
  * Undo appends a new typed action referencing the one it reverses; history is
  * never deleted, and a reversed action is marked spent so it cannot be undone
  * twice.
+ *
+ * Known bound: `undoLast` searches the most recent actions only (the repository
+ * default is 50). Deep history stays readable, but an undo target older than
+ * that window is not offered. No acceptance criterion requires unbounded undo
+ * depth, and widening it is a history-browsing feature rather than a runtime
+ * correctness fix.
  */
 import type {
   CharacterActionRecord,
@@ -100,20 +113,27 @@ export function runtimeFragmentDiff(
   const resourceKeys = new Set([...Object.keys(previous.resourceUses), ...Object.keys(next.resourceUses)]);
   const beforeUses: Record<ID, number> = {};
   const afterUses: Record<ID, number> = {};
+  const beforeRemoved: ID[] = [];
+  const afterRemoved: ID[] = [];
   let resourcesChanged = false;
   for (const key of [...resourceKeys].sort()) {
     const from = previous.resourceUses[key];
     const to = next.resourceUses[key];
     if (from === to) continue;
     resourcesChanged = true;
-    // A resource that did not exist before is restored by removing it, which the
-    // apply step handles by writing back only the keys recorded here.
-    if (from !== undefined) beforeUses[key] = from;
-    if (to !== undefined) afterUses[key] = to;
+    // A key that is absent on one side is recorded as an explicit removal for
+    // that side. Recording only the values would make the absence unrecoverable,
+    // because applying the fragment merges and a merge cannot delete a key.
+    if (from === undefined) beforeRemoved.push(key);
+    else beforeUses[key] = from;
+    if (to === undefined) afterRemoved.push(key);
+    else afterUses[key] = to;
   }
   if (resourcesChanged) {
     before.resourceUses = beforeUses;
     after.resourceUses = afterUses;
+    if (beforeRemoved.length) before.resourceUsesRemoved = beforeRemoved;
+    if (afterRemoved.length) after.resourceUsesRemoved = afterRemoved;
     changed = true;
   }
 
@@ -136,9 +156,43 @@ export function applyRuntimeFragment(
     const value = fragment[field];
     if (typeof value === "number") next[field] = value;
   }
-  if (fragment.resourceUses) next.resourceUses = { ...state.resourceUses, ...fragment.resourceUses };
+  if (fragment.resourceUses || fragment.resourceUsesRemoved) {
+    const uses: Record<ID, number> = { ...state.resourceUses, ...fragment.resourceUses };
+    // Removals are applied after the merge, because deleting a key is exactly
+    // what a merge cannot express.
+    for (const key of fragment.resourceUsesRemoved ?? []) delete uses[key];
+    next.resourceUses = uses;
+  }
   if (fragment.conditions) next.conditions = fragment.conditions.map(item => ({ ...item }));
   return next;
+}
+
+/** Presence-sensitive comparison: an absent key and a numeric value differ. */
+const sameResourceUses = (left: Readonly<Record<ID, number>>, right: Readonly<Record<ID, number>>) => {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) if (left[key] !== right[key]) return false;
+  return true;
+};
+
+/**
+ * True when applying `fragment` to `next` reproduces `previous` exactly.
+ *
+ * Reversibility is derived from this check rather than from the mere presence
+ * of a stored fragment, so an action cannot be labelled reversible unless its
+ * fragment demonstrably restores the prior runtime state. Deriving the label
+ * from the property it claims is what keeps the two from drifting apart.
+ */
+export function fragmentRestoresExactly(
+  previous: CharacterRuntimeStateRecord,
+  next: CharacterRuntimeStateRecord,
+  fragment: RuntimeFragment,
+): boolean {
+  const restored = applyRuntimeFragment(next, fragment);
+  return (
+    NUMERIC_FIELDS.every(field => restored[field] === previous[field]) &&
+    sameResourceUses(restored.resourceUses, previous.resourceUses) &&
+    sameConditions(restored.conditions, previous.conditions)
+  );
 }
 
 /** Pure preview of an operation so the UI can show the result before committing. */
@@ -335,6 +389,10 @@ export class CharacterRuntimeService {
         }
 
         const diff = runtimeFragmentDiff(runtime, proposed);
+        // The label is derived from the fragment actually restoring the prior
+        // state, not from the fragment merely existing.
+        const reversible =
+          intent.kind === "operation" && diff.changed && fragmentRestoresExactly(runtime, proposed, diff.before);
         const next: CharacterRuntimeStateRecord = { ...proposed, revision: runtime.revision + 1, updatedAt: now };
         const accepted = await repositories.runtime.replace(next, expectedRuntimeRevision);
         if (!accepted) return stale(characterId, expectedRuntimeRevision, null);
@@ -350,10 +408,11 @@ export class CharacterRuntimeService {
           ...(delta !== undefined ? { delta } : {}),
           ...(targetId ? { targetId } : {}),
           resultingRuntimeRevision: next.revision,
-          // An action is only reversible when its prior values were captured.
+          // The fragments are history for every action that changed something;
+          // `reversible` is the narrower claim that `before` can restore it.
           ...(diff.changed ? { before: diff.before, after: diff.after } : {}),
           ...(intent.kind === "restore" ? { reversesActionId: intent.reversesActionId } : {}),
-          reversible: intent.kind === "operation" && diff.changed,
+          reversible,
           ...(intent.kind === "operation" && intent.note ? { note: intent.note } : {}),
           createdAt: now,
           updatedAt: now,

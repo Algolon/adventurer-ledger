@@ -5,6 +5,7 @@ import { closeHarnesses, createHarness, expectOk, type Harness } from "@/tests/f
 import { SYNTHETIC_CHOICES, SYNTHETIC_EQUIPMENT_CHOICE, SYNTHETIC_IDS, SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
 import type { CharacterDraftBuild, CharacterRecord } from "@/src/domain/character-record";
 import type { CommitResult, DraftSnapshot } from "@/src/services/character-services";
+import type { RuntimeResult } from "@/src/services/runtime-service";
 
 /**
  * Adversarial review of every M2.1 write path.
@@ -274,6 +275,77 @@ describe("revision integrity", () => {
       harness.library.setArchived("character:brammel", 1, true, "operation:replayed-version"),
     ).rejects.toThrow();
     expect((await harness.database.characters.get("character:brammel"))?.status).toBe("active");
+  });
+});
+
+describe("undo rollback", () => {
+  /** Spends one use from a runtime whose resource map has no key for it. */
+  async function spendFromAbsentKey() {
+    await commitBrammel();
+    const seeded = await harness.database.characterRuntimeStates.get("character:brammel");
+    await harness.database.characterRuntimeStates.put({ ...seeded!, resourceUses: {} });
+    const before = (await harness.database.characterRuntimeStates.get("character:brammel"))!;
+    const spend = expectOk<RuntimeResult>(
+      await harness.runtime.apply({
+        characterId: "character:brammel",
+        expectedRuntimeRevision: before.revision,
+        operationId: "operation:spend",
+        operation: { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 1 },
+      }),
+    );
+    return { spend, spentState: (await harness.database.characterRuntimeStates.get("character:brammel"))! };
+  }
+
+  it("rolls back the restored runtime when writing the undo action fails", async () => {
+    const { spend, spentState } = await spendFromAbsentKey();
+    // Occupy the action operation ID the undo will use, so its append throws
+    // after the runtime has already been restored inside the transaction.
+    await harness.database.characterActions.add({
+      id: "character:other:action:1",
+      characterId: "character:other",
+      sequence: 1,
+      operationId: "operation:undo",
+      kind: "damage",
+      resultingRuntimeRevision: 1,
+      reversible: false,
+      createdAt: "2026-08-03T08:00:00.000Z",
+      updatedAt: "2026-08-03T08:00:00.000Z",
+    });
+
+    await expect(harness.runtime.undoLast("character:brammel", spend.runtime.revision, "operation:undo")).rejects.toThrow();
+
+    // The runtime restoration was rolled back with the failed action write.
+    const after = await harness.database.characterRuntimeStates.get("character:brammel");
+    expect(after).toEqual(spentState);
+    expect(after?.resourceUses[SYNTHETIC_IDS.resource]).toBe(2);
+    // And the action was not consumed, so the undo can still be retried.
+    expect((await harness.database.characterActions.get(spend.actionId))?.reversible).toBe(true);
+  });
+
+  it("writes nothing and consumes nothing when the runtime revision is stale", async () => {
+    const { spend, spentState } = await spendFromAbsentKey();
+    const actionsBefore = await harness.database.characterActions.count();
+
+    const outcome = await harness.runtime.undoLast("character:brammel", spend.runtime.revision - 1, "operation:undo-stale");
+
+    expect(outcome.status).toBe("stale");
+    expect(await harness.database.characterRuntimeStates.get("character:brammel")).toEqual(spentState);
+    expect(await harness.database.characterActions.count()).toBe(actionsBefore);
+    expect((await harness.database.characterActions.get(spend.actionId))?.reversible).toBe(true);
+  });
+
+  it("restores and consumes atomically, and refuses a second undo", async () => {
+    const { spend } = await spendFromAbsentKey();
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", spend.runtime.revision, "operation:undo"));
+
+    // Restoration and consumption both landed.
+    expect((await harness.database.characterRuntimeStates.get("character:brammel"))?.resourceUses).toEqual({});
+    expect((await harness.database.characterActions.get(spend.actionId))?.reversible).toBe(false);
+
+    const second = await harness.runtime.undoLast("character:brammel", spend.runtime.revision + 1, "operation:undo-2");
+    expect(second.status).toBe("invalid");
+    expect((await harness.database.characterRuntimeStates.get("character:brammel"))?.resourceUses).toEqual({});
   });
 });
 

@@ -7,7 +7,8 @@ import {
   SYNTHETIC_IDS,
   SYNTHETIC_RULESET_ID,
 } from "@/src/content/runefolio-synthetic";
-import type { CharacterDraftBuild } from "@/src/domain/character-record";
+import type { CharacterDraftBuild, CharacterRuntimeStateRecord } from "@/src/domain/character-record";
+import { migrateLegacyCharacter } from "@/src/migrations/character-m2-1";
 import type { CommitResult, DraftSnapshot } from "@/src/services/character-services";
 import type { LevelUpPreview, LevelUpResult } from "@/src/services/levelup-service";
 import type { RuntimeResult } from "@/src/services/runtime-service";
@@ -1099,6 +1100,124 @@ describe("exact runtime undo", () => {
     expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(3);
   });
 
+  it("restores an explicit full value rather than deleting the key", async () => {
+    // The seeded runtime already holds an explicit 3, which is the canonical
+    // prior representation here and must survive the round trip as a value.
+    expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(3);
+    expectOk<RuntimeResult>(await apply(1, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 1 }, "operation:spend"));
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 2, "operation:undo"));
+
+    const restored = await runtimeOf();
+    expect(restored?.resourceUses[SYNTHETIC_IDS.resource]).toBe(3);
+    expect(SYNTHETIC_IDS.resource in restored!.resourceUses).toBe(true);
+  });
+
+  it("restores exactly 1 when a spend of 5 was clamped from 1", async () => {
+    expectOk<RuntimeResult>(await apply(1, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 2 }, "operation:down-to-one"));
+    expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(1);
+
+    expectOk<RuntimeResult>(await apply(2, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 5 }, "operation:overspend"));
+    expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(0);
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", 3, "operation:undo"));
+    // Adding back five would land at 5; the stored prior value is 1.
+    expect((await runtimeOf())?.resourceUses[SYNTHETIC_IDS.resource]).toBe(1);
+  });
+
+  describe("a resource key that is absent before the action", () => {
+    /** Absence is what the v4->v5 migration writes and the resolver reads as full. */
+    const clearResourceMap = async () => {
+      const seeded = await runtimeOf();
+      await harness.database.characterRuntimeStates.put({ ...seeded!, resourceUses: {} });
+      return (await runtimeOf())!;
+    };
+
+    it("is the state the v4 to v5 migration produces", () => {
+      const { runtime } = migrateLegacyCharacter({ id: "character:legacy", name: "Legacy", level: 2, maximumHitPoints: 12 });
+      expect(runtime.resourceUses).toEqual({});
+    });
+
+    it("is restored to absence, and still resolves as full, after undoing a spend", async () => {
+      const before = await clearResourceMap();
+      expect(SYNTHETIC_IDS.resource in before.resourceUses).toBe(false);
+
+      const spend = expectOk<RuntimeResult>(
+        await apply(before.revision, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 1 }, "operation:spend"),
+      );
+      expect(spend.runtime.resourceUses[SYNTHETIC_IDS.resource]).toBe(2);
+      expect(spend.undoable).toBe(true);
+
+      expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", spend.runtime.revision, "operation:undo"));
+
+      const restored = await runtimeOf();
+      // The exact prior stored representation is absence, not an explicit 3.
+      expect(SYNTHETIC_IDS.resource in restored!.resourceUses).toBe(false);
+      expect(restored!.resourceUses).toEqual({});
+      // And the derived sheet still shows it as full.
+      const sheet = await harness.query.sheet("character:brammel");
+      const resource = sheet?.resources.find(item => item.id === SYNTHETIC_IDS.resource);
+      expect(resource?.current.value).toBe(3);
+      expect(resource?.maximum.value).toBe(3);
+    });
+
+    it("is restored to absence after undoing a recovery", async () => {
+      const before = await clearResourceMap();
+      // Recovering from full is clamped, so this also covers a clamped recover.
+      const recover = expectOk<RuntimeResult>(
+        await apply(before.revision, { kind: "resource-recover", resourceId: SYNTHETIC_IDS.resource, amount: 2 }, "operation:recover"),
+      );
+      if (recover.undoable) {
+        expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", recover.runtime.revision, "operation:undo"));
+        expect((await runtimeOf())!.resourceUses).toEqual({});
+      } else {
+        // Clamped to the same value: nothing changed, so nothing claims reversal.
+        expect((await runtimeOf())!.resourceUses[SYNTHETIC_IDS.resource] ?? 3).toBe(3);
+      }
+    });
+
+    it("consumes the reversed action only after the restoration succeeded", async () => {
+      const before = await clearResourceMap();
+      const spend = expectOk<RuntimeResult>(
+        await apply(before.revision, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 1 }, "operation:spend"),
+      );
+      const beforeUndo = await harness.database.characterActions.get(spend.actionId);
+      expect(beforeUndo?.reversible).toBe(true);
+
+      expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", spend.runtime.revision, "operation:undo"));
+
+      expect((await harness.database.characterActions.get(spend.actionId))?.reversible).toBe(false);
+      expect((await runtimeOf())!.resourceUses).toEqual({});
+      // A second undo finds nothing left to reverse.
+      expect((await harness.runtime.undoLast("character:brammel", 3, "operation:undo-2")).status).toBe("invalid");
+    });
+  });
+
+  it("does not disturb unrelated resource keys changed before the undone action", async () => {
+    // Two resources: one the action touches, one it must leave alone. The
+    // second ID is not in the slice, so it can only be reached by direct state.
+    const other = "resource:other-synthetic";
+    const seeded = await runtimeOf();
+    await harness.database.characterRuntimeStates.put({
+      ...seeded!,
+      resourceUses: { [SYNTHETIC_IDS.resource]: 3, [other]: 1 },
+      resourceMaximaAtLastSync: { ...seeded!.resourceMaximaAtLastSync, [other]: 2 },
+    });
+    const before = (await runtimeOf())!;
+
+    const spend = expectOk<RuntimeResult>(
+      await apply(before.revision, { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 1 }, "operation:spend"),
+    );
+    expect(spend.runtime.resourceUses[other]).toBe(1);
+
+    expectOk<RuntimeResult>(await harness.runtime.undoLast("character:brammel", spend.runtime.revision, "operation:undo"));
+
+    const restored = await runtimeOf();
+    expect(restored!.resourceUses[SYNTHETIC_IDS.resource]).toBe(3);
+    // The unrelated key is neither overwritten nor deleted.
+    expect(restored!.resourceUses[other]).toBe(1);
+    expect(restored!.resourceUses).toEqual(before.resourceUses);
+  });
+
   it("restores the previous condition list on undo in both directions", async () => {
     expectOk<RuntimeResult>(await apply(1, { kind: "condition-add", conditionId: "condition:winded" }, "operation:add"));
     expectOk<RuntimeResult>(await apply(2, { kind: "condition-add", conditionId: "condition:braced" }, "operation:add-2"));
@@ -1136,20 +1255,65 @@ describe("exact runtime undo", () => {
     expect(actions[1].before).toBeUndefined();
   });
 
-  it("never claims reversibility without a stored prior fragment", async () => {
-    for (const operation of [
-      { kind: "damage", amount: 3 },
-      { kind: "heal", amount: 2 },
-      { kind: "temporary-hit-points", amount: 5 },
-      { kind: "short-rest" },
-      { kind: "long-rest" },
-    ] as const) {
-      const runtime = await runtimeOf();
-      await apply(runtime!.revision, operation, `operation:sweep-${operation.kind}`);
-    }
-    const actions = await harness.database.characterActions.where("characterId").equals("character:brammel").toArray();
-    for (const action of actions) expect(action.reversible).toBe(Boolean(action.before));
+  /**
+   * The invariant, proved by round-trip rather than by shape.
+   *
+   * Asserting `reversible === Boolean(before)` only proves a fragment was
+   * stored, not that it restores anything. A fragment can be present and still
+   * be unable to express the change it recorded, which is exactly how an undo
+   * that silently kept a resource spent passed the old assertion.
+   */
+  const REVERSIBILITY_SWEEP = [
+    { kind: "damage", amount: 3 },
+    { kind: "heal", amount: 2 },
+    { kind: "temporary-hit-points", amount: 5 },
+    { kind: "resource-spend", resourceId: SYNTHETIC_IDS.resource, amount: 1 },
+    { kind: "resource-recover", resourceId: SYNTHETIC_IDS.resource, amount: 1 },
+    { kind: "condition-add", conditionId: "condition:winded" },
+    { kind: "condition-remove", conditionId: "condition:winded" },
+    { kind: "short-rest" },
+    { kind: "long-rest" },
+  ] as const;
+
+  /** The runtime fields an undo must reproduce exactly. */
+  const affectedState = (runtime: CharacterRuntimeStateRecord | undefined) => ({
+    currentHitPoints: runtime?.currentHitPoints,
+    temporaryHitPoints: runtime?.temporaryHitPoints,
+    hitDiceRemaining: runtime?.hitDiceRemaining,
+    exhaustion: runtime?.exhaustion,
+    // Serialized so an absent key and an explicit value cannot compare equal.
+    resourceUses: JSON.stringify(runtime?.resourceUses ?? {}),
+    conditions: runtime?.conditions.map(item => item.conditionId) ?? [],
   });
+
+  for (const [label, seed] of [
+    ["a populated resource map", undefined],
+    ["an absent resource key", {}],
+  ] as const)
+    it(`every action labelled reversible restores the exact prior state, with ${label}`, async () => {
+      if (seed) {
+        const seeded = await runtimeOf();
+        await harness.database.characterRuntimeStates.put({ ...seeded!, resourceUses: seed });
+      }
+
+      for (const operation of REVERSIBILITY_SWEEP) {
+        const before = await runtimeOf();
+        const applied = await apply(before!.revision, operation, `operation:sweep-${operation.kind}`);
+        if (applied.status !== "ok") continue;
+        const action = (
+          await harness.database.characterActions.where("characterId").equals("character:brammel").sortBy("sequence")
+        ).at(-1);
+
+        if (!action?.reversible) continue;
+        // reversible action -> apply -> apply the recorded undo -> the exact
+        // affected runtime state equals the state before the action.
+        const after = await runtimeOf();
+        expectOk<RuntimeResult>(
+          await harness.runtime.undoLast("character:brammel", after!.revision, `operation:undo-${operation.kind}`),
+        );
+        expect(affectedState(await runtimeOf())).toEqual(affectedState(before));
+      }
+    });
 
   it("cannot undo the same action twice", async () => {
     expectOk<RuntimeResult>(await apply(1, { kind: "damage", amount: 4 }, "operation:hit"));
