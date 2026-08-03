@@ -1,4 +1,18 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+/** Settings is the app-bar button on mobile and a rail entry once the rail appears. */
+async function openSettings(page: Page) {
+  const candidates = page.getByRole("button", { name: /^(Open Settings|Settings)$/ });
+  const total = await candidates.count();
+  for (let index = 0; index < total; index += 1) {
+    const candidate = candidates.nth(index);
+    if (await candidate.isVisible()) {
+      await candidate.click();
+      return;
+    }
+  }
+  throw new Error("No visible Settings control was found");
+}
 
 test("keeps the old shell active until explicit update consent", async ({
   page,
@@ -8,7 +22,9 @@ test("keeps the old shell active until explicit update consent", async ({
   await expect(page.locator("body")).toHaveAttribute("data-app-build", "old");
   await expect(page.locator(".offline")).toContainText("Offline ready");
 
-  await page.getByRole("button", { name: "Imports & exports", exact: true }).click();
+  // Imports and exports moved under Settings in the M2.1 information architecture.
+  await openSettings(page);
+  await page.getByRole("button", { name: /^Imports and exports$/ }).click();
   await page.getByLabel("Pack JSON").fill(JSON.stringify({
     schemaVersion: 1,
     pack: {id:"pack:controlled-update",name:"Controlled Update Pack",version:"1.0.0",rulesEditions:["homebrew"],visibility:"private",licenseType:"original",exportRestricted:false,includeFullText:true},
