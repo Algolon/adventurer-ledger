@@ -1,1 +1,73 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://adventurer-ledger.local/schemas/content-pack.schema.json","title":"Adventurer Ledger content pack","type":"object","additionalProperties":false,"required":["schemaVersion","pack","sources","entries"],"properties":{"schemaVersion":{"const":1},"pack":{"type":"object","additionalProperties":false,"required":["id","name","version","rulesEditions","visibility","licenseType","exportRestricted","includeFullText"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"version":{"type":"string","pattern":"^\\d+\\.\\d+\\.\\d+"},"rulesEditions":{"type":"array","items":{"enum":["2014","2024","mixed","homebrew"]}},"visibility":{"enum":["public","private"]},"licenseType":{"type":"string"},"exportRestricted":{"type":"boolean"},"includeFullText":{"type":"boolean"}}},"sources":{"type":"array","maxItems":500,"items":{"type":"object"}},"entries":{"type":"array","maxItems":25000,"items":{"type":"object","required":["id","slug","name","category","rulesEdition","sourceId","licenseType","visibility","version","revision","private","exportRestricted"]}}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adventurer-ledger.local/schemas/content-pack.schema.json",
+  "title": "Adventurer Ledger content pack v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "pack", "sources", "entries"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "pack": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "version", "rulesEditions", "visibility", "licenseType", "exportRestricted", "includeFullText", "dependencies", "optionalDependencies"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "name": { "type": "string", "minLength": 1 }, "description": { "type": "string" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+" }, "coverage": { "enum": ["pilot", "partial", "complete"], "default": "complete" }, "rulesEditions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/edition" } },
+        "visibility": { "enum": ["public", "private"] }, "licenseType": { "type": "string" }, "exportRestricted": { "type": "boolean" }, "includeFullText": { "type": "boolean" },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "optionalDependencies": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+      }
+    },
+    "sources": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/source" } },
+    "entries": { "type": "array", "maxItems": 25000, "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "edition": { "enum": ["2014", "2024", "mixed", "homebrew"] },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "abbreviation", "edition", "type", "licenseType", "visibility", "priority", "enabledByDefault", "campaignIds", "version"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "name": { "type": "string" }, "abbreviation": { "type": "string" }, "edition": { "$ref": "#/$defs/edition" }, "type": { "enum": ["core", "supplement", "adventure", "free-rules", "srd", "homebrew", "campaign"] }, "licenseType": { "type": "string" }, "visibility": { "enum": ["public", "private", "reference-only"] }, "priority": { "type": "integer" }, "enabledByDefault": { "type": "boolean" }, "campaignIds": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "version": { "type": "string" }, "publicationDate": { "type": "string" }, "replacementOf": { "$ref": "#/$defs/id" }, "replacedBy": { "$ref": "#/$defs/id" }, "pageFormat": { "type": "string" }, "notes": { "type": "string" }, "localFileReference": { "type": "string" } }
+    },
+    "locator": { "type": "object", "additionalProperties": false, "required": ["sourceId", "page"], "properties": { "sourceId": { "$ref": "#/$defs/id" }, "page": { "type": "string" }, "section": { "type": "string" }, "printPage": { "type": "string" }, "localFileKey": { "type": "string" } } },
+    "link": { "type": "object", "additionalProperties": false, "required": ["type", "targetId", "required"], "properties": { "type": { "enum": ["feature", "subclass", "feat", "proficiency", "equipment", "spell", "spell-list", "choice", "effect", "attack", "resource", "mastery", "summon", "wild-shape", "familiar", "companion", "edition-equivalent", "replacement"] }, "targetId": { "$ref": "#/$defs/id" }, "required": { "type": "boolean" }, "level": { "type": "integer", "minimum": 1, "maximum": 30 } } },
+    "value": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": { "kind": { "const": "literal" }, "value": { "type": ["number", "string", "boolean"] } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "const": "path" }, "path": { "type": "string" } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind", "formula", "variables"], "properties": { "kind": { "const": "formula" }, "formula": { "enum": ["proficiencyBonus", "abilityModifier"] }, "variables": { "type": "array", "items": { "type": "string" } } } }
+    ] },
+    "effect": {
+      "type": "object", "required": ["id", "type"],
+      "allOf": [{ "properties": { "id": { "$ref": "#/$defs/id" }, "type": { "enum": ["grantProficiency", "grantExpertise", "grantFeature", "replaceFeature", "disableFeature", "grantChoice", "modifyAbility", "modifyAbilityMaximum", "modifySkill", "modifySavingThrow", "modifyArmorClass", "modifyInitiative", "modifySpeed", "modifyCriticalRange", "modifyAttack", "modifyDamage", "addSpell", "addSpellList", "addResource", "addAttack", "addAction", "addBonusAction", "addReaction", "setMinimum", "setMaximum", "setCalculation", "addAdvantage", "addDisadvantage", "rechargeOnShortRest", "rechargeOnLongRest", "unlockAtLevel", "scaleAtLevel", "addWeaponMastery", "grantFightingStyle", "grantManeuver", "grantInvocation", "grantMetamagic"] } } },
+        { "oneOf": [
+          { "properties": { "type": { "enum": ["grantProficiency", "grantExpertise"] } }, "required": ["proficiencyId"] },
+          { "properties": { "type": { "enum": ["grantFeature", "disableFeature"] } }, "required": ["featureId"] },
+          { "properties": { "type": { "const": "replaceFeature" } }, "required": ["featureId", "replacementId"] },
+          { "properties": { "type": { "const": "grantChoice" } }, "required": ["choiceId"] },
+          { "properties": { "type": { "enum": ["modifyAbility", "modifyAbilityMaximum"] } }, "required": ["ability", "operation", "value"] },
+          { "properties": { "type": { "enum": ["modifySkill", "modifySavingThrow", "setMinimum", "setMaximum", "setCalculation"] } }, "required": ["target", "value"] },
+          { "properties": { "type": { "enum": ["modifyArmorClass", "modifyInitiative", "modifySpeed", "modifyCriticalRange"] } }, "required": ["operation", "value"] },
+          { "properties": { "type": { "enum": ["modifyAttack", "modifyDamage"] } }, "required": ["selector", "operation", "value"] },
+          { "properties": { "type": { "const": "addSpell" } }, "required": ["spellId"] }, { "properties": { "type": { "const": "addSpellList" } }, "required": ["spellListId"] }, { "properties": { "type": { "const": "addResource" } }, "required": ["resource"] },
+          { "properties": { "type": { "enum": ["addAttack", "addAction", "addBonusAction", "addReaction"] } }, "required": ["definitionId"] },
+          { "properties": { "type": { "enum": ["addAdvantage", "addDisadvantage"] } }, "required": ["target"] },
+          { "properties": { "type": { "enum": ["rechargeOnShortRest", "rechargeOnLongRest"] } }, "required": ["resourceId"] },
+          { "properties": { "type": { "const": "unlockAtLevel" } }, "required": ["level", "effect"] }, { "properties": { "type": { "const": "scaleAtLevel" } }, "required": ["levels", "target"] },
+          { "properties": { "type": { "enum": ["addWeaponMastery", "grantFightingStyle", "grantManeuver", "grantInvocation", "grantMetamagic"] } }, "required": ["optionId"] }
+        ] }
+      ]
+    },
+    "entryBase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "slug", "name", "aliases", "category", "rulesEdition", "sourceId", "sourceLocator", "reviewStatus", "licenseType", "visibility", "prerequisites", "choices", "effects", "links", "mechanics", "conflict", "tags", "version", "revision", "editionRelations", "legacy", "optional", "private", "exportRestricted", "createdAt", "updatedAt"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, "name": { "type": "string" }, "aliases": { "type": "array", "items": { "type": "string" } }, "category": { "type": "string" }, "rulesEdition": { "$ref": "#/$defs/edition" }, "sourceId": { "$ref": "#/$defs/id" }, "sourceLocator": { "$ref": "#/$defs/locator" }, "reviewStatus": { "enum": ["extracted", "text-reviewed", "mechanics-reviewed", "engine-verified"] }, "licenseType": { "type": "string" }, "visibility": { "type": "string" }, "fullText": { "type": "string" }, "summary": { "type": "string" }, "prerequisites": { "type": "array" }, "choices": { "type": "array" }, "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } }, "links": { "type": "array", "items": { "$ref": "#/$defs/link" } }, "mechanics": { "type": "object" }, "conflict": { "type": "object" }, "tags": { "type": "array", "items": { "type": "string" } }, "version": { "type": "string" }, "revision": { "type": "integer", "minimum": 1 }, "editionRelations": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "legacy": { "type": "boolean" }, "optional": { "type": "boolean" }, "private": { "type": "boolean" }, "exportRestricted": { "type": "boolean" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }, "sourceBook": { "type": "string" }, "sourcePage": { "type": "string" }, "sourceSection": { "type": "string" }, "errataVersion": { "type": "string" }, "replacementOf": { "$ref": "#/$defs/id" }, "replacedBy": { "$ref": "#/$defs/id" } }
+    },
+    "entry": {
+      "allOf": [{ "$ref": "#/$defs/entryBase" }, { "oneOf": [
+        { "properties": { "category": { "const": "class" }, "mechanics": { "required": ["hitDie", "primaryAbilities", "savingThrows", "progression", "subclassLevel", "subclassIds"] } } },
+        { "properties": { "category": { "const": "class-feature" }, "mechanics": { "required": ["classId", "level", "featureType"] } } },
+        { "properties": { "category": { "const": "subclass" }, "mechanics": { "required": ["classId", "progression"] } } },
+        { "properties": { "category": { "enum": ["species", "race", "lineage", "background", "feat", "spell", "item", "weapon", "armor", "tool", "monster", "proficiency", "spell-list", "fighting-style", "weapon-mastery", "maneuver", "invocation", "metamagic", "infusion", "pact-boon", "condition", "resource", "rule"] } } }
+      ] }]
+    }
+  }
+}

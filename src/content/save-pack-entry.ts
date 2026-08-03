@@ -4,6 +4,7 @@ import {
   ContentPackRepository,
 } from "@/src/storage/content-repositories";
 import type { LedgerDB } from "@/src/storage/db";
+import { packCoverageMatchesIdentity } from "@/src/domain/content-pack";
 
 export interface PackEntrySave {
   editingPackId?: string;
@@ -15,6 +16,8 @@ export async function savePackEntry(
   database: LedgerDB,
   request: PackEntrySave,
 ): Promise<void> {
+  if (!packCoverageMatchesIdentity(request.pack.id, request.pack.name, request.pack.coverage))
+    throw new Error(`Content pack ${request.pack.id} has inconsistent coverage metadata`);
   await database.transaction(
     "rw",
     database.sources,

@@ -17,7 +17,9 @@
     "verify:build": "node scripts/verify-static-build.mjs",
     "verify:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger node scripts/verify-static-build.mjs",
     "preview": "npm run build && node scripts/serve-static.mjs",
-    "preview:update": "node scripts/build-update-fixtures.mjs && cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger PREVIEW_ROOT=.playwright-update/old PREVIEW_NEXT_ROOT=.playwright-update/new node scripts/serve-static.mjs"
+    "preview:update": "node scripts/build-update-fixtures.mjs && cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger PREVIEW_ROOT=.playwright-update/old PREVIEW_NEXT_ROOT=.playwright-update/new node scripts/serve-static.mjs",
+    "ingest:private-pdf": "node scripts/ingest-private-pdf.mjs",
+    "privacy:scan": "node scripts/privacy-scan.mjs"
   },
   "dependencies": {
     "dexie": "^4.2.0",
