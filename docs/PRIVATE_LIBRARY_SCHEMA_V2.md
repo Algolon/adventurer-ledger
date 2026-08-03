@@ -26,10 +26,7 @@ Defaults make old records lossless and importable; they do not claim editorial a
 
 The command accepts only explicit absolute paths, calls local `pdftotext`, writes mode `0600`, refuses repository output, and never prints extracted content. It has no downloader, scraper, OCR service, upload, or network path. The private manifest supplies structured records and explicit PDF page numbers; page text is inserted only into `fullText` in the private output.
 
-Recommended directories, both outside the repository:
-
-- `/Users/omarjolein/Documents/AdventurerLedgerPrivateSources/`
-- `/Users/omarjolein/Documents/AdventurerLedgerPrivateOutput/`
+Keep both the source directory and generated-output directory outside the repository. Pass their explicit absolute paths only at execution time; do not record personal filesystem locations in repository files or diagnostics.
 
 The bounded local pilot uses ID `private-phb-2024-brammel-pilot` with `coverage: "pilot"`. Eventual complete outputs may use IDs such as `private-phb-2024`; all private outputs match `*.private.json` and must never be committed.
 
