@@ -6,7 +6,10 @@ import type {
   ContentPackVersion,
   Source,
 } from "@/src/domain/model";
+import type { ChoiceDefinition, Effect, EquipmentBundleNode } from "@/src/domain/model";
 import { validateContentPackJson } from "@/src/import/validate-pack";
+import { effectCapability } from "@/src/rules/effect-capabilities";
+import { packCoveragePresentation } from "@/src/domain/pack-coverage";
 import type { LedgerDB } from "@/src/storage/db";
 
 export type ImportIssueCode =
@@ -25,13 +28,19 @@ export type ImportIssueCode =
   | "MISSING_REFERENCE"
   | "ALIAS_CONFLICT"
   | "REPLACEMENT_INVALID"
-  | "DEPENDENCY_CYCLE";
+  | "DEPENDENCY_CYCLE"
+  | "MISSING_ITEM_REFERENCE"
+  | "MISSING_EQUIPMENT_BUNDLE"
+  | "EFFECT_REVIEW_REQUIRED"
+  | "CONFLICT_POLICY_MISMATCH"
+  | "CONFLICT_REVIEW_REQUIRED";
 export interface ImportIssue {
   code: ImportIssueCode;
   severity: "error" | "warning";
   message: string;
   path?: string;
   recordId?: string;
+  targetId?: string;
 }
 export interface ImportPlan {
   sources: { add: string[]; update: string[] };
@@ -84,6 +93,59 @@ const compareVersions = (left: string, right: string) => {
   }
   return 0;
 };
+
+function nestedEffects(entry: Pick<ContentEntry, "effects" | "choices">): Effect[] {
+  const output: Effect[] = [];
+  const addEffect = (effect: Effect) => {
+    output.push(effect);
+    if (effect.type === "unlockAtLevel") addEffect(effect.effect);
+  };
+  const addChoice = (choice: ChoiceDefinition) => {
+    for (const option of choice.options) {
+      for (const effect of option.effects ?? []) addEffect(effect);
+      for (const child of option.childChoices ?? []) addChoice(child);
+    }
+    for (const child of choice.childChoices ?? []) addChoice(child);
+  };
+  for (const effect of entry.effects) addEffect(effect);
+  for (const choice of entry.choices) addChoice(choice);
+  return output;
+}
+
+function runtimeCapabilityIssues(document: ContentPackDocument): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  for (const entry of document.entries) for (const effect of nestedEffects(entry)) {
+    if (effectCapability(effect.type).runtime === "review-required") issues.push({
+      code: "EFFECT_REVIEW_REQUIRED",
+      severity: "warning",
+      recordId: entry.id,
+      path: "entries.effects",
+      message: `Entry ${entry.id} contains effect ${effect.id} that requires manual adjudication`,
+    });
+  }
+  return issues;
+}
+
+function equipmentReferenceIssues(entries: readonly ContentEntry[], availableItemIds: ReadonlySet<string>, availableBundleIds: ReadonlySet<string>): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  const visit = (node: EquipmentBundleNode, ownerId: string) => {
+    if (node.type === "item") {
+      for (const itemId of [node.itemId, ...(node.alternativeItemIds ?? [])]) if (!availableItemIds.has(itemId)) issues.push({ code: "MISSING_ITEM_REFERENCE", severity: "error", recordId: ownerId, targetId: itemId, path: "entries.equipmentBundles", message: `Entry ${ownerId} has an unresolved equipment item reference to ${itemId}` });
+      return;
+    }
+    if (node.type === "bundle") for (const child of node.entries) visit(child, ownerId);
+    else for (const option of node.options) for (const child of option.entries) visit(child, ownerId);
+  };
+  for (const entry of entries) {
+    for (const bundle of entry.equipmentBundles ?? []) for (const node of bundle.entries) visit(node, entry.id);
+    for (const effect of nestedEffects(entry)) if (effect.type === "grantEquipmentBundle" && !availableBundleIds.has(effect.bundleId)) issues.push({ code: "MISSING_EQUIPMENT_BUNDLE", severity: "error", recordId: entry.id, targetId: effect.bundleId, path: "entries.effects", message: `Entry ${entry.id} references missing equipment bundle ${effect.bundleId}` });
+    if (entry.category === "background") {
+      const bundleIds = (entry.mechanics as { equipmentBundleIds?: string[] }).equipmentBundleIds ?? [];
+      for (const bundleId of bundleIds) if (!availableBundleIds.has(bundleId)) issues.push({ code: "MISSING_EQUIPMENT_BUNDLE", severity: "error", recordId: entry.id, targetId: bundleId, path: "entries.mechanics.equipmentBundleIds", message: `Background ${entry.id} references missing equipment bundle ${bundleId}` });
+    }
+  }
+  return issues;
+}
 
 function parseAndMigrate(json: string): {
   document?: ContentPackDocument;
@@ -171,19 +233,19 @@ export async function previewContentPack(
   if (!parsed.document)
     return { issues: parsed.issues, plan, canImport: false };
   const document = parsed.document,
-    issues = [...parsed.issues],
+    issues = [...parsed.issues, ...runtimeCapabilityIssues(parsed.document)],
     observations: Observations = {
       sources: new Map(),
       packs: new Map(),
       entries: new Map(),
     };
-  if (document.pack.coverage !== "complete")
+  if (packCoveragePresentation(document.pack.coverage).requiresWarning)
     issues.push({
       code: "PACK_INCOMPLETE",
       severity: "warning",
       recordId: document.pack.id,
       path: "pack.coverage",
-      message: `Pack ${document.pack.id} declares ${document.pack.coverage} coverage and is not a complete source`,
+      message: `Pack ${document.pack.id} declares ${packCoveragePresentation(document.pack.coverage).label.toLocaleLowerCase()} and is not a complete source`,
     });
   for (const id of duplicates(document.sources.map((source) => source.id)))
     issues.push({
@@ -269,6 +331,10 @@ export async function previewContentPack(
       });
     else plan.entries.update.push(entry.id);
   });
+  const installedEntries = await database.contentEntries.toArray(), referenceEntries = [...installedEntries, ...document.entries];
+  const availableItemIds = new Set(referenceEntries.filter(entry => ["item", "weapon", "armor", "tool"].includes(entry.category)).map(entry => entry.id));
+  const availableBundleIds = new Set(referenceEntries.flatMap(entry => (entry.equipmentBundles ?? []).map(bundle => bundle.id)));
+  issues.push(...equipmentReferenceIssues(document.entries, availableItemIds, availableBundleIds));
   const preview: ImportPreview = {
     document,
     issues,
@@ -436,7 +502,10 @@ export async function previewContentPackSet(
   }
   const allSourceIds = documents.flatMap(document => document.sources.map(source => source.id)), sourceIds = new Set(allSourceIds);
   const entriesById = new Map(documents.flatMap(document => document.entries.map(entry => [entry.id, entry] as const)));
-  const issues = previews.flatMap(preview => preview.issues).filter(issue => issue.code !== "MISSING_SOURCE" || !issue.recordId || !sourceIds.has(entriesById.get(issue.recordId)?.sourceId ?? ""));
+  const issues = previews.flatMap(preview => preview.issues).filter(issue =>
+    issue.code !== "MISSING_ITEM_REFERENCE" && issue.code !== "MISSING_EQUIPMENT_BUNDLE" &&
+    (issue.code !== "MISSING_SOURCE" || !issue.recordId || !sourceIds.has(entriesById.get(issue.recordId)?.sourceId ?? ""))
+  );
   const packIds = documents.map(document => document.pack.id), entryIds = documents.flatMap(document => document.entries.map(entry => entry.id));
   for (const duplicate of duplicates(allSourceIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "sources.id", message: `Source ID ${duplicate} occurs more than once in the import set` });
   for (const duplicate of duplicates(packIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "pack.id", message: `Pack ID ${duplicate} occurs more than once in the import set` });
@@ -456,9 +525,35 @@ export async function previewContentPackSet(
     visiting.delete(packId); visited.add(packId); return cyclic;
   };
   for (const packId of packIds) if (checkCycle(packId)) { issues.push({ code: "DEPENDENCY_CYCLE", severity: "error", recordId: packId, path: "pack.dependencies", message: `Dependency cycle includes pack ${packId}` }); break; }
-  const importedEntries = new Set(entryIds), installedEntries = new Set((await database.contentEntries.toCollection().primaryKeys()).map(String));
+  const importedEntries = new Set(entryIds), installedEntryRecords = await database.contentEntries.toArray(), installedEntries = new Set(installedEntryRecords.map(entry => entry.id));
+  const combinedEntryRecords = [...new Map([...installedEntryRecords, ...documents.flatMap(document => document.entries)].map(entry => [entry.id, entry] as const)).values()];
+  const bundleOwners = new Map<string, string>();
+  for (const entry of combinedEntryRecords) for (const bundle of entry.equipmentBundles ?? []) {
+    const owner = bundleOwners.get(bundle.id);
+    if (owner && owner !== entry.id) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: bundle.id, path: "entries.equipmentBundles", message: `Equipment bundle ID ${bundle.id} occurs more than once` });
+    else bundleOwners.set(bundle.id, entry.id);
+  }
+  const availableBundleIds = new Set(bundleOwners.keys());
+  const availableItemIds = new Set(combinedEntryRecords.filter(entry => ["item", "weapon", "armor", "tool"].includes(entry.category)).map(entry => entry.id));
+  issues.push(...equipmentReferenceIssues(documents.flatMap(document => document.entries), availableItemIds, availableBundleIds));
   const aliases = new Map<string, string>();
   for (const document of documents) for (const entry of document.entries) {
+    const inspectChoice = (choice: ChoiceDefinition) => {
+      for (const option of choice.options) {
+        if (option.entryId && !importedEntries.has(option.entryId) && !installedEntries.has(option.entryId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.choices", message: `Entry ${entry.id} has an unresolved choice reference to ${option.entryId}` });
+        for (const child of option.childChoices ?? []) inspectChoice(child);
+      }
+      for (const child of choice.childChoices ?? []) inspectChoice(child);
+    };
+    for (const choice of entry.choices) inspectChoice(choice);
+    if (entry.category === "class") {
+      const mechanics = entry.mechanics as { progression: Array<{ featureIds: string[] }>; subclassIds: string[] };
+      for (const targetId of [...mechanics.progression.flatMap(row => row.featureIds), ...mechanics.subclassIds]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Class ${entry.id} has an unresolved progression reference to ${targetId}` });
+    }
+    if (entry.category === "subclass") {
+      const mechanics = entry.mechanics as { classId: string; progression: Array<{ featureIds: string[] }> };
+      for (const targetId of [mechanics.classId, ...mechanics.progression.flatMap(row => row.featureIds)]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Subclass ${entry.id} has an unresolved progression reference to ${targetId}` });
+    }
     for (const link of entry.links) if (link.required && !importedEntries.has(link.targetId) && !installedEntries.has(link.targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.links", message: `Entry ${entry.id} has an unresolved required ${link.type} reference to ${link.targetId}` });
     for (const target of [entry.replacementOf, entry.replacedBy, ...entry.editionRelations].filter((item): item is string => typeof item === "string")) if (!importedEntries.has(target) && !installedEntries.has(target)) issues.push({ code: "REPLACEMENT_INVALID", severity: "error", recordId: entry.id, path: "entries.editionRelations", message: `Entry ${entry.id} has an unresolved revision or edition relation to ${target}` });
     for (const alias of [entry.slug, ...entry.aliases].map(value => value.trim().toLocaleLowerCase()).filter(Boolean)) {
@@ -466,6 +561,16 @@ export async function previewContentPackSet(
       if (owner && owner !== entry.id) issues.push({ code: "ALIAS_CONFLICT", severity: "warning", recordId: entry.id, path: "entries.aliases", message: `Alias conflict between entries ${owner} and ${entry.id}` });
       else aliases.set(alias, entry.id);
     }
+  }
+  const conflictGroups = new Map<string, ContentEntry[]>();
+  for (const entry of combinedEntryRecords) if (entry.conflict.conflictKey) {
+    const group = conflictGroups.get(entry.conflict.conflictKey) ?? [];
+    group.push(entry); conflictGroups.set(entry.conflict.conflictKey, group);
+  }
+  for (const [key, group] of conflictGroups) if (group.length > 1) {
+    const policies = new Set(group.map(entry => entry.conflict.resolution));
+    if (policies.size > 1) issues.push({ code: "CONFLICT_POLICY_MISMATCH", severity: "error", recordId: key, path: "entries.conflict.resolution", message: `Conflict group ${key} declares inconsistent resolution policies` });
+    else if (policies.has("explicit-selection")) issues.push({ code: "CONFLICT_REVIEW_REQUIRED", severity: "warning", recordId: key, path: "entries.conflict.resolution", message: `Conflict group ${key} requires an explicit user selection` });
   }
   const result: ImportSetPreview = { documents, issues, plan, canImport: documents.length === jsonFiles.length && !issues.some(issue => issue.severity === "error") };
   importSetStates.set(result, { previews });
@@ -488,6 +593,12 @@ export async function confirmImportSet(preview: ImportSetPreview, database: Ledg
   };
   for (const packId of byId.keys()) visit(packId);
   await database.transaction("rw", database.sources, database.contentPacks, database.contentEntries, database.contentPackVersions, database.contentEntryVersions, async () => {
-    for (const item of ordered) { abortIfNeeded(signal); await confirmImport(item, database, signal); }
+    for (const item of ordered) {
+      abortIfNeeded(signal);
+      const original = previewStates.get(item);
+      if (!original) throw new Error("Import set preview state is unavailable");
+      const refreshed = await previewContentPack(original.json, database);
+      await confirmImport(refreshed, database, signal);
+    }
   });
 }

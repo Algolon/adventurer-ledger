@@ -1,1 +1,271 @@
-import type{Ability,Condition,Effect,ValidationIssue,Value}from"@/src/domain/model";export interface RuleContext{totalLevel:number;classLevels:Record<string,number>;abilities:Record<Ability,number>;tags:Set<string>;features:Set<string>;proficiencies:Set<string>;armor:{worn:boolean;type?:"light"|"medium"|"heavy"|"shield"};flags:Record<string,string|number|boolean>;values:Record<string,number>}export interface RuleResult{context:RuleContext;grantedFeatures:Set<string>;disabledFeatures:Set<string>;expertise:Set<string>;actions:string[];resources:string[];issues:Array<Omit<ValidationIssue,"createdAt"|"updatedAt">>;trace:Array<{effectId:string;applied:boolean;reason:string}>}export const abilityModifier=(score:number)=>Math.floor((score-10)/2);export const proficiencyBonus=(level:number)=>2+Math.floor((Math.max(1,level)-1)/4);const compare=(a:number,op:string,b:number)=>({eq:a===b,neq:a!==b,gt:a>b,gte:a>=b,lt:a<b,lte:a<=b}[op]??false);export function evaluateCondition(c:Condition|undefined,x:RuleContext):boolean{if(!c)return true;if("all"in c)return c.all.every(v=>evaluateCondition(v,x));if("any"in c)return c.any.some(v=>evaluateCondition(v,x));if("not"in c)return!evaluateCondition(c.not,x);switch(c.type){case"always":return true;case"wearingArmor":return x.armor.worn&&(!c.armorType||x.armor.type===c.armorType);case"hasFeature":return x.features.has(c.featureId);case"hasTag":return x.tags.has(c.tag);case"classLevel":return compare(x.classLevels[c.classId]??0,c.operator,c.value);case"totalLevel":return compare(x.totalLevel,c.operator,c.value);case"ability":return compare(x.abilities[c.ability],c.operator,c.value);case"proficientWith":return x.proficiencies.has(c.proficiencyId);case"customFlag":return x.flags[c.key]===c.equals}}function resolve(v:Value,x:RuleContext):number|string|boolean{if(v.kind==="literal")return v.value;if(v.kind==="path")return x.values[v.path]??0;if(v.formula==="proficiencyBonus")return proficiencyBonus(x.totalLevel);if(v.formula==="abilityModifier"&&v.variables[0])return abilityModifier(x.abilities[v.variables[0]as Ability]);throw new Error(`Unsupported safe formula: ${v.formula}`)}function mutate(a:number,op:string,b:number){if(op==="add")return a+b;if(op==="subtract")return a-b;if(op==="multiply")return a*b;if(op==="set")return b;if(op==="min")return Math.max(a,b);if(op==="max")return Math.min(a,b);return a}export function applyEffects(initial:RuleContext,effects:Effect[]):RuleResult{const context={...initial,tags:new Set(initial.tags),features:new Set(initial.features),proficiencies:new Set(initial.proficiencies),values:{...initial.values}};const out:RuleResult={context,grantedFeatures:new Set(),disabledFeatures:new Set(),expertise:new Set(),actions:[],resources:[],issues:[],trace:[]};for(const e of[...effects].sort((a,b)=>(a.priority??0)-(b.priority??0))){if(!evaluateCondition(e.condition,context)){out.trace.push({effectId:e.id,applied:false,reason:"Condition not met"});continue}try{switch(e.type){case"grantProficiency":context.proficiencies.add(e.proficiencyId);break;case"grantExpertise":context.proficiencies.add(e.proficiencyId);out.expertise.add(e.proficiencyId);break;case"grantFeature":context.features.add(e.featureId);out.grantedFeatures.add(e.featureId);break;case"disableFeature":context.features.delete(e.featureId);out.disabledFeatures.add(e.featureId);break;case"replaceFeature":context.features.delete(e.featureId);if(e.replacementId)context.features.add(e.replacementId);break;case"modifyAbility":context.abilities[e.ability]=mutate(context.abilities[e.ability],e.operation,Number(resolve(e.value,context)));break;case"modifyArmorClass":case"modifyInitiative":case"modifySpeed":case"modifyCriticalRange":{const key={modifyArmorClass:"armorClass",modifyInitiative:"initiative",modifySpeed:"speed",modifyCriticalRange:"criticalRange"}[e.type];context.values[key]=mutate(context.values[key]??0,e.operation,Number(resolve(e.value,context)));break}case"addResource":out.resources.push(e.resource.id);break;case"addAction":case"addBonusAction":case"addReaction":case"addAttack":out.actions.push(e.definitionId);break}out.trace.push({effectId:e.id,applied:true,reason:"Applied"})}catch(error){out.issues.push({id:`rule-error:${e.id}`,severity:"error",code:"RULE_EFFECT_FAILED",message:error instanceof Error?error.message:"Evaluation failed",affectedRule:e.id,overridable:false});out.trace.push({effectId:e.id,applied:false,reason:"Evaluation error"})}}return out}
+import type {
+  Ability,
+  Condition,
+  DiceExpression,
+  Effect,
+  EffectDisposition,
+  ResourceDefinition,
+  ValidationIssue,
+  Value,
+} from "@/src/domain/model";
+import { effectCapability } from "@/src/rules/effect-capabilities";
+
+export interface RuleContext {
+  totalLevel: number;
+  classLevels: Record<string, number>;
+  abilities: Record<Ability, number>;
+  tags: Set<string>;
+  features: Set<string>;
+  proficiencies: Set<string>;
+  armor: { worn: boolean; type?: "light" | "medium" | "heavy" | "shield" };
+  flags: Record<string, string | number | boolean>;
+  values: Record<string, number>;
+}
+
+export interface RollRuleState {
+  extraDice: Array<{ effectId: string; target: string; dice: DiceExpression }>;
+  replacements: Array<{ effectId: string; target: string; replacement: DiceExpression; match?: DiceExpression }>;
+  rerolls: Array<{ effectId: string; target: string; rolls: number[]; limit: number; keep: "new" | "higher" | "lower" }>;
+  minimums: Array<{ effectId: string; target: string; minimum: number }>;
+  advantages: Set<string>;
+  disadvantages: Set<string>;
+}
+
+export interface RuleTrace {
+  effectId: string;
+  type: Effect["type"];
+  disposition: EffectDisposition;
+  applied: boolean;
+  reason: "Applied" | "Condition not met" | "Level not met" | "Choice required" | "Review required" | "Evaluation error";
+}
+
+type RuntimeIssue = Omit<ValidationIssue, "createdAt" | "updatedAt">;
+export interface RuleResult {
+  context: RuleContext;
+  grantedFeatures: Set<string>;
+  disabledFeatures: Set<string>;
+  expertise: Set<string>;
+  actions: string[];
+  resources: string[];
+  resourceDefinitions: Map<string, ResourceDefinition>;
+  spells: Set<string>;
+  alwaysPreparedSpells: Set<string>;
+  spellLists: Set<string>;
+  pendingChoices: Set<string>;
+  equipmentBundleIds: Set<string>;
+  optionGrants: Record<"weaponMasteries" | "fightingStyles" | "maneuvers" | "invocations" | "metamagic", Set<string>>;
+  resourceRecharge: Map<string, "short-rest" | "long-rest">;
+  attackModifiers: Array<{ effectId: string; selector: Record<string, string>; operation: "add" | "subtract" | "multiply" | "set" | "min" | "max"; value: number }>;
+  damageModifiers: Array<{ effectId: string; selector: Record<string, string>; operation: "add" | "subtract" | "multiply" | "set" | "min" | "max"; value: number }>;
+  rollRules: RollRuleState;
+  issues: RuntimeIssue[];
+  trace: RuleTrace[];
+}
+
+export const abilityModifier = (score: number) => Math.floor((score - 10) / 2);
+export const proficiencyBonus = (level: number) => 2 + Math.floor((Math.max(1, level) - 1) / 4);
+
+const compare = (left: number, operator: string, right: number) => ({
+  eq: left === right,
+  neq: left !== right,
+  gt: left > right,
+  gte: left >= right,
+  lt: left < right,
+  lte: left <= right,
+}[operator] ?? false);
+
+export function evaluateCondition(condition: Condition | undefined, context: RuleContext): boolean {
+  if (!condition) return true;
+  if ("all" in condition) return condition.all.every(item => evaluateCondition(item, context));
+  if ("any" in condition) return condition.any.some(item => evaluateCondition(item, context));
+  if ("not" in condition) return !evaluateCondition(condition.not, context);
+  switch (condition.type) {
+    case "always": return true;
+    case "wearingArmor": return context.armor.worn && (!condition.armorType || context.armor.type === condition.armorType);
+    case "hasFeature": return context.features.has(condition.featureId);
+    case "hasTag": return context.tags.has(condition.tag);
+    case "classLevel": return compare(context.classLevels[condition.classId] ?? 0, condition.operator, condition.value);
+    case "totalLevel": return compare(context.totalLevel, condition.operator, condition.value);
+    case "ability": return compare(context.abilities[condition.ability], condition.operator, condition.value);
+    case "proficientWith": return context.proficiencies.has(condition.proficiencyId);
+    case "customFlag": return context.flags[condition.key] === condition.equals;
+  }
+}
+
+function resolveValue(value: Value, context: RuleContext): number | string | boolean {
+  if (value.kind === "literal") return value.value;
+  if (value.kind === "path") return context.values[value.path] ?? 0;
+  if (value.formula === "proficiencyBonus") return proficiencyBonus(context.totalLevel);
+  const variable = value.variables[0];
+  if (value.formula === "abilityModifier" && variable && variable in context.abilities)
+    return abilityModifier(context.abilities[variable as Ability]);
+  throw new Error("Unsupported safe formula");
+}
+
+function numeric(value: Value, context: RuleContext): number {
+  const resolved = resolveValue(value, context);
+  if (typeof resolved !== "number" || !Number.isFinite(resolved)) throw new Error("Effect value is not numeric");
+  return resolved;
+}
+
+function mutate(left: number, operation: "add" | "subtract" | "multiply" | "set" | "min" | "max", right: number): number {
+  switch (operation) {
+    case "add": return left + right;
+    case "subtract": return left - right;
+    case "multiply": return left * right;
+    case "set": return right;
+    case "min": return Math.max(left, right);
+    case "max": return Math.min(left, right);
+  }
+}
+
+const assertNever = (effect: never): never => {
+  throw new Error(`Unhandled effect variant: ${String((effect as { type?: unknown }).type)}`);
+};
+
+function runtimeIssue(effect: Effect, code: "RULE_EFFECT_FAILED" | "RULE_EFFECT_REVIEW_REQUIRED" | "RULE_CHOICE_REQUIRED", severity: RuntimeIssue["severity"]): RuntimeIssue {
+  return {
+    id: `rule:${code.toLocaleLowerCase()}:${effect.id}`,
+    severity,
+    code,
+    message: code === "RULE_EFFECT_REVIEW_REQUIRED"
+      ? `Effect ${effect.id} requires manual rules review`
+      : code === "RULE_CHOICE_REQUIRED"
+        ? `Effect ${effect.id} requires a resolved choice`
+        : `Effect ${effect.id} could not be evaluated`,
+    affectedRule: effect.id,
+    overridable: code !== "RULE_EFFECT_FAILED",
+  };
+}
+
+function createResult(initial: RuleContext): RuleResult {
+  const context: RuleContext = {
+    ...initial,
+    abilities: { ...initial.abilities },
+    tags: new Set(initial.tags),
+    features: new Set(initial.features),
+    proficiencies: new Set(initial.proficiencies),
+    armor: { ...initial.armor },
+    flags: { ...initial.flags },
+    values: { ...initial.values },
+  };
+  return {
+    context,
+    grantedFeatures: new Set(),
+    disabledFeatures: new Set(),
+    expertise: new Set(),
+    actions: [],
+    resources: [],
+    resourceDefinitions: new Map(),
+    spells: new Set(),
+    alwaysPreparedSpells: new Set(),
+    spellLists: new Set(),
+    pendingChoices: new Set(),
+    equipmentBundleIds: new Set(),
+    optionGrants: {
+      weaponMasteries: new Set(), fightingStyles: new Set(), maneuvers: new Set(), invocations: new Set(), metamagic: new Set(),
+    },
+    resourceRecharge: new Map(),
+    attackModifiers: [],
+    damageModifiers: [],
+    rollRules: { extraDice: [], replacements: [], rerolls: [], minimums: [], advantages: new Set(), disadvantages: new Set() },
+    issues: [],
+    trace: [],
+  };
+}
+
+function effectLevel(effect: Extract<Effect, { type: "unlockAtLevel" | "scaleAtLevel" }>, context: RuleContext): number {
+  return effect.scope === "class" && effect.classId ? context.classLevels[effect.classId] ?? 0 : context.totalLevel;
+}
+
+function applyOne(effect: Effect, result: RuleResult): void {
+  const capability = effectCapability(effect.type);
+  if (!evaluateCondition(effect.condition, result.context)) {
+    result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Condition not met" });
+    return;
+  }
+  try {
+    const context = result.context;
+    switch (effect.type) {
+      case "grantProficiency": context.proficiencies.add(effect.proficiencyId); break;
+      case "grantExpertise": context.proficiencies.add(effect.proficiencyId); result.expertise.add(effect.proficiencyId); break;
+      case "grantFeature": context.features.add(effect.featureId); result.grantedFeatures.add(effect.featureId); break;
+      case "disableFeature": context.features.delete(effect.featureId); result.disabledFeatures.add(effect.featureId); break;
+      case "replaceFeature":
+        context.features.delete(effect.featureId); context.features.add(effect.replacementId); break;
+      case "grantChoice":
+        result.pendingChoices.add(effect.choiceId);
+        result.issues.push(runtimeIssue(effect, "RULE_CHOICE_REQUIRED", "rules-warning"));
+        result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Choice required" });
+        return;
+      case "modifyAbility": context.abilities[effect.ability] = mutate(context.abilities[effect.ability], effect.operation, numeric(effect.value, context)); break;
+      case "modifyAbilityMaximum": {
+        const key = `abilityMaximum.${effect.ability}`;
+        context.values[key] = mutate(context.values[key] ?? 20, effect.operation, numeric(effect.value, context));
+        break;
+      }
+      case "modifySkill": context.values[`skill.${effect.target}`] = mutate(context.values[`skill.${effect.target}`] ?? 0, effect.operation, numeric(effect.value, context)); break;
+      case "modifySavingThrow": context.values[`savingThrow.${effect.target}`] = mutate(context.values[`savingThrow.${effect.target}`] ?? 0, effect.operation, numeric(effect.value, context)); break;
+      case "modifyArmorClass": context.values.armorClass = mutate(context.values.armorClass ?? 0, effect.operation, numeric(effect.value, context)); break;
+      case "modifyInitiative": context.values.initiative = mutate(context.values.initiative ?? 0, effect.operation, numeric(effect.value, context)); break;
+      case "modifySpeed": context.values.speed = mutate(context.values.speed ?? 0, effect.operation, numeric(effect.value, context)); break;
+      case "modifyCriticalRange": context.values.criticalRange = mutate(context.values.criticalRange ?? 20, effect.operation, numeric(effect.value, context)); break;
+      case "modifyAttack": result.attackModifiers.push({ effectId: effect.id, selector: { ...effect.selector }, operation: effect.operation, value: numeric(effect.value, context) }); break;
+      case "modifyDamage": result.damageModifiers.push({ effectId: effect.id, selector: { ...effect.selector }, operation: effect.operation, value: numeric(effect.value, context) }); break;
+      case "addSpell": result.spells.add(effect.spellId); if (effect.alwaysPrepared) result.alwaysPreparedSpells.add(effect.spellId); break;
+      case "addSpellList": result.spellLists.add(effect.spellListId); break;
+      case "addResource": result.resources.push(effect.resource.id); result.resourceDefinitions.set(effect.resource.id, effect.resource); break;
+      case "addAttack": case "addAction": case "addBonusAction": case "addReaction": result.actions.push(effect.definitionId); break;
+      case "setMinimum": context.values[effect.target] = Math.max(context.values[effect.target] ?? Number.NEGATIVE_INFINITY, numeric(effect.value, context)); break;
+      case "setMaximum": context.values[effect.target] = Math.min(context.values[effect.target] ?? Number.POSITIVE_INFINITY, numeric(effect.value, context)); break;
+      case "setCalculation": context.values[effect.target] = numeric(effect.value, context); break;
+      case "addAdvantage": result.rollRules.advantages.add(effect.target); break;
+      case "addDisadvantage": result.rollRules.disadvantages.add(effect.target); break;
+      case "rechargeOnShortRest": result.resourceRecharge.set(effect.resourceId, "short-rest"); break;
+      case "rechargeOnLongRest": result.resourceRecharge.set(effect.resourceId, "long-rest"); break;
+      case "unlockAtLevel":
+        if (effectLevel(effect, context) < effect.level) {
+          result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Level not met" });
+          return;
+        }
+        applyOne(effect.effect, result);
+        break;
+      case "scaleAtLevel": {
+        const level = effectLevel(effect, context);
+        const selected = Object.entries(effect.levels).map(([key, value]) => [Number(key), value] as const).filter(([threshold]) => threshold <= level).sort((left, right) => right[0] - left[0])[0];
+        if (!selected) {
+          result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Level not met" });
+          return;
+        }
+        context.values[effect.target] = numeric(selected[1], context);
+        break;
+      }
+      case "addWeaponMastery": result.optionGrants.weaponMasteries.add(effect.optionId); break;
+      case "grantFightingStyle": result.optionGrants.fightingStyles.add(effect.optionId); break;
+      case "grantManeuver": result.optionGrants.maneuvers.add(effect.optionId); break;
+      case "grantInvocation": result.optionGrants.invocations.add(effect.optionId); break;
+      case "grantMetamagic": result.optionGrants.metamagic.add(effect.optionId); break;
+      case "addDice": result.rollRules.extraDice.push({ effectId: effect.id, target: effect.target, dice: { ...effect.dice } }); break;
+      case "replaceDice": result.rollRules.replacements.push({ effectId: effect.id, target: effect.target, replacement: { ...effect.replacement }, ...(effect.match ? { match: { ...effect.match } } : {}) }); break;
+      case "rerollDice": result.rollRules.rerolls.push({ effectId: effect.id, target: effect.target, rolls: [...effect.rolls], limit: effect.limit, keep: effect.keep }); break;
+      case "setMinimumRoll": result.rollRules.minimums.push({ effectId: effect.id, target: effect.target, minimum: effect.minimum }); break;
+      case "grantEquipmentBundle": result.equipmentBundleIds.add(effect.bundleId); break;
+      case "manualAdjudication":
+        result.issues.push(runtimeIssue(effect, "RULE_EFFECT_REVIEW_REQUIRED", "rules-warning"));
+        result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Review required" });
+        return;
+      default: assertNever(effect);
+    }
+    result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: true, reason: "Applied" });
+  } catch {
+    result.issues.push(runtimeIssue(effect, "RULE_EFFECT_FAILED", "error"));
+    result.trace.push({ effectId: effect.id, type: effect.type, disposition: capability.disposition, applied: false, reason: "Evaluation error" });
+  }
+}
+
+export function applyEffects(initial: RuleContext, effects: readonly Effect[]): RuleResult {
+  const result = createResult(initial);
+  for (const effect of [...effects].sort((left, right) => (left.priority ?? 0) - (right.priority ?? 0) || left.id.localeCompare(right.id)))
+    applyOne(effect, result);
+  return result;
+}

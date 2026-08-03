@@ -18,10 +18,12 @@ describe.skipIf(!privatePackPath)("local private ingestion", () => {
     const preview = await previewContentPackSet([json], database);
     expect(preview.canImport).toBe(true);
     expect(preview.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(["PACK_INCOMPLETE", "OPTIONAL_DEPENDENCY_MISSING"]));
+    expect(preview.issues.filter(issue => issue.code === "EFFECT_REVIEW_REQUIRED")).toEqual([]);
     await confirmImportSet(preview, database);
     expect(await database.contentEntries.count()).toBe(validation.data?.entries.length);
     const relations = resolveContentRelations(await database.contentEntries.toArray());
     expect(relations.missingRequired).toEqual([]);
+    expect(relations.unresolvedConflicts).toEqual([]);
     const repeated = await previewContentPackSet([json], database);
     expect(repeated.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(["PACK_VERSION_CONFLICT", "ENTRY_REVISION_CONFLICT"]));
   });

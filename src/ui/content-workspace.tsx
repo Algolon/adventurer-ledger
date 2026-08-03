@@ -16,6 +16,8 @@ import type {
   Effect,
   Source,
 } from "@/src/domain/model";
+import { packCoveragePresentation } from "@/src/domain/pack-coverage";
+import { effectSchema } from "@/src/domain/content-pack";
 import { savePackEntry } from "@/src/content/save-pack-entry";
 import {
   createContentExport,
@@ -303,14 +305,7 @@ function isPackCoverage(value: string): value is ContentPack["coverage"] {
   return value === "pilot" || value === "partial" || value === "complete";
 }
 function isEffect(value: unknown): value is Effect {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "id" in value &&
-    typeof value.id === "string" &&
-    "type" in value &&
-    typeof value.type === "string"
-  );
+  return effectSchema.safeParse(value).success;
 }
 function PackEditor() {
   const [list, setList] = useState<ContentPack[]>([]),
@@ -557,7 +552,7 @@ function PackEditor() {
               <span>
                 <b>{pack.name}</b>
                 <small>
-                  {pack.id} · v{pack.version} · {pack.coverage} ·{" "}
+                  {pack.id} · v{pack.version} · {packCoveragePresentation(pack.coverage).label} ·{" "}
                   {pack.entryIds.length} entries
                 </small>
               </span>
