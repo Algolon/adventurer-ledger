@@ -15,6 +15,8 @@ npm run dev
 
 No account, cloud database, API key or external service is required.
 
+`npm run build` produces the complete static site in `out/`, including a content-versioned `sw.js`. Serve it over HTTPS and reproduce the service-worker headers in `public/_headers`. Each device has independent IndexedDB storage; transfer data manually with confirmed exports/imports.
+
 ## Foundation
 
 - Next.js/React/TypeScript strict PWA shell
@@ -24,6 +26,8 @@ No account, cloud database, API key or external service is required.
 - source/ruleset separation and Brammel “Boss” Voss fixture
 - Vitest unit tests
 - private-content deny-list in `.gitignore`
+- M1 private content pipeline with transactional preview/import, version history, restricted-export consent, local editors and compendium browsing
+- installable static PWA with controlled offline shell updates and device-local storage monitoring
 
 See `docs/ARCHITECTURE.md` for the full architecture, data model, rules engine, storage/encryption strategy, roadmap and risks.
 
