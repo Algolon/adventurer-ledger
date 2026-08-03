@@ -1210,3 +1210,188 @@ describe("exact runtime undo", () => {
     expect(Object.keys(action.before ?? {})).toEqual(["currentHitPoints"]);
   });
 });
+
+describe("the character aggregate across transfer, replace and restore", () => {
+  beforeEach(async () => {
+    await commitBrammel();
+  });
+
+  /** Adds an armour-class override and returns the resulting character revision. */
+  async function addOverride(expectedRevision = 1, value = 20) {
+    const result = expectOk<{ characterRevision: number }>(
+      await harness.overrides.set({
+        operationId: `operation:override-${value}-${expectedRevision}`,
+        characterId: "character:brammel",
+        expectedCharacterRevision: expectedRevision,
+        targetPath: "armorClass",
+        operation: "replace",
+        value,
+        scope: "persistent",
+        reason: "private table ruling",
+      }),
+    );
+    return result.characterRevision;
+  }
+
+  const exportBrammel = async () =>
+    expectOk<{ json: string; document: { overrides: unknown[] } }>(await harness.transfer.createTransfer("character:brammel"));
+
+  it("carries an active override through export and import", async () => {
+    await addOverride();
+    const { json, document } = await exportBrammel();
+    expect(document.overrides).toHaveLength(1);
+    // The private reason never leaves the device.
+    expect(json).not.toContain("private table ruling");
+
+    await harness.database.characters.clear();
+    await harness.database.characterRuntimeStates.clear();
+    await harness.database.characterOverrides.clear();
+
+    const preview = expectOk<TransferPreview>(await harness.transfer.preview(json));
+    expectOk<ImportReceipt>(await harness.transfer.confirm(preview.token, "import", "operation:import"));
+
+    const sheet = await harness.query.sheet("character:brammel");
+    // The imported sheet reproduces the overridden value, not the automatic one.
+    expect(sheet?.armorClass.value).toBe(20);
+    expect(sheet?.armorClass.override?.operation).toBe("replace");
+    const stored = await harness.database.characterOverrides.toArray();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].reason).toBeUndefined();
+  });
+
+  it("remaps override ownership on Keep both without touching the original", async () => {
+    await addOverride();
+    const { json } = await exportBrammel();
+    await harness.database.characters.where("id").equals("character:brammel").modify(record => {
+      record.name = "Locally renamed";
+      record.revision = 9;
+    });
+
+    const preview = expectOk<TransferPreview>(await harness.transfer.preview(json));
+    const receipt = expectOk<ImportReceipt>(await harness.transfer.confirm(preview.token, "keep-both", "operation:keep"));
+
+    const copied = await harness.database.characterOverrides.where("characterId").equals(receipt.characterId).toArray();
+    expect(copied).toHaveLength(1);
+    expect(copied[0].id).toContain(receipt.characterId);
+    expect(copied[0].value).toBe(20);
+    expect(copied[0].reason).toBeUndefined();
+
+    // The original keeps its own override, and the copy does not alias it.
+    const original = await harness.database.characterOverrides.where("characterId").equals("character:brammel").toArray();
+    expect(original).toHaveLength(1);
+    expect(original[0].id).not.toBe(copied[0].id);
+
+    // The imported copy starts with no session history of its own.
+    expect(await harness.database.characterActions.where("characterId").equals(receipt.characterId).count()).toBe(0);
+  });
+
+  it("archives the whole outgoing aggregate on Replace and leaves no orphans", async () => {
+    const revision = await addOverride();
+    await harness.runtime.apply({
+      characterId: "character:brammel",
+      expectedRuntimeRevision: 1,
+      operationId: "operation:local-damage",
+      operation: { kind: "damage", amount: 3 },
+    });
+    // Export a version that has no override, so Replace must remove the local one.
+    await harness.overrides.remove("character:brammel", "character:brammel:override:armorClass", revision, "operation:strip");
+    const { json } = await exportBrammel();
+    const restoredRevision = await addOverride((await harness.database.characters.get("character:brammel"))!.revision, 25);
+    expect(restoredRevision).toBeGreaterThan(0);
+
+    await harness.database.characters.where("id").equals("character:brammel").modify(record => {
+      record.name = "Locally renamed";
+    });
+    const localRevision = (await harness.database.characters.get("character:brammel"))!.revision;
+
+    const preview = expectOk<TransferPreview>(await harness.transfer.preview(json));
+    const receipt = expectOk<ImportReceipt>(
+      await harness.transfer.confirm(preview.token, "replace", "operation:replace", localRevision),
+    );
+
+    // The restore point holds the complete outgoing aggregate.
+    const snapshot = await harness.database.characterSnapshots.get(receipt.restorePointId!);
+    expect(snapshot?.kind).toBe("pre-import-replace");
+    expect(snapshot?.overrides).toHaveLength(1);
+    expect(snapshot?.overrides[0].value).toBe(25);
+    expect(snapshot?.runtimeState.currentHitPoints).toBe(7);
+
+    // No orphan override survives, and the old session log is not presented as
+    // history of the imported state.
+    expect(await harness.database.characterOverrides.count()).toBe(0);
+    expect(await harness.database.characterActions.where("characterId").equals("character:brammel").count()).toBe(0);
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(18);
+  });
+
+  it("restores the override set belonging to a pre-import snapshot", async () => {
+    const revision = await addOverride();
+    const { json } = await exportBrammel();
+    // Diverge locally so Replace is offered.
+    await harness.overrides.remove("character:brammel", "character:brammel:override:armorClass", revision, "operation:strip");
+    const localRevision = (await harness.database.characters.get("character:brammel"))!.revision;
+    await addOverride(localRevision, 25);
+    const beforeReplace = (await harness.database.characters.get("character:brammel"))!.revision;
+
+    const preview = expectOk<TransferPreview>(await harness.transfer.preview(json));
+    const receipt = expectOk<ImportReceipt>(
+      await harness.transfer.confirm(preview.token, "replace", "operation:replace", beforeReplace),
+    );
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(20);
+
+    const current = (await harness.database.characters.get("character:brammel"))!;
+    expectOk(await harness.levelUp.restore("character:brammel", receipt.restorePointId!, current.revision, "operation:restore"));
+
+    // The pre-replace override is back and the imported one is gone.
+    const overrides = await harness.database.characterOverrides.toArray();
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].value).toBe(25);
+    expect((await harness.query.sheet("character:brammel"))?.armorClass.value).toBe(25);
+  });
+
+  it("captures overrides in the pre-level restore point and restores them", async () => {
+    await addOverride(1, 20);
+    const character = (await harness.database.characters.get("character:brammel"))!;
+    const levelled = expectOk<LevelUpResult>(
+      await harness.levelUp.confirm({
+        operationId: "operation:level",
+        characterId: "character:brammel",
+        expectedCharacterRevision: character.revision,
+        expectedRuntimeRevision: 1,
+        targetLevel: 2,
+        expectedContentFingerprint: await harness.query.contentFingerprint(SYNTHETIC_RULESET_ID),
+        choiceSelections: { [SYNTHETIC_CHOICES.weaponMastery]: ["option:measured-cut"] },
+      }),
+    );
+    const snapshot = await harness.database.characterSnapshots.get(levelled.restorePointId);
+    expect(snapshot?.overrides).toHaveLength(1);
+    expect(snapshot?.overrides[0].value).toBe(20);
+  });
+
+  it("rolls back the whole import when a late write fails", async () => {
+    const { json } = await exportBrammel();
+    await harness.database.characters.where("id").equals("character:brammel").modify(record => {
+      record.name = "Locally renamed";
+    });
+    const localRevision = (await harness.database.characters.get("character:brammel"))!.revision;
+    const preview = expectOk<TransferPreview>(await harness.transfer.preview(json));
+
+    // Occupy the operation ID the import's second version append will use, so it
+    // throws after the restore point and the override removal have been written.
+    await harness.database.characterVersions.add({
+      id: "character:brammel@squatter",
+      characterId: "character:brammel",
+      sequence: 99,
+      reason: "edit",
+      operationId: "operation:replace",
+      snapshot: (await harness.database.characters.get("character:brammel"))!,
+      createdAt: "2026-08-03T08:00:00.000Z",
+      updatedAt: "2026-08-03T08:00:00.000Z",
+    });
+
+    await expect(harness.transfer.confirm(preview.token, "replace", "operation:replace", localRevision)).rejects.toThrow();
+
+    // No mixed aggregate: the local record, its overrides and its log are intact.
+    expect((await harness.database.characters.get("character:brammel"))?.name).toBe("Locally renamed");
+    expect(await harness.database.characterSnapshots.count()).toBe(0);
+  });
+});

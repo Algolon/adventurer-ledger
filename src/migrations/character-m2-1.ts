@@ -203,6 +203,8 @@ export function migrateLegacySnapshot(row: Record<string, unknown>): CharacterSn
     label: text(row.label, "Restore point"),
     characterVersionId: text(row.characterVersionId, ""),
     runtimeState: migrateLegacyCharacter(runtimeSource).runtime,
+    // Pre-M2.1 snapshots predate typed overrides.
+    overrides: [],
     createdAt,
     updatedAt: timestamp(row, "updatedAt", createdAt),
   };

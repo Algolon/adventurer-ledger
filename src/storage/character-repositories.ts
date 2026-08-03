@@ -61,6 +61,12 @@ export interface CharacterActionLogRepository {
   append(action: CharacterActionRecord): Promise<void>;
   /** Marks an action as no longer reversible once an undo consumed it. */
   markConsumed(id: ID): Promise<void>;
+  /**
+   * Discards a character's session history. Used only where the aggregate is
+   * replaced wholesale, so the old log cannot be presented as history of the
+   * incoming state.
+   */
+  deleteByCharacter(characterId: ID): Promise<void>;
 }
 
 export interface CharacterDraftRepository {
@@ -187,6 +193,9 @@ export class DexieCharacterActionLogRepository implements CharacterActionLogRepo
     const current = await this.database.characterActions.get(id);
     if (!current) return;
     await this.database.characterActions.put({ ...current, reversible: false });
+  }
+  async deleteByCharacter(characterId: ID) {
+    await this.database.characterActions.where("characterId").equals(characterId).delete();
   }
 }
 

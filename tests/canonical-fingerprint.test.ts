@@ -80,22 +80,21 @@ describe("character fingerprint", () => {
     });
 
   it("is identical for records whose object keys are ordered differently", () => {
-    const reordered: CharacterRecord = JSON.parse(
-      JSON.stringify({
-        tags: base.tags,
-        kind: base.kind,
-        status: base.status,
-        abilityScores: {
-          charisma: base.abilityScores.charisma,
-          wisdom: base.abilityScores.wisdom,
-          intelligence: base.abilityScores.intelligence,
-          constitution: base.abilityScores.constitution,
-          dexterity: base.abilityScores.dexterity,
-          strength: base.abilityScores.strength,
-        },
-        ...base,
-      }),
-    );
+    /** Rebuilds every object with its keys in reverse insertion order. */
+    const deepReverseKeys = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(deepReverseKeys);
+      if (value && typeof value === "object")
+        return Object.fromEntries(
+          Object.entries(value as Record<string, unknown>)
+            .reverse()
+            .map(([key, child]) => [key, deepReverseKeys(child)]),
+        );
+      return value;
+    };
+    const reordered = deepReverseKeys(base) as CharacterRecord;
+    // The reordering is real, not a no-op.
+    expect(Object.keys(reordered)).not.toEqual(Object.keys(base));
+    expect(Object.keys(reordered.abilityScores)).not.toEqual(Object.keys(base.abilityScores));
     expect(computeCharacterFingerprint(reordered)).toBe(baseline);
   });
 
@@ -109,6 +108,30 @@ describe("character fingerprint", () => {
     });
     const original = fingerprint({ tags: [] });
     expect(swapped).toBe(original);
+  });
+
+  it("changes when the override set changes, because overrides travel with the character", () => {
+    const override = {
+      id: "character:brammel:override:armorClass",
+      characterId: "character:brammel",
+      targetPath: "armorClass",
+      operation: "replace" as const,
+      value: 20,
+      automaticBaseline: 18,
+      scope: "persistent" as const,
+      status: "active" as const,
+      createdAt: "2026-08-03T08:00:00.000Z",
+      updatedAt: "2026-08-03T08:00:00.000Z",
+    };
+    const withOverride = computeCharacterFingerprint(base, [override]);
+    expect(withOverride).not.toBe(baseline);
+    expect(computeCharacterFingerprint(base, [{ ...override, value: 21 }])).not.toBe(withOverride);
+    expect(computeCharacterFingerprint(base, [{ ...override, operation: "add" }])).not.toBe(withOverride);
+    expect(computeCharacterFingerprint(base, [{ ...override, scope: "until-level-up" }])).not.toBe(withOverride);
+
+    // The private reason and the audit timestamps are not part of identity.
+    expect(computeCharacterFingerprint(base, [{ ...override, reason: "private ruling" }])).toBe(withOverride);
+    expect(computeCharacterFingerprint(base, [{ ...override, updatedAt: "2030-01-01T00:00:00.000Z" }])).toBe(withOverride);
   });
 
   it("ignores volatile bookkeeping that must not create a transfer conflict", () => {

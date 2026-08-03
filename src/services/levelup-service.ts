@@ -297,6 +297,7 @@ export class CharacterLevelUpService {
           label: preview.restorePointLabel,
           characterVersionId: outgoingVersion.id,
           runtimeState: runtime,
+          overrides: overrides.map(item => ({ ...item })),
           createdAt: now,
           updatedAt: now,
         };
@@ -432,12 +433,18 @@ export class CharacterLevelUpService {
         };
         await repositories.runtime.put(restoredRuntime);
 
-        const [entries, overrides] = await Promise.all([
-          repositories.content.listEntries(),
-          repositories.overrides.listByCharacter(characterId),
-        ]);
+        // The override set belongs to the boundary. Rewriting it exactly is what
+        // stops a restore producing a mix of two aggregate revisions.
+        await repositories.overrides.deleteByCharacter(characterId);
+        const restoredOverrides = snapshot.overrides.map(item => ({ ...item, characterId, updatedAt: now }));
+        for (const override of restoredOverrides) await repositories.overrides.put(override);
+
+        const entries = await repositories.content.listEntries();
         await repositories.derivedSnapshots.put(
-          derivedSnapshotOf(resolveDerivedCharacter({ character: restored, runtime: restoredRuntime, overrides, entries }), now),
+          derivedSnapshotOf(
+            resolveDerivedCharacter({ character: restored, runtime: restoredRuntime, overrides: restoredOverrides, entries }),
+            now,
+          ),
         );
 
         return ok({

@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import type {
+  CharacterOverrideRecord,
   CharacterRecord,
   CharacterRuntimeStateRecord,
   CharacterSnapshotRecord,
@@ -97,6 +98,24 @@ const runtimeSchema = z.object({
   updatedAt: z.string(),
 }).strict();
 
+/**
+ * Overrides travel with the character: they are durable mechanical state, and a
+ * transfer that dropped them would silently change the sheet on arrival. The
+ * private `reason` is excluded, and `automaticBaseline` travels as audit context
+ * only — the resolver recalculates the baseline on the destination.
+ */
+const overrideSchema = z.object({
+  targetPath: z.string().min(1).max(200),
+  operation: z.enum(["replace", "add"]),
+  value: z.number(),
+  automaticBaseline: z.number().nullable(),
+  scope: z.enum(["persistent", "until-level-up"]),
+  status: z.enum(["active", "stale"]),
+  sourceId: z.string().max(160).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).strict();
+
 export const transferDocumentSchema = z.object({
   formatVersion: z.literal(TRANSFER_FORMAT_VERSION),
   kind: z.literal(TRANSFER_KIND),
@@ -107,6 +126,7 @@ export const transferDocumentSchema = z.object({
   runtime: runtimeSchema,
   /** Safe display summaries only: labels and numbers. */
   derivedSummary: z.record(z.string().max(120)),
+  overrides: z.array(overrideSchema).max(200),
   dependencies: z.array(z.object({ id: z.string().max(160), version: z.string().max(60), revision: z.number().int(), sourceId: z.string().max(160) }).strict()).max(500),
   exclusions: z.array(z.object({ code: z.string().max(80), count: z.number().int().min(0) }).strict()).max(50),
 }).strict();
@@ -150,16 +170,34 @@ const FINGERPRINTED_FIELDS = [
  */
 const CHARACTER_SET_PATHS = ["tags", "acknowledgedIssueCodes", "choiceSelections.*", "equipmentSelections.*"] as const;
 
-/** Stable fingerprint over the durable character, used for conflict detection. */
-export function computeCharacterFingerprint(character: CharacterRecord): string {
+/**
+ * Stable fingerprint over the durable character aggregate.
+ *
+ * Overrides are included because they are durable mechanical state that travels
+ * with the character: two records identical except for an armour-class override
+ * are genuinely different, and omitting them made the transfer report
+ * "Already current" and refuse to import the difference. Only the mechanical
+ * fields participate — the private reason and the audit timestamps do not.
+ */
+export function computeCharacterFingerprint(
+  character: CharacterRecord,
+  overrides: readonly CharacterOverrideRecord[] = [],
+): string {
   const subject: Record<string, unknown> = {};
   for (const field of FINGERPRINTED_FIELDS) {
     const value = character[field];
     if (value !== undefined) subject[field] = value;
   }
+  subject.overrides = overrides.map(item => ({
+    targetPath: item.targetPath,
+    operation: item.operation,
+    value: item.value,
+    scope: item.scope,
+    ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+  }));
   // Versioned prefix so the algorithm can change deliberately rather than
   // silently reinterpreting existing transfer files.
-  return `cfp2:${canonicalHash(subject, { setPaths: CHARACTER_SET_PATHS })}`;
+  return `cfp2:${canonicalHash(subject, { setPaths: [...CHARACTER_SET_PATHS, "overrides"] })}`;
 }
 
 export interface TransferManifest {
@@ -253,11 +291,23 @@ export class CharacterTransferService {
       formatVersion: TRANSFER_FORMAT_VERSION,
       kind: TRANSFER_KIND,
       exportedAt: this.clock(),
-      characterFingerprint: computeCharacterFingerprint(character),
+      characterFingerprint: computeCharacterFingerprint(character, overrides),
       contentFingerprint: computeContentFingerprint(entries, character.rulesetProfileId),
       character: { ...character, abilityScores: { ...character.abilityScores } } as TransferDocument["character"],
       runtime: { ...runtime } as TransferDocument["runtime"],
       derivedSummary: derivedSnapshotOf(sheet, this.clock()).summary,
+      // Sanitized: the private reason never leaves the device.
+      overrides: overrides.map(({ targetPath, operation, value, automaticBaseline, scope, status, sourceId, createdAt, updatedAt }) => ({
+        targetPath,
+        operation,
+        value,
+        automaticBaseline,
+        scope,
+        status,
+        ...(sourceId ? { sourceId } : {}),
+        createdAt,
+        updatedAt,
+      })),
       dependencies,
       exclusions,
     };
@@ -292,16 +342,17 @@ export class CharacterTransferService {
 
     const document = parsed.data;
     const { repositories } = this.context;
-    const [existing, entries] = await Promise.all([
+    const [existing, entries, localOverrides] = await Promise.all([
       repositories.characters.get(document.character.id),
       repositories.content.listEntries(),
+      repositories.overrides.listByCharacter(document.character.id),
     ]);
     const availableIds = new Set(entries.map(entry => entry.id));
     const missingDependencyIds = document.dependencies.filter(item => !availableIds.has(item.id)).map(item => item.id);
 
     const category: ConflictCategory = !existing
       ? "new"
-      : computeCharacterFingerprint(existing) === document.characterFingerprint
+      : computeCharacterFingerprint(existing, localOverrides) === document.characterFingerprint
         ? "already-current"
         : "conflict";
     const availableActions: ConflictAction[] =
@@ -341,6 +392,7 @@ export class CharacterTransferService {
         database.characterSnapshots,
         database.characterRuntimeStates,
         database.characterOverrides,
+        database.characterActions,
         database.characterDerivedSnapshots,
         database.contentEntries,
       ],
@@ -349,11 +401,12 @@ export class CharacterTransferService {
         const availableIds = new Set(entries.map(entry => entry.id));
         const unresolvedDependencyIds = document.dependencies.filter(item => !availableIds.has(item.id)).map(item => item.id);
         const existing = await repositories.characters.get(document.character.id);
+        const localOverrides = existing ? await repositories.overrides.listByCharacter(existing.id) : [];
 
         // Revalidate the conflict category against confirmation-time state.
         const category: ConflictCategory = !existing
           ? "new"
-          : computeCharacterFingerprint(existing) === document.characterFingerprint
+          : computeCharacterFingerprint(existing, localOverrides) === document.characterFingerprint
             ? "already-current"
             : "conflict";
         if (category === "already-current")
@@ -370,6 +423,7 @@ export class CharacterTransferService {
           if (expectedDestinationRevision === undefined || existing.revision !== expectedDestinationRevision)
             return stale(document.character.id, expectedDestinationRevision ?? -1, existing.revision);
           const outgoingRuntime = await repositories.runtime.get(existing.id);
+          const outgoingOverrides = await repositories.overrides.listByCharacter(existing.id);
           const sequence = (await repositories.versions.latestSequence(existing.id)) + 1;
           const outgoingVersion: CharacterVersionRecord = {
             id: `${existing.id}@${sequence}`,
@@ -390,12 +444,18 @@ export class CharacterTransferService {
               label: "Before replacing with the imported character",
               characterVersionId: outgoingVersion.id,
               runtimeState: outgoingRuntime,
+              // The restore point holds the complete outgoing aggregate.
+              overrides: outgoingOverrides.map(item => ({ ...item })),
               createdAt: now,
               updatedAt: now,
             };
             await repositories.snapshots.add(snapshot);
             restorePointId = snapshot.id;
           }
+          // The outgoing aggregate is archived, so its character-bound state is
+          // removed rather than left attached to the incoming character.
+          await repositories.overrides.deleteByCharacter(existing.id);
+          await repositories.actions.deleteByCharacter(existing.id);
         }
 
         const previousRevision = action === "replace" ? existing?.revision ?? 0 : 0;
@@ -429,7 +489,24 @@ export class CharacterTransferService {
         else await repositories.characters.add(character);
         await repositories.runtime.put(runtime);
 
-        const sheet = resolveDerivedCharacter({ character, runtime, overrides: [], entries });
+        // Override IDs and ownership are remapped deterministically onto the
+        // target character, so Keep both cannot alias the original's records.
+        const importedOverrides: CharacterOverrideRecord[] = document.overrides.map(item => ({
+          id: `${targetId}:override:${item.targetPath}`,
+          characterId: targetId,
+          targetPath: item.targetPath,
+          operation: item.operation,
+          value: item.value,
+          automaticBaseline: item.automaticBaseline,
+          scope: item.scope,
+          status: item.status,
+          ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+          createdAt: item.createdAt,
+          updatedAt: now,
+        }));
+        for (const override of importedOverrides) await repositories.overrides.put(override);
+
+        const sheet = resolveDerivedCharacter({ character, runtime, overrides: importedOverrides, entries });
         await repositories.derivedSnapshots.put({
           ...derivedSnapshotOf(sheet, now),
           // An imported derived summary is recovery evidence, not a fresh calculation.

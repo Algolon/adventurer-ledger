@@ -209,7 +209,14 @@ export interface CharacterActionRecord extends Audit {
   note?: string;
 }
 
-/** Restore point: durable version reference plus the runtime state at a recovery boundary. */
+/**
+ * Restore point: the complete recoverable aggregate at a recovery boundary.
+ *
+ * A restore point that captured only the durable version and runtime state was
+ * not recoverable: restoring it left whatever overrides happened to be attached
+ * at the time, so the restored character was a mix of two aggregate revisions.
+ * The override set belongs to the boundary and is captured with it.
+ */
 export interface CharacterSnapshotRecord extends Audit {
   id: ID;
   characterId: ID;
@@ -217,6 +224,8 @@ export interface CharacterSnapshotRecord extends Audit {
   label: string;
   characterVersionId: ID;
   runtimeState: CharacterRuntimeStateRecord;
+  /** Typed overrides active at the boundary. Restoring rewrites the set exactly. */
+  overrides: readonly CharacterOverrideRecord[];
 }
 
 /** Typed durable `replace`/`add` provenance. Strings are never evaluated. */
