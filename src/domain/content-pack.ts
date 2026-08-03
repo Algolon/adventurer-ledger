@@ -3,12 +3,20 @@ import type {
   ChoiceDefinition,
   Condition,
   Effect,
+  PackCoverage,
   PrerequisiteDefinition,
   Value,
 } from "@/src/domain/model";
 
 const id = z.string().min(1).max(160);
 const edition = z.enum(["2014", "2024", "mixed", "homebrew"]);
+const coverage = z.enum(["pilot", "partial", "complete"]);
+export function packCoverageMatchesIdentity(id: string, name: string, value: PackCoverage): boolean {
+  const identity = `${id} ${name}`;
+  if (/\bpilot\b/i.test(identity)) return value === "pilot";
+  if (/\b(?:partial|incomplete)\b/i.test(identity)) return value !== "complete";
+  return true;
+}
 const license = z.enum([
   "CC-BY-4.0", "official-free", "original", "private-reference",
   "private-owned-source", "unknown", "export-restricted", "do-not-distribute",
@@ -104,9 +112,16 @@ export const contentEntrySchema = z.discriminatedUnion("category", [
   categorized("item", mechanicsByCategory.item), categorized("weapon", mechanicsByCategory.weapon), categorized("armor", mechanicsByCategory.armor), categorized("tool", mechanicsByCategory.tool), categorized("monster", mechanicsByCategory.monster), categorized("proficiency", mechanicsByCategory.proficiency), categorized("spell-list", mechanicsByCategory["spell-list"]),
   categorized("fighting-style", generic), categorized("weapon-mastery", generic), categorized("maneuver", generic), categorized("invocation", generic), categorized("metamagic", generic), categorized("infusion", generic), categorized("pact-boon", generic), categorized("condition", generic), categorized("resource", generic), categorized("rule", generic),
 ]);
+const packSchema = z.object({
+  id, name: z.string().min(1).max(240), description: z.string().max(20000).optional(), version: z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/),
+  coverage: coverage.default("complete"), rulesEditions: z.array(edition).min(1), visibility: z.enum(["public", "private"]), licenseType: license,
+  exportRestricted: z.boolean(), includeFullText: z.boolean(), dependencies: z.array(id).default([]), optionalDependencies: z.array(id).default([]),
+}).strict().superRefine((pack, context) => {
+  if (!packCoverageMatchesIdentity(pack.id, pack.name, pack.coverage)) context.addIssue({ code: z.ZodIssueCode.custom, path: ["coverage"], message: "Pack identity and coverage are inconsistent" });
+});
 export const contentPackSchema = z.object({
   schemaVersion: z.literal(2),
-  pack: z.object({ id, name: z.string().min(1).max(240), description: z.string().max(20000).optional(), version: z.string().regex(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/), rulesEditions: z.array(edition).min(1), visibility: z.enum(["public", "private"]), licenseType: license, exportRestricted: z.boolean(), includeFullText: z.boolean(), dependencies: z.array(id).default([]), optionalDependencies: z.array(id).default([]) }).strict(),
+  pack: packSchema,
   sources: z.array(source).max(500), entries: z.array(contentEntrySchema).max(25000),
 }).strict();
 export type ContentPackDocument = z.infer<typeof contentPackSchema>;

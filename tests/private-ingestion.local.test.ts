@@ -14,9 +14,10 @@ describe.skipIf(!privatePackPath)("local private ingestion", () => {
     if (!privatePackPath) throw new Error("Private pack path was not provided");
     const json = await readFile(privatePackPath, "utf8"), validation = validateContentPackJson(json);
     expect(validation.success).toBe(true);
+    expect(validation.data?.pack).toMatchObject({ id: "private-phb-2024-brammel-pilot", coverage: "pilot" });
     const preview = await previewContentPackSet([json], database);
     expect(preview.canImport).toBe(true);
-    expect(preview.issues.map(issue => issue.code)).toContain("OPTIONAL_DEPENDENCY_MISSING");
+    expect(preview.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(["PACK_INCOMPLETE", "OPTIONAL_DEPENDENCY_MISSING"]));
     await confirmImportSet(preview, database);
     expect(await database.contentEntries.count()).toBe(validation.data?.entries.length);
     const relations = resolveContentRelations(await database.contentEntries.toArray());

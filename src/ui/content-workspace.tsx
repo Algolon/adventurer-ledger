@@ -242,10 +242,25 @@ function SourcesPanel() {
   );
 }
 
-const initialPack = {
+interface PackEditorForm {
+  packId: string;
+  packName: string;
+  packVersion: string;
+  coverage: ContentPack["coverage"];
+  sourceId: string;
+  entryId: string;
+  slug: string;
+  entryName: string;
+  category: ContentEntry["category"];
+  fullText: string;
+  effects: string;
+  restricted: boolean;
+}
+const initialPack: PackEditorForm = {
   packId: "pack:synthetic-local",
   packName: "Synthetic local pack",
   packVersion: "1.0.0",
+  coverage: "complete",
   sourceId: "source:synthetic-local",
   entryId: "rule:moonlit-trail",
   slug: "moonlit-trail",
@@ -283,6 +298,9 @@ const contentCategories = new Set<string>([
 ]);
 function isCategory(value: string): value is ContentEntry["category"] {
   return contentCategories.has(value);
+}
+function isPackCoverage(value: string): value is ContentPack["coverage"] {
+  return value === "pilot" || value === "partial" || value === "complete";
 }
 function isEffect(value: unknown): value is Effect {
   return (
@@ -346,6 +364,7 @@ function PackEditor() {
         id: form.packId,
         name: form.packName,
         version: form.packVersion,
+        coverage: form.coverage,
         schemaVersion: 2,
         rulesEditions: ["homebrew"],
         visibility: "private",
@@ -415,6 +434,21 @@ function PackEditor() {
           />
         </label>
         <label>
+          Coverage
+          <select
+            aria-label="Pack coverage"
+            value={form.coverage}
+            onChange={(event) => {
+              if (isPackCoverage(event.target.value))
+                setForm({ ...form, coverage: event.target.value });
+            }}
+          >
+            <option value="pilot">Pilot</option>
+            <option value="partial">Partial</option>
+            <option value="complete">Complete</option>
+          </select>
+        </label>
+        <label>
           Source ID
           <input
             value={form.sourceId}
@@ -462,9 +496,10 @@ function PackEditor() {
             Category
             <input
               value={form.category}
-              onChange={(event) =>
-                setForm({ ...form, category: event.target.value })
-              }
+              onChange={(event) => {
+                if (isCategory(event.target.value))
+                  setForm({ ...form, category: event.target.value });
+              }}
               required
             />
           </label>
@@ -522,7 +557,8 @@ function PackEditor() {
               <span>
                 <b>{pack.name}</b>
                 <small>
-                  {pack.id} · v{pack.version} · {pack.entryIds.length} entries
+                  {pack.id} · v{pack.version} · {pack.coverage} ·{" "}
+                  {pack.entryIds.length} entries
                 </small>
               </span>
               <button
@@ -536,6 +572,7 @@ function PackEditor() {
                     packId: pack.id,
                     packName: pack.name,
                     packVersion: pack.version,
+                    coverage: pack.coverage,
                     sourceId: pack.sourceIds[0] ?? "",
                     entryId: entry?.id ?? "",
                     slug: entry?.slug ?? "",

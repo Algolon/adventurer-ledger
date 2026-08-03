@@ -43,6 +43,17 @@ describe("private content pipeline", () => {
       database.contentEntries.get("rule:synthetic-moon-path"),
     ).resolves.toMatchObject({ name: "Synthetic Moon Path", revision: 1 });
   });
+  it.each(["pilot", "partial"] as const)("keeps %s coverage explicit in preview, storage, and diagnostics", async (coverage) => {
+    const document = syntheticPack({ coverage });
+    document.pack.id = `private-synthetic-moon-${coverage}`;
+    document.pack.name = `Synthetic Moon ${coverage}`;
+    const preview = await previewContentPack(JSON.stringify(document), database);
+    expect(preview.canImport).toBe(true);
+    expect(preview.issues).toContainEqual(expect.objectContaining({ code: "PACK_INCOMPLETE", severity: "warning", recordId: document.pack.id }));
+    expect(JSON.stringify(preview.issues)).toContain("not a complete source");
+    await confirmImport(preview, database);
+    await expect(database.contentPacks.get(document.pack.id)).resolves.toMatchObject({ coverage });
+  });
   it("previews and applies the deterministic v0 to v2 migration", async () => {
     const legacy = { ...syntheticPack(), schemaVersion: 0 };
     const preview = await previewContentPack(JSON.stringify(legacy), database);
@@ -188,6 +199,7 @@ describe("private content pipeline", () => {
     );
     const standard = await createContentExport(database);
     expect(standard).toHaveLength(1);
+    expect(standard[0]?.pack.coverage).toBe("complete");
     expect(standard[0]?.entries).toEqual([]);
     expect(validateContentPackJson(JSON.stringify(standard[0])).success).toBe(
       true,
@@ -292,5 +304,24 @@ describe("content repositories", () => {
     ).rejects.toThrow("already exists");
     expect(await database.contentEntries.count()).toBe(0);
     expect((await packRepo.get(existingPack.id))?.entryIds).toEqual([]);
+  });
+  it("rejects complete coverage for a pilot identity at the editor service boundary", async () => {
+    const document = syntheticPack(), stamp = "2026-08-03T08:00:00.000Z";
+    const source = { ...document.sources[0], createdAt: stamp, updatedAt: stamp };
+    await new SourceRepository(database).create(source);
+    const pack = {
+      ...document.pack,
+      id: "pack:synthetic-editor-pilot",
+      name: "Synthetic Editor Pilot",
+      coverage: "complete" as const,
+      schemaVersion: 2,
+      sourceIds: [source.id],
+      entryIds: [document.entries[0].id],
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    await expect(savePackEntry(database, { entry: document.entries[0], pack })).rejects.toThrow("inconsistent coverage metadata");
+    expect(await database.contentEntries.count()).toBe(0);
+    expect(await database.contentPacks.count()).toBe(0);
   });
 });

@@ -15,6 +15,7 @@ export type ImportIssueCode =
   | "SCHEMA_INVALID"
   | "SCHEMA_UNSUPPORTED"
   | "MIGRATION_APPLIED"
+  | "PACK_INCOMPLETE"
   | "DUPLICATE_ID"
   | "PACK_VERSION_CONFLICT"
   | "ENTRY_REVISION_CONFLICT"
@@ -176,6 +177,14 @@ export async function previewContentPack(
       packs: new Map(),
       entries: new Map(),
     };
+  if (document.pack.coverage !== "complete")
+    issues.push({
+      code: "PACK_INCOMPLETE",
+      severity: "warning",
+      recordId: document.pack.id,
+      path: "pack.coverage",
+      message: `Pack ${document.pack.id} declares ${document.pack.coverage} coverage and is not a complete source`,
+    });
   for (const id of duplicates(document.sources.map((source) => source.id)))
     issues.push({
       code: "DUPLICATE_ID",

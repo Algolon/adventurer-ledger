@@ -2,6 +2,14 @@ type JsonObject = Record<string, unknown>;
 const isObject = (value: unknown): value is JsonObject => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown, fallback: string) => typeof value === "string" && value.length > 0 ? value : fallback;
 const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+export type MigratedPackCoverage = "pilot" | "partial" | "complete";
+export function inferPackCoverage(pack: JsonObject): MigratedPackCoverage {
+  if (pack.coverage === "pilot" || pack.coverage === "partial" || pack.coverage === "complete") return pack.coverage;
+  const identity = `${text(pack.id, "")} ${text(pack.name, "")}`;
+  if (/\bpilot\b/i.test(identity)) return "pilot";
+  if (/\b(?:partial|incomplete)\b/i.test(identity)) return "partial";
+  return "complete";
+}
 
 function defaultMechanics(category: string, entry: JsonObject): JsonObject {
   if (isObject(entry.mechanics)) return entry.mechanics;
@@ -48,6 +56,6 @@ export function migrateContentPackToV2(input: unknown): ContentPackMigrationResu
   const entries = input.entries.map(item => isObject(item) ? migrateContentEntryToV2(item, sourcePriorities.get(text(item.sourceId, "source:unresolved")) ?? 0) : item);
   return {
     migratedFrom: typeof input.schemaVersion === "number" ? input.schemaVersion : 1,
-    value: { ...input, schemaVersion: 2, pack: { ...input.pack, dependencies: strings(input.pack.dependencies), optionalDependencies: strings(input.pack.optionalDependencies) }, entries },
+    value: { ...input, schemaVersion: 2, pack: { ...input.pack, coverage: inferPackCoverage(input.pack), dependencies: strings(input.pack.dependencies), optionalDependencies: strings(input.pack.optionalDependencies) }, entries },
   };
 }

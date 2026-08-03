@@ -10,6 +10,7 @@ Schema v2 is the content contract for local owned-source libraries. IndexedDB re
 - Effects, values, conditions, choices, and prerequisites are declarative allow-lists. Formula names are allow-listed; HTML event handlers, executable markup, forbidden object keys, and unknown fields are rejected. Nothing evaluates imported code.
 - Typed links describe builder-facing relations. Required targets block an import set; optional links remain resolvable later.
 - Pack `dependencies` block when absent. `optionalDependencies` produce warnings. Multiple files are previewed as one namespace and confirmed in one Dexie transaction.
+- Pack `coverage` is `pilot`, `partial`, or `complete`. Missing metadata defaults to `complete`, except clearly marked legacy pilot/partial identities are inferred conservatively. Bounded packs must declare actual coverage. Import previews always warn for pilot and partial packs, and pilot identities cannot claim complete coverage.
 - Stable IDs survive revisions. Prior records are archived before replacement. Replacement and edition edges must resolve.
 - Conflict winners are deterministic by source priority, revision, then stable ID. The ruleset still controls whether alternatives may coexist.
 
@@ -30,7 +31,7 @@ Recommended directories, both outside the repository:
 - `/Users/omarjolein/Documents/AdventurerLedgerPrivateSources/`
 - `/Users/omarjolein/Documents/AdventurerLedgerPrivateOutput/`
 
-Expected eventual outputs are `private-phb-2024.private.json`, `private-dmg-2024.private.json`, `private-mm-2025.private.json`, `private-tasha.private.json`, `private-xanathar.private.json`, and `private-legacy-2014.private.json`. They match `*.private.json` and must never be committed.
+The bounded local pilot uses ID `private-phb-2024-brammel-pilot` with `coverage: "pilot"`. Eventual complete outputs may use IDs such as `private-phb-2024`; all private outputs match `*.private.json` and must never be committed.
 
 Local production-path validation:
 

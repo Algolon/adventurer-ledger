@@ -39,6 +39,7 @@ export async function createContentExport(
         name: pack.name,
         description: pack.description,
         version: pack.version,
+        coverage: pack.coverage,
         rulesEditions: pack.rulesEditions,
         visibility: pack.visibility,
         licenseType: pack.licenseType,

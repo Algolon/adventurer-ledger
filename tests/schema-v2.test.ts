@@ -43,10 +43,21 @@ describe("schema v2", () => {
   it("migrates v1 without losing synthetic text", () => {
     const current = syntheticPack(), entry = current.entries[0], pack = current.pack;
     const { sourceLocator: _locator, reviewStatus: _review, links: _links, mechanics: _mechanics, conflict: _conflict, editionRelations: _relations, ...legacyEntry } = entry;
-    const { dependencies: _dependencies, optionalDependencies: _optional, ...legacyPack } = pack;
+    const { coverage: _coverage, dependencies: _dependencies, optionalDependencies: _optional, ...legacyPack } = pack;
     const result = validateContentPackJson(JSON.stringify({ ...current, schemaVersion: 1, pack: legacyPack, entries: [legacyEntry] }));
     expect(result.success).toBe(true);
     expect(result.data?.entries[0]).toMatchObject({ fullText: entry.fullText, summary: entry.summary, reviewStatus: "extracted" });
+    expect(result.data?.pack.coverage).toBe("complete");
+  });
+  it("defaults legacy coverage but rejects a complete pilot identity", () => {
+    const current = syntheticPack(), { coverage: _coverage, ...withoutCoverage } = current.pack;
+    expect(validateContentPackJson(JSON.stringify({ ...current, pack: withoutCoverage })).data?.pack.coverage).toBe("complete");
+    const pilot = syntheticPack({ coverage: "pilot" });
+    pilot.pack.id = "private-synthetic-pilot";
+    expect(validateContentPackJson(JSON.stringify(pilot)).success).toBe(true);
+    expect(validateContentPackJson(JSON.stringify({ ...pilot, pack: { ...pilot.pack, coverage: "complete" } })).success).toBe(false);
+    const { coverage: _pilotCoverage, ...legacyPilotPack } = pilot.pack;
+    expect(validateContentPackJson(JSON.stringify({ ...pilot, schemaVersion: 1, pack: legacyPilotPack })).data?.pack.coverage).toBe("pilot");
   });
   it("resolves source conflicts deterministically without copying text", () => {
     const entry = syntheticPack().entries[0], lower = { ...entry, id: "rule:lower", conflict: { ...entry.conflict, sourcePriority: 1, conflictKey: "rule:shared" } }, higher = { ...entry, id: "rule:higher", fullText: "Synthetic private marker", conflict: { ...entry.conflict, sourcePriority: 20, conflictKey: "rule:shared" } };
@@ -98,7 +109,7 @@ describe("multi-file dependency imports", () => {
   it("upgrades stored v1 records transactionally", async () => {
     const name = `migration-${crypto.randomUUID()}`, current = syntheticPack(), entry = current.entries[0], pack = current.pack;
     const { sourceLocator: _locator, reviewStatus: _review, links: _links, mechanics: _mechanics, conflict: _conflict, editionRelations: _relations, ...legacyEntry } = entry;
-    const { dependencies: _dependencies, optionalDependencies: _optional, ...legacyPack } = pack;
+    const { coverage: _coverage, dependencies: _dependencies, optionalDependencies: _optional, ...legacyPack } = pack;
     const legacy = new Dexie(name);
     legacy.version(1).stores({ contentEntries: "id", contentPacks: "id" });
     legacy.version(2).stores({ contentEntries: "id", contentPacks: "id" });
@@ -108,6 +119,6 @@ describe("multi-file dependency imports", () => {
     database = new LedgerDB(name);
     const migratedEntry = await database.contentEntries.get(entry.id), migratedPack = await database.contentPacks.get(pack.id);
     expect(migratedEntry).toMatchObject({ fullText: entry.fullText, reviewStatus: "extracted", mechanics: { kind: "rule" } });
-    expect(migratedPack).toMatchObject({ schemaVersion: 2, dependencies: [], optionalDependencies: [] });
+    expect(migratedPack).toMatchObject({ schemaVersion: 2, coverage: "complete", dependencies: [], optionalDependencies: [] });
   });
 });
