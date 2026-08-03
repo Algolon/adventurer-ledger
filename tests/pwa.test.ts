@@ -19,10 +19,13 @@ describe("PWA foundation", () => {
       start_url: root,
       scope: root,
       display: "standalone",
-      theme_color: "#111a22",
-      background_color: "#f2e7ce",
+      name: "Runefolio",
+      short_name: "Runefolio",
+      theme_color: "#0F1D29",
+      background_color: "#F6EBD6",
     });
     expect(value.icons?.every((icon) => icon.src.startsWith(root))).toBe(true);
+    expect(value.icons?.filter((icon) => icon.purpose === "maskable")).toHaveLength(2);
   });
   it("keeps the active cache authoritative until a controlled update", () => {
     const worker = readFileSync("public/sw.js", "utf8"),
@@ -43,6 +46,9 @@ describe("PWA foundation", () => {
     expect(worker).toMatch(/key\s*===\s*"ledger-v1"/);
     expect(worker).toContain("caches.delete(key)");
     expect(worker).toContain("/*__PRECACHE_ASSETS__*/");
+    expect(readFileSync("scripts/build-service-worker.mjs", "utf8")).toContain(
+      '".svg"',
+    );
   });
   it("registers the scoped worker only in production and exposes real states", () => {
     const registration = readFileSync("src/ui/pwa-status.tsx", "utf8");

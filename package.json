@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "brand:generate": "node scripts/generate-brand-assets.mjs",
     "dev": "cross-env NEXT_TELEMETRY_DISABLED=1 next dev",
     "build": "cross-env NEXT_TELEMETRY_DISABLED=1 next build && node scripts/build-service-worker.mjs",
     "start": "node scripts/serve-static.mjs",

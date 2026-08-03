@@ -22,6 +22,16 @@ function assert(condition, message) {
 assert(manifest.id === appRoot, "Manifest id is outside the app scope");
 assert(manifest.start_url === appRoot, "Manifest start_url is outside the app scope");
 assert(manifest.scope === appRoot, "Manifest scope is outside the app scope");
+assert(manifest.name === "Runefolio", "Manifest product name mismatch");
+assert(manifest.short_name === "Runefolio", "Manifest short name mismatch");
+assert(
+  manifest.icons.filter((icon) => icon.purpose === "any").length === 2,
+  "Manifest must contain 192 px and 512 px any icons",
+);
+assert(
+  manifest.icons.filter((icon) => icon.purpose === "maskable").length === 2,
+  "Manifest must contain 192 px and 512 px maskable icons",
+);
 assert(
   manifest.icons.every((icon) => icon.src.startsWith(`${basePath}/icons/`)),
   "A manifest icon is outside the app scope",

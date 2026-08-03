@@ -6,7 +6,14 @@ const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "",
 
 async function navigate(page: Page, label: string) {
   const toggle = page.getByRole("button", { name: "Toggle navigation" });
-  if (await toggle.isVisible()) await toggle.click();
+  if (await toggle.isVisible()) {
+    await toggle.click();
+    const side = page.locator(".side");
+    await expect(side).toHaveClass(/open/);
+    await expect
+      .poll(async () => (await side.boundingBox())?.x)
+      .toBeGreaterThanOrEqual(0);
+  }
   await page.getByRole("button", { name: label, exact: true }).click();
 }
 function pack(prefix: string, name: string, fullText: string) {
@@ -65,6 +72,26 @@ function pack(prefix: string, name: string, fullText: string) {
     ],
   };
 }
+
+test("presents the Runefolio identity and scoped icon metadata", async ({ page }) => {
+  await page.goto(APP_ROOT);
+  await expect(page).toHaveTitle("Runefolio");
+  await expect(page.locator(".page-title img")).toBeVisible();
+  const iconLinks = await page
+    .locator('link[rel~="icon"], link[rel="apple-touch-icon"]')
+    .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+  expect(iconLinks.length).toBeGreaterThanOrEqual(4);
+  expect(iconLinks.every((href) => href?.startsWith(`${BASE_PATH}/`))).toBe(true);
+  const manifest = (await (
+    await page.request.get(scoped("/manifest.webmanifest"))
+  ).json()) as { name: string; short_name: string; id: string; scope: string };
+  expect(manifest).toMatchObject({
+    name: "Runefolio",
+    short_name: "Runefolio",
+    id: APP_ROOT,
+    scope: APP_ROOT,
+  });
+});
 
 test("opens and advances Brammel builder", async ({ page }) => {
   await page.goto(APP_ROOT);
