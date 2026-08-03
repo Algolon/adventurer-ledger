@@ -14,7 +14,17 @@ const output = path.resolve("out"),
     (match) => match[1],
   ),
   precacheText = worker.match(/const PRECACHE=(\[[^;]+\]);/)?.[1],
-  precache = precacheText ? JSON.parse(precacheText) : [];
+  precache = precacheText ? JSON.parse(precacheText) : [],
+  installAssets = [
+    "icons/runefolio-icon-192.png",
+    "icons/runefolio-icon-512.png",
+    "icons/runefolio-maskable-192.png",
+    "icons/runefolio-maskable-512.png",
+    "icons/runefolio-apple-touch-icon.png",
+    "icons/runefolio-favicon-16.png",
+    "icons/runefolio-favicon-32.png",
+    "runefolio-favicon.ico",
+  ];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -24,6 +34,10 @@ assert(manifest.start_url === appRoot, "Manifest start_url is outside the app sc
 assert(manifest.scope === appRoot, "Manifest scope is outside the app scope");
 assert(manifest.name === "Runefolio", "Manifest product name mismatch");
 assert(manifest.short_name === "Runefolio", "Manifest short name mismatch");
+assert(
+  html.includes(`rel="manifest" href="${appRoot}manifest.webmanifest?v=runefolio-1"`),
+  "Generated HTML does not use the versioned Runefolio manifest reference",
+);
 assert(
   manifest.icons.filter((icon) => icon.purpose === "any").length === 2,
   "Manifest must contain 192 px and 512 px any icons",
@@ -36,6 +50,18 @@ assert(
   manifest.icons.every((icon) => icon.src.startsWith(`${basePath}/icons/`)),
   "A manifest icon is outside the app scope",
 );
+assert(
+  manifest.icons.every((icon) => /\/runefolio-(?:icon|maskable)-/.test(icon.src)),
+  "Manifest references a non-Runefolio installation icon",
+);
+assert(
+  !html.match(/\/(?:icons\/(?:icon-|maskable-|apple-touch-icon|favicon-(?:16|32))|favicon\.ico)/),
+  "Generated HTML references a legacy generic installation asset",
+);
+for (const asset of installAssets) {
+  await readFile(path.join(output, asset));
+  assert(precache.includes(`${basePath}/${asset}`), `${asset} is missing from the precache`);
+}
 assert(
   publicReferences
     .filter((reference) => reference.startsWith("/"))
