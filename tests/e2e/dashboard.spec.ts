@@ -77,20 +77,31 @@ test("presents the Runefolio identity and scoped icon metadata", async ({ page }
   await page.goto(APP_ROOT);
   await expect(page).toHaveTitle("Runefolio");
   await expect(page.locator(".page-title img")).toBeVisible();
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    "href",
+    `${BASE_PATH}/manifest.webmanifest?v=runefolio-1`,
+  );
   const iconLinks = await page
     .locator('link[rel~="icon"], link[rel="apple-touch-icon"]')
     .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
   expect(iconLinks.length).toBeGreaterThanOrEqual(4);
   expect(iconLinks.every((href) => href?.startsWith(`${BASE_PATH}/`))).toBe(true);
+  expect(iconLinks).toEqual(expect.arrayContaining([
+    `${BASE_PATH}/brand/runefolio-favicon.svg`,
+    `${BASE_PATH}/icons/runefolio-favicon-32.png`,
+    `${BASE_PATH}/icons/runefolio-favicon-16.png`,
+    `${BASE_PATH}/icons/runefolio-apple-touch-icon.png`,
+  ]));
   const manifest = (await (
     await page.request.get(scoped("/manifest.webmanifest"))
-  ).json()) as { name: string; short_name: string; id: string; scope: string };
+  ).json()) as { name: string; short_name: string; id: string; scope: string; icons: Array<{ src: string }> };
   expect(manifest).toMatchObject({
     name: "Runefolio",
     short_name: "Runefolio",
     id: APP_ROOT,
     scope: APP_ROOT,
   });
+  expect(manifest.icons.every((icon) => /\/runefolio-(?:icon|maskable)-/.test(icon.src))).toBe(true);
 });
 
 test("opens and advances Brammel builder", async ({ page }) => {
@@ -285,6 +296,17 @@ test("serves a scoped versioned worker through the preview contract", async ({
     expect(icon.src.startsWith(scoped("/icons/"))).toBe(true);
     expect((await page.request.get(icon.src)).ok()).toBe(true);
   }
+  for (const asset of [
+    scoped("/icons/runefolio-icon-192.png"),
+    scoped("/icons/runefolio-icon-512.png"),
+    scoped("/icons/runefolio-maskable-192.png"),
+    scoped("/icons/runefolio-maskable-512.png"),
+    scoped("/icons/runefolio-apple-touch-icon.png"),
+    scoped("/icons/runefolio-favicon-16.png"),
+    scoped("/icons/runefolio-favicon-32.png"),
+    scoped("/runefolio-favicon.ico"),
+  ]) expect(precache).toContain(asset);
+  expect(precache.some((asset) => /\/icons\/(?:icon-|maskable-|apple-touch-icon|favicon-(?:16|32))|\/favicon\.ico$/.test(asset))).toBe(false);
   const shellAssets = await page.locator('script[src],link[rel="stylesheet"]').evaluateAll(
     (elements) => elements.map((element) => element.getAttribute("src") ?? element.getAttribute("href")),
   );

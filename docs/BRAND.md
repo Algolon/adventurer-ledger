@@ -52,8 +52,13 @@ React instances adjacent to visible Runefolio text use empty alt text and
 ## Assets and regeneration
 
 Canonical vectors live in `public/brand/`. Production PNGs and the ICO live in
-`public/icons/` and `public/favicon.ico`. Regenerate every derived asset and the
-comparison sheet deterministically with:
+`public/icons/` and `public/runefolio-favicon.ico`. Their filenames are
+Runefolio-prefixed so browsers cannot reuse pre-rebrand installation icons at
+the former generic URLs. The HTML references the manifest as
+`manifest.webmanifest?v=runefolio-1`; bump that explicit version only when
+installation metadata requires another deliberate cache invalidation.
+
+Regenerate every derived asset and the comparison sheet deterministically with:
 
 ```bash
 npm run brand:generate

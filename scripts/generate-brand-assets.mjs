@@ -72,17 +72,17 @@ const appIcon = (size, maskable = false) => {
   renderPng = async (name, size, maskable = false) =>
     sharp(appIcon(size, maskable)).png().toFile(path.join(iconDirectory, name)),
   pngFiles = [
-    ["icon-192.png", 192, false],
-    ["icon-512.png", 512, false],
-    ["maskable-192.png", 192, true],
-    ["maskable-512.png", 512, true],
-    ["apple-touch-icon.png", 180, false],
-    ["favicon-16.png", 16, false],
-    ["favicon-32.png", 32, false],
+    ["runefolio-icon-192.png", 192, false],
+    ["runefolio-icon-512.png", 512, false],
+    ["runefolio-maskable-192.png", 192, true],
+    ["runefolio-maskable-512.png", 512, true],
+    ["runefolio-apple-touch-icon.png", 180, false],
+    ["runefolio-favicon-16.png", 16, false],
+    ["runefolio-favicon-32.png", 32, false],
   ];
 await Promise.all(pngFiles.map(([name, size, maskable]) => renderPng(name, size, maskable)));
 
-const favicon32 = await fs.readFile(path.join(iconDirectory, "favicon-32.png")),
+const favicon32 = await fs.readFile(path.join(iconDirectory, "runefolio-favicon-32.png")),
   icoHeader = Buffer.alloc(22);
 icoHeader.writeUInt16LE(0, 0);
 icoHeader.writeUInt16LE(1, 2);
@@ -93,7 +93,7 @@ icoHeader.writeUInt16LE(1, 10);
 icoHeader.writeUInt16LE(32, 12);
 icoHeader.writeUInt32LE(favicon32.length, 14);
 icoHeader.writeUInt32LE(22, 18);
-await fs.writeFile(path.join(root, "public", "favicon.ico"), Buffer.concat([icoHeader, favicon32]));
+await fs.writeFile(path.join(root, "public", "runefolio-favicon.ico"), Buffer.concat([icoHeader, favicon32]));
 
 const dataUri = (source) => `data:image/svg+xml;base64,${Buffer.from(source).toString("base64")}`,
   fullColor = dataUri(assets["runefolio-mark.svg"]),
