@@ -58,8 +58,10 @@ export interface LevelUpPreview {
   characterId: ID;
   characterRevision: number;
   runtimeRevision: number;
+  rulesetProfileId: ID;
   fromLevel: number;
   toLevel: number;
+  /** Fingerprint the caller must send back with confirm. */
   contentFingerprint: string;
   policyId: string;
   policyLabel: string;
@@ -93,6 +95,7 @@ export function planLevelUp(
   runtime: CharacterRuntimeStateRecord,
   newChoices: readonly RequiredChoice[],
   fingerprint: string,
+  rulesetProfileId: ID,
 ): LevelUpPreview {
   const hitPoints: TrackedValueDiff = {
     id: "hitPoints",
@@ -134,6 +137,7 @@ export function planLevelUp(
     characterId: after.characterId,
     characterRevision: before.characterRevision,
     runtimeRevision: runtime.revision,
+    rulesetProfileId,
     fromLevel: before.level,
     toLevel: after.level,
     contentFingerprint: fingerprint,
@@ -224,7 +228,14 @@ export class CharacterLevelUpService {
     const draftAfter = { ...toBuild(next), level: next.level };
     const beforeChoiceIds = new Set(requiredChoicesFor(draftBefore, entries).map(choice => choice.choiceId));
     const newChoices = requiredChoicesFor(draftAfter, entries).filter(choice => !beforeChoiceIds.has(choice.choiceId));
-    return planLevelUp(before, after, runtime, newChoices, computeContentFingerprint(entries, character.rulesetProfileId));
+    return planLevelUp(
+      before,
+      after,
+      runtime,
+      newChoices,
+      computeContentFingerprint(entries, character.rulesetProfileId),
+      character.rulesetProfileId,
+    );
   }
 
   async confirm(command: LevelUpConfirmCommand): Promise<ServiceOutcome<LevelUpResult>> {
@@ -452,6 +463,10 @@ function toBuild(character: CharacterRecord) {
     ...(character.backgroundId ? { backgroundId: character.backgroundId } : {}),
     abilityMethod: character.abilityMethod,
     abilityScores: character.abilityScores,
+    // A committed record no longer carries the draft-time assignment; choice
+    // planning does not read it.
+    abilityBaseScores: {},
+    abilityIncreases: {},
     choiceSelections: character.choiceSelections,
     equipmentSelections: character.equipmentSelections,
     manualValues: character.manualValues,

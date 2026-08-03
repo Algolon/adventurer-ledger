@@ -244,7 +244,12 @@ export interface CharacterDraftBuild {
   speciesId?: ID;
   backgroundId?: ID;
   abilityMethod: AbilityMethod;
+  /** Final scores, i.e. `abilityBaseScores` plus `abilityIncreases`. */
   abilityScores: Readonly<Partial<Record<Ability, number>>>;
+  /** Standard-array assignment before origin increases, so a resume is faithful. */
+  abilityBaseScores: Readonly<Partial<Record<Ability, number>>>;
+  /** Origin increases the user placed, keyed by ability. */
+  abilityIncreases: Readonly<Partial<Record<Ability, number>>>;
   choiceSelections: Readonly<Record<ID, readonly ID[]>>;
   equipmentSelections: Readonly<Record<ID, readonly ID[]>>;
   manualValues: Readonly<Record<string, number>>;
@@ -257,6 +262,8 @@ export const EMPTY_DRAFT_BUILD: CharacterDraftBuild = {
   level: 1,
   abilityMethod: "standard-array",
   abilityScores: {},
+  abilityBaseScores: {},
+  abilityIncreases: {},
   choiceSelections: {},
   equipmentSelections: {},
   manualValues: {},

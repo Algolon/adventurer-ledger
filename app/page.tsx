@@ -1,8 +1,226 @@
-"use client";import{Archive,ArrowRight,BookOpen,Check,ChevronRight,CircleAlert,Database,FolderLock,Import,Menu,ScrollText,Search,Settings,ShieldCheck,Swords,UserRound,X}from"lucide-react";import{useState}from"react";import{ContentWorkspace}from"@/src/ui/content-workspace";import{StorageSettings}from"@/src/ui/storage-settings";import{PwaIndicator}from"@/src/ui/pwa-status";import{BrandMark}from"@/src/ui/brand-mark";
-const sources=[["SRD 5.2.1","2024"],["Free Rules 2024","2024"],["Private Library","PRIVATE"],["Legacy 2014","LEGACY"]];
-const nav=[["Characters",UserRound],["Compendium",BookOpen],["Content packs",Archive],["Sources",ScrollText],["Rulesets",ShieldCheck],["Imports & exports",Import],["Settings",Settings]]as const;
-export default function Home(){const[view,setView]=useState("Characters"),[builder,setBuilder]=useState(false),[menu,setMenu]=useState(false);return <div className="shell"><aside className={menu?"side open":"side"}><div className="brand"><BrandMark decorative variant="inverse"/><strong>Runefolio</strong></div><nav>{nav.map(([label,Icon])=><button key={label} className={view===label?"active":""}onClick={()=>{setView(label);setMenu(false)}}><Icon/>{label}</button>)}</nav><div className="local"><FolderLock/><span><b>Local only</b><small>Private data stays on this device.</small></span></div></aside><section className="work"><header><button className="icon mobile"onClick={()=>setMenu(!menu)}aria-label="Toggle navigation"><Menu/></button><div className="page-title"><BrandMark decorative variant="inverse"/><h1>{view}</h1></div><label className="search"><Search/><input aria-label="Search"placeholder="Search characters, rules, spells…"/></label><PwaIndicator/><button className="icon"aria-label="Local vault"><Database/></button></header><main>{view==="Characters"?<Dashboard open={()=>setBuilder(true)}/>:<Workspace view={view}/>}</main><div className="toast">All data stays on this device.</div></section>{builder&&<Builder close={()=>setBuilder(false)}/>}</div>}
-function Dashboard({open}:{open:()=>void}){return <div className="grid"><section className="card hero"><div className="shield"><Swords/></div><div><p className="eyebrow">Active character</p><h2>Brammel “Boss” Voss</h2><p>Level 5 Human Fighter · Champion</p><em>Chaotic Good</em><div className="actions"><button className="btn primary"onClick={open}><BookOpen/>Continue character</button><button className="btn secondary">Open sheet</button></div></div></section><aside className="card sources"><Heading title="Active sources"extra="4 enabled"/>{sources.map(([name,badge])=><div className="source"key={name}><BookOpen/><b>{name}</b><i className={badge==="PRIVATE"?"badge private":"badge"}>{badge}</i></div>)}</aside><section className="card progress"><Heading title="Build status"extra="82% complete"/><ol>{["Basics","Class","Origin","Abilities","Equipment","Review"].map((x,i)=><li className={i<5?"done":""}key={x}><span>{i<5&&<Check/>}</span><small>{x}</small></li>)}</ol></section><button className="warning"><CircleAlert/><span><b>2 compatibility warnings</b><small>2014 option used with a 2024 base class</small></span><strong>Review <ChevronRight/></strong></button><section className="card list"><Heading title="Your characters"extra="Local library"/><button className="row"onClick={open}><span className="mini"><Swords/></span><span><b>Brammel “Boss” Voss</b><small>Human Fighter · Champion</small></span><b>Level 5</b><i className="badge">2024</i><i className="badge private">PRIVATE</i><ChevronRight/></button></section></div>}
-function Heading({title,extra}:{title:string;extra:string}){return<div className="heading"><h2>{title}</h2><span>{extra}</span></div>}
-function Workspace({view}:{view:string}){if(["Compendium","Content packs","Sources","Imports & exports"].includes(view))return <ContentWorkspace view={view}/>;if(view==="Settings")return <StorageSettings/>;return<section className="page"><div className="intro"><span><ShieldCheck/></span><div><p className="eyebrow">Compatibility policy</p><h2>Ruleset profiles</h2><p>Public, private, legacy and homebrew content stay distinct and locally controlled.</p></div></div><div className="card ruleset"><span><i className="badge">ACTIVE</i><h3>2024 + private library + legacy</h3><p>2024 preferred · legacy allowed · ask on conflict · soft enforcement</p></span><button className="btn secondary">Edit profile</button></div><div className="boundary"><FolderLock/><p><b>Private-content boundary.</b> No upload or telemetry endpoint exists.</p></div></section>}
-function Builder({close}:{close:()=>void}){const[step,setStep]=useState(4),steps=["Basics","Class","Origin","Abilities","Equipment","Review"];return<div className="backdrop"onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><section className="dialog"role="dialog"aria-modal="true"aria-labelledby="builder"><header><span><p className="eyebrow">Guided build · flexible mode</p><h2 id="builder">Brammel “Boss” Voss</h2></span><button className="icon"onClick={close}aria-label="Close builder"><X/></button></header><nav>{steps.map((x,i)=><button key={x}className={step===i?"active":""}onClick={()=>setStep(i)}><span>{i+1}</span>{x}</button>)}</nav><div className="dialogbody"><div><p className="eyebrow">Step {step+1} of 6</p><h3>{steps[step]}</h3><p>Guided, private, manual and override input remain available.</p></div><div className="options">{["Guided selection","Private content","Manual calculation","Add override"].map((x,i)=><button className={i===0?"selected":""}key={x}><span>{i===0?<Check/>:"+"}</span><b>{x}</b><small>{i===0?"Recommended from active sources":"Always available"}</small></button>)}</div></div><footer><span><ShieldCheck/>Saved locally after each decision</span><button className="btn primary"onClick={()=>step<5?setStep(step+1):close()}>{step<5?"Continue":"Finish review"}<ArrowRight/></button></footer></section></div>}
+"use client";
+
+/**
+ * The Runefolio application shell.
+ *
+ * Mobile primary navigation is Characters, Sheet and Compendium in a persistent
+ * bottom bar, with Settings always reachable from the top app bar. A modal task —
+ * creation, level up or a transfer confirmation — replaces the bottom bar with a
+ * task footer so the primary next action stays visible at 360 px. At an effective
+ * 960 CSS px and above the same destinations become a compact persistent rail,
+ * which falls back to the bottom bar under zoom or width pressure because the
+ * query is expressed in CSS pixels.
+ */
+import { useCallback, useState } from "react";
+import { BookOpen, Settings, Swords, UserRound } from "lucide-react";
+import { BrandMark } from "@/src/ui/brand-mark";
+import { PwaIndicator } from "@/src/ui/pwa-status";
+import { ContentWorkspace } from "@/src/ui/content-workspace";
+import { ServicesProvider, useServices } from "@/src/ui/services-context";
+import { CharacterLibrary, type LibraryDestination } from "@/src/ui/character-library";
+import { CharacterBuilder } from "@/src/ui/character-builder";
+import { PlaySheet } from "@/src/ui/play-sheet";
+import { LevelUpDialog } from "@/src/ui/level-up-dialog";
+import { SettingsView } from "@/src/ui/settings-view";
+import { TransferPanel } from "@/src/ui/transfer-panel";
+import { SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
+import "./m2.css";
+
+type View = "characters" | "sheet" | "compendium" | "settings" | "transfer";
+
+const PRIMARY_NAV: readonly { id: View; label: string; icon: React.ReactNode }[] = [
+  { id: "characters", label: "Characters", icon: <UserRound aria-hidden="true" /> },
+  { id: "sheet", label: "Sheet", icon: <Swords aria-hidden="true" /> },
+  { id: "compendium", label: "Compendium", icon: <BookOpen aria-hidden="true" /> },
+];
+
+export default function Home() {
+  return (
+    <ServicesProvider>
+      <Shell />
+    </ServicesProvider>
+  );
+}
+
+function Shell() {
+  const { drafts, refresh } = useServices();
+  const [view, setView] = useState<View>("characters");
+  const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
+  const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
+  const [levelUpFor, setLevelUpFor] = useState<string | null>(null);
+
+  const startNewCharacter = useCallback(async () => {
+    const draftId = `draft:${Date.now().toString(36)}`;
+    const outcome = await drafts.create({
+      draftId,
+      rulesetProfileId: SYNTHETIC_RULESET_ID,
+      level: 1,
+      presentation: "guided",
+    });
+    if (outcome.status === "ok") {
+      setBuilderDraftId(draftId);
+      refresh();
+    }
+  }, [drafts, refresh]);
+
+  const navigate = useCallback(
+    (destination: LibraryDestination) => {
+      switch (destination.kind) {
+        case "new":
+          void startNewCharacter();
+          return;
+        case "build":
+          setBuilderDraftId(destination.draftId);
+          return;
+        case "sheet":
+          setActiveCharacterId(destination.characterId);
+          setView("sheet");
+          return;
+        case "edit": {
+          // Editing a committed character opens a draft bound to it.
+          const draftId = `draft:edit:${destination.characterId}`;
+          void drafts
+            .create({
+              draftId,
+              rulesetProfileId: SYNTHETIC_RULESET_ID,
+              level: 1,
+              presentation: "guided",
+              editingCharacterId: destination.characterId,
+            })
+            .then(() => setBuilderDraftId(draftId));
+          return;
+        }
+        case "level-up":
+          setLevelUpFor(destination.characterId);
+          return;
+        case "transfer":
+          if (destination.characterId) setActiveCharacterId(destination.characterId);
+          setView("transfer");
+          return;
+      }
+    },
+    [drafts, startNewCharacter],
+  );
+
+  // A modal task owns the whole surface and supplies its own task footer.
+  const modalTask = builderDraftId !== null;
+
+  return (
+    <div className="m2-shell">
+      <header className="m2-appbar">
+        <div className="m2-appbar-brand">
+          <BrandMark decorative variant="inverse" />
+          <strong>Runefolio</strong>
+        </div>
+        <PwaIndicator />
+        <button
+          type="button"
+          className={view === "settings" ? "m2-appbar-settings m2-active" : "m2-appbar-settings"}
+          onClick={() => setView("settings")}
+          aria-label="Open Settings"
+          aria-current={view === "settings" ? "page" : undefined}
+        >
+          <Settings aria-hidden="true" />
+          <span>Settings</span>
+        </button>
+      </header>
+
+      <nav className="m2-rail" aria-label="Primary">
+        <ul>
+          {PRIMARY_NAV.map(item => (
+            <li key={item.id}>
+              <button
+                type="button"
+                className={view === item.id ? "m2-nav-button m2-active" : "m2-nav-button"}
+                aria-current={view === item.id ? "page" : undefined}
+                onClick={() => setView(item.id)}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            </li>
+          ))}
+          <li className="m2-rail-only">
+            <button
+              type="button"
+              className={view === "settings" ? "m2-nav-button m2-active" : "m2-nav-button"}
+              aria-current={view === "settings" ? "page" : undefined}
+              onClick={() => setView("settings")}
+            >
+              <Settings aria-hidden="true" />
+              <span>Settings</span>
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <main className="m2-main" id="main">
+        {modalTask && builderDraftId ? (
+          <CharacterBuilder
+            draftId={builderDraftId}
+            onClose={() => {
+              setBuilderDraftId(null);
+              refresh();
+            }}
+            onFinished={characterId => {
+              setBuilderDraftId(null);
+              setActiveCharacterId(characterId);
+              setView("sheet");
+            }}
+          />
+        ) : view === "characters" ? (
+          <CharacterLibrary onNavigate={navigate} />
+        ) : view === "sheet" ? (
+          activeCharacterId ? (
+            <PlaySheet
+              characterId={activeCharacterId}
+              onLevelUp={() => setLevelUpFor(activeCharacterId)}
+              onEdit={() => navigate({ kind: "edit", characterId: activeCharacterId })}
+            />
+          ) : (
+            <section className="m2-page">
+              <h2 className="m2-page-title">Sheet</h2>
+              <div className="m2-empty">
+                <Swords aria-hidden="true" className="m2-empty-icon" />
+                <h3>No character is open</h3>
+                <p>Open one from Characters to start playing.</p>
+                <button type="button" className="m2-button m2-button-primary" onClick={() => setView("characters")}>
+                  Go to Characters
+                </button>
+              </div>
+            </section>
+          )
+        ) : view === "compendium" ? (
+          <ContentWorkspace view="Compendium" />
+        ) : view === "transfer" ? (
+          <TransferPanel
+            {...(activeCharacterId ? { characterId: activeCharacterId } : {})}
+            onImported={id => {
+              setActiveCharacterId(id);
+              setView("sheet");
+            }}
+          />
+        ) : (
+          <SettingsView
+            onOpenCharacter={id => {
+              setActiveCharacterId(id);
+              setView("sheet");
+            }}
+          />
+        )}
+      </main>
+
+      {levelUpFor ? (
+        <LevelUpDialog
+          characterId={levelUpFor}
+          onClose={() => setLevelUpFor(null)}
+          onCommitted={() => {
+            setActiveCharacterId(levelUpFor);
+            setLevelUpFor(null);
+            setView("sheet");
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
