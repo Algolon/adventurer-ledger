@@ -74,7 +74,10 @@ export interface Character extends Audit{id:ID;name:string;nickname?:string;imag
 export interface CharacterVersion extends Audit{id:ID;characterId:ID;sequence:number;reason:"manual"|"level-up"|"import"|"restore"|"migration";snapshot:Character;parentVersionId?:ID}
 export interface CharacterSnapshot extends Audit{id:ID;characterId:ID;label:string;characterVersionId:ID;runtimeState:Record<string,unknown>}
 export interface CharacterResourceState extends Audit{id:ID;characterId:ID;resourceId:ID;current:number;maximumOverride?:number}
-export interface CharacterInventoryItem extends Audit{id:ID;characterId:ID;itemId?:ID;customName?:string;quantity:number;equipped:boolean;status?:"granted"|"carried"|"equipped";attuned:boolean;notes?:string}
+// Bundle grant/carried/equipped status stays in the pure equipment-resolution output
+// (`ResolvedEquipmentItem` in src/rules/equipment.ts). The persisted record keeps
+// `equipped` as its single writable carry state; M1.4 adds no character migration.
+export interface CharacterInventoryItem extends Audit{id:ID;characterId:ID;itemId?:ID;customName?:string;quantity:number;equipped:boolean;attuned:boolean;notes?:string}
 export interface CharacterSpell extends Audit{id:ID;characterId:ID;spellId:ID;source:"known"|"prepared"|"always-prepared"|"item";prepared:boolean}
 export interface CharacterAttack extends Audit{id:ID;characterId:ID;name:string;attackAbility?:Ability;proficient:boolean;damage:string;notes?:string}
 export interface CharacterCondition extends Audit{id:ID;characterId:ID;conditionId?:ID;name:string;active:boolean;notes?:string}
