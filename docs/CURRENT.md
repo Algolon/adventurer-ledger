@@ -28,6 +28,20 @@ M1.4 adds exhaustive effect-runtime dispositions, typed action-economy grants, d
 
 M1.4 is a rules-engine and content-resolution foundation, not the M2.1 product slice: it contains no character persistence, character service, play sheet, level-up workflow, or transfer workflow. The private Brammel pilot was not rerun for M1.4; its local regression test stays skipped unless the pack path is supplied. See [M1.4_RULES_ENGINE_COVERAGE.md](M1.4_RULES_ENGINE_COVERAGE.md) for the gate.
 
+## M2.1 delivered
+
+M2.1 turns that foundation into the first working character product, bounded to levels 1 and 2 of one original synthetic class.
+
+Database version 5 adds character drafts, revision-bearing committed characters, immutable versions, restore snapshots, runtime state, a session action log, typed overrides and safe derived snapshots. The version 4 to 5 upgrade splits any legacy character row into durable and runtime state inside Dexie's version-change transaction, leaves content, packs and sources untouched, and reports failures by stable ID and field path only.
+
+Seven application services own every mutation: draft, build/commit, query, derived resolver, runtime, level-up and transfer. Each validates an expected revision inside the same transaction that writes, so a stale command performs no writes and returns a typed outcome rather than an exception string. A record is versioned before it is replaced. Runtime actions write runtime state plus one action entry and never a durable version. The application-layer resolver is the only component that produces authoritative derived values; React components import services, never Dexie.
+
+The synthetic slice supplies Vanguard, Riverborn, Caravan Warden, Guarded Hand, Measured Cut, Longblade, Round Guard, Travel Mail, Longblade Strike and Rallying Breath, level-keyed by stable ID so later levels are a data change. Brammel resolves to 10 maximum hit points and 3 Rallying Breath uses at level 1, and 12 and 4 at level 2, which is the preserve-deficit demonstration the acceptance criteria require.
+
+The product surfaces are mobile first: a real empty library, the exact nine-step builder with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
+
+Unknown required inputs render as `—` with a recovery action rather than zero. Overrides accept only typed `replace` and `add` against an allow-listed path and are marked for review rather than discarded when the baseline moves.
+
 ## Device and installation behavior
 
 - Every phone, desktop browser, browser profile, and installed PWA has its own IndexedDB.
@@ -39,7 +53,7 @@ M1.4 is a rules-engine and content-resolution foundation, not the M2.1 product s
 
 ## Next milestone
 
-M2 is the character build pipeline: persisted drafts, source/ruleset selection, an original synthetic single-class level 1–20 path, deterministic derived values, overrides, autosave, and restore points.
+M2.2 extends the same contracts to levels 3–20 of the synthetic path, adds subclass selection and subclass-feature progression, and broadens content coverage. Multiclassing, spells, QR transfer and random dice results remain deferred.
 
 Deferred risks include browser-profile storage security, unencrypted JSON exports, resumable imports, durable backup/recovery, prepared/known spell merging, pact-slot derivation, unusual spell and monster grammars, real errata pilots, browser-specific storage eviction behavior, and performance profiling on low-end physical phones.
 
