@@ -18,7 +18,13 @@ export type ImportIssueCode =
   | "DUPLICATE_ID"
   | "PACK_VERSION_CONFLICT"
   | "ENTRY_REVISION_CONFLICT"
-  | "MISSING_SOURCE";
+  | "MISSING_SOURCE"
+  | "MISSING_DEPENDENCY"
+  | "OPTIONAL_DEPENDENCY_MISSING"
+  | "MISSING_REFERENCE"
+  | "ALIAS_CONFLICT"
+  | "REPLACEMENT_INVALID"
+  | "DEPENDENCY_CYCLE";
 export interface ImportIssue {
   code: ImportIssueCode;
   severity: "error" | "warning";
@@ -37,6 +43,12 @@ export interface ImportPreview {
   readonly plan: ImportPlan;
   readonly canImport: boolean;
 }
+export interface ImportSetPreview {
+  readonly documents: ContentPackDocument[];
+  readonly issues: ImportIssue[];
+  readonly plan: ImportPlan;
+  readonly canImport: boolean;
+}
 
 interface Observations {
   sources: Map<string, string | undefined>;
@@ -48,6 +60,7 @@ interface PreviewState {
   observations: Observations;
 }
 const previewStates = new WeakMap<ImportPreview, PreviewState>();
+const importSetStates = new WeakMap<ImportSetPreview, { previews: ImportPreview[] }>();
 const emptyPlan = (): ImportPlan => ({
   sources: { add: [], update: [] },
   packs: { add: [], update: [] },
@@ -110,30 +123,29 @@ function parseAndMigrate(json: string): {
         },
       ],
     };
-  const migrated = raw.schemaVersion === 0 ? { ...raw, schemaVersion: 1 } : raw;
-  if (migrated.schemaVersion !== 1)
+  if (raw.schemaVersion !== 0 && raw.schemaVersion !== 1 && raw.schemaVersion !== 2)
     return {
       issues: [
         {
           code: "SCHEMA_UNSUPPORTED",
           severity: "error",
-          message: "Only content-pack schema versions 0 and 1 are supported",
+          message: "Only content-pack schema versions 0, 1 and 2 are supported",
           path: "schemaVersion",
         },
       ],
     };
   const issues: ImportIssue[] =
-    raw.schemaVersion === 0
+    raw.schemaVersion !== 2
       ? [
           {
             code: "MIGRATION_APPLIED",
             severity: "warning",
-            message: "Schema version 0 will be migrated to version 1 in memory",
+            message: `Schema version ${String(raw.schemaVersion)} will be migrated to version 2 in memory`,
             path: "schemaVersion",
           },
         ]
       : [];
-  const validation = validateContentPackJson(JSON.stringify(migrated));
+  const validation = validateContentPackJson(json);
   if (!validation.success || !validation.data)
     return {
       issues: [
@@ -398,4 +410,75 @@ export async function confirmImport(
       abortIfNeeded(signal);
     },
   );
+}
+
+/** Validate several files as one dependency and reference namespace. */
+export async function previewContentPackSet(
+  jsonFiles: readonly string[],
+  database: LedgerDB,
+): Promise<ImportSetPreview> {
+  const previews = await Promise.all(jsonFiles.map(json => previewContentPack(json, database)));
+  const documents = previews.flatMap(preview => preview.document ? [preview.document] : []);
+  const plan = emptyPlan();
+  for (const preview of previews) {
+    plan.sources.add.push(...preview.plan.sources.add); plan.sources.update.push(...preview.plan.sources.update);
+    plan.packs.add.push(...preview.plan.packs.add); plan.packs.update.push(...preview.plan.packs.update);
+    plan.entries.add.push(...preview.plan.entries.add); plan.entries.update.push(...preview.plan.entries.update);
+  }
+  const allSourceIds = documents.flatMap(document => document.sources.map(source => source.id)), sourceIds = new Set(allSourceIds);
+  const entriesById = new Map(documents.flatMap(document => document.entries.map(entry => [entry.id, entry] as const)));
+  const issues = previews.flatMap(preview => preview.issues).filter(issue => issue.code !== "MISSING_SOURCE" || !issue.recordId || !sourceIds.has(entriesById.get(issue.recordId)?.sourceId ?? ""));
+  const packIds = documents.map(document => document.pack.id), entryIds = documents.flatMap(document => document.entries.map(entry => entry.id));
+  for (const duplicate of duplicates(allSourceIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "sources.id", message: `Source ID ${duplicate} occurs more than once in the import set` });
+  for (const duplicate of duplicates(packIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "pack.id", message: `Pack ID ${duplicate} occurs more than once in the import set` });
+  for (const duplicate of duplicates(entryIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "entries.id", message: `Entry ID ${duplicate} occurs more than once in the import set` });
+  const importedPacks = new Set(packIds), installedPacks = new Set((await database.contentPacks.toCollection().primaryKeys()).map(String));
+  for (const document of documents) {
+    for (const dependency of document.pack.dependencies) if (!importedPacks.has(dependency) && !installedPacks.has(dependency)) issues.push({ code: "MISSING_DEPENDENCY", severity: "error", recordId: document.pack.id, path: "pack.dependencies", message: `Pack ${document.pack.id} requires missing dependency ${dependency}` });
+    for (const dependency of document.pack.optionalDependencies) if (!importedPacks.has(dependency) && !installedPacks.has(dependency)) issues.push({ code: "OPTIONAL_DEPENDENCY_MISSING", severity: "warning", recordId: document.pack.id, path: "pack.optionalDependencies", message: `Pack ${document.pack.id} has unavailable optional dependency ${dependency}` });
+  }
+  const dependencies = new Map(documents.map(document => [document.pack.id, document.pack.dependencies.filter(dependency => importedPacks.has(dependency))]));
+  const visiting = new Set<string>(), visited = new Set<string>();
+  const checkCycle = (packId: string): boolean => {
+    if (visiting.has(packId)) return true;
+    if (visited.has(packId)) return false;
+    visiting.add(packId);
+    const cyclic = (dependencies.get(packId) ?? []).some(checkCycle);
+    visiting.delete(packId); visited.add(packId); return cyclic;
+  };
+  for (const packId of packIds) if (checkCycle(packId)) { issues.push({ code: "DEPENDENCY_CYCLE", severity: "error", recordId: packId, path: "pack.dependencies", message: `Dependency cycle includes pack ${packId}` }); break; }
+  const importedEntries = new Set(entryIds), installedEntries = new Set((await database.contentEntries.toCollection().primaryKeys()).map(String));
+  const aliases = new Map<string, string>();
+  for (const document of documents) for (const entry of document.entries) {
+    for (const link of entry.links) if (link.required && !importedEntries.has(link.targetId) && !installedEntries.has(link.targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.links", message: `Entry ${entry.id} has an unresolved required ${link.type} reference to ${link.targetId}` });
+    for (const target of [entry.replacementOf, entry.replacedBy, ...entry.editionRelations].filter((item): item is string => typeof item === "string")) if (!importedEntries.has(target) && !installedEntries.has(target)) issues.push({ code: "REPLACEMENT_INVALID", severity: "error", recordId: entry.id, path: "entries.editionRelations", message: `Entry ${entry.id} has an unresolved revision or edition relation to ${target}` });
+    for (const alias of [entry.slug, ...entry.aliases].map(value => value.trim().toLocaleLowerCase()).filter(Boolean)) {
+      const owner = aliases.get(alias);
+      if (owner && owner !== entry.id) issues.push({ code: "ALIAS_CONFLICT", severity: "warning", recordId: entry.id, path: "entries.aliases", message: `Alias conflict between entries ${owner} and ${entry.id}` });
+      else aliases.set(alias, entry.id);
+    }
+  }
+  const result: ImportSetPreview = { documents, issues, plan, canImport: documents.length === jsonFiles.length && !issues.some(issue => issue.severity === "error") };
+  importSetStates.set(result, { previews });
+  return result;
+}
+
+/** Confirm every file in one Dexie transaction; any failure rolls back the set. */
+export async function confirmImportSet(preview: ImportSetPreview, database: LedgerDB, signal?: AbortSignal): Promise<void> {
+  const state = importSetStates.get(preview);
+  if (!preview.canImport || !state) throw new Error("Import set preview is invalid or contains blocking issues");
+  const byId = new Map(state.previews.flatMap(item => item.document ? [[item.document.pack.id, item] as const] : []));
+  const ordered: ImportPreview[] = [], visiting = new Set<string>(), visited = new Set<string>();
+  const visit = (packId: string) => {
+    if (visited.has(packId)) return;
+    if (visiting.has(packId)) throw new Error(`Dependency cycle includes pack ${packId}`);
+    visiting.add(packId);
+    const item = byId.get(packId);
+    for (const dependency of item?.document?.pack.dependencies ?? []) if (byId.has(dependency)) visit(dependency);
+    visiting.delete(packId); visited.add(packId); if (item) ordered.push(item);
+  };
+  for (const packId of byId.keys()) visit(packId);
+  await database.transaction("rw", database.sources, database.contentPacks, database.contentEntries, database.contentPackVersions, database.contentEntryVersions, async () => {
+    for (const item of ordered) { abortIfNeeded(signal); await confirmImport(item, database, signal); }
+  });
 }

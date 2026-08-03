@@ -43,7 +43,7 @@ describe("private content pipeline", () => {
       database.contentEntries.get("rule:synthetic-moon-path"),
     ).resolves.toMatchObject({ name: "Synthetic Moon Path", revision: 1 });
   });
-  it("previews and applies the deterministic v0 to v1 migration", async () => {
+  it("previews and applies the deterministic v0 to v2 migration", async () => {
     const legacy = { ...syntheticPack(), schemaVersion: 0 };
     const preview = await previewContentPack(JSON.stringify(legacy), database);
     expect(preview.canImport).toBe(true);
@@ -55,7 +55,7 @@ describe("private content pipeline", () => {
     await confirmImport(preview, database);
     await expect(
       database.contentPacks.get("pack:synthetic-moon"),
-    ).resolves.toMatchObject({ schemaVersion: 1 });
+    ).resolves.toMatchObject({ schemaVersion: 2, dependencies: [] });
   });
   it("does not mutate the database for an invalid pack", async () => {
     const invalid = {
