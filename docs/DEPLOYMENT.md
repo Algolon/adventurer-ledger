@@ -10,7 +10,7 @@ NEXT_PUBLIC_BASE_PATH=/adventurer-ledger
 
 `npm run build:pages` creates a static `out/` artifact with scoped Next.js assets, manifest metadata, public icons, service worker, offline fallback, and `.nojekyll`. `npm run verify:pages` rejects root-path leakage in the generated HTML, manifest, or worker precache.
 
-`.github/workflows/pages-test.yml` runs only after pushes to `codex/m1-private-content-pipeline`. It tests root hosting, Pages-project hosting, and a real two-build controlled update before uploading only `out/`. After the physical-phone test, change its sole `on.push.branches` entry to `main` in a separately reviewed change; do not add `main` while this temporary deployment is active.
+`.github/workflows/pages-test.yml` runs only after pushes to `main` or a manual dispatch from `main`. It tests root hosting, Pages-project hosting, and a real two-build controlled update before uploading only `out/`. Feature branches cannot trigger a production Pages deployment.
 
 Repository **Settings → Pages → Build and deployment → Source** must be set to **GitHub Actions**. The workflow cannot change that repository setting.
 
