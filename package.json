@@ -1,6 +1,44 @@
 {
-  "name":"adventurer-ledger","version":"0.1.0","private":true,
-  "scripts":{"dev":"cross-env NEXT_TELEMETRY_DISABLED=1 next dev","build":"cross-env NEXT_TELEMETRY_DISABLED=1 next build","start":"cross-env NEXT_TELEMETRY_DISABLED=1 next start","typecheck":"tsc --noEmit","test":"vitest run","test:e2e":"playwright test"},
-  "dependencies":{"dexie":"^4.2.0","lucide-react":"^0.468.0","next":"^16.2.6","react":"^19.2.6","react-dom":"^19.2.6","zod":"^3.24.2","zustand":"^5.0.8"},
-  "devDependencies":{"@playwright/test":"^1.55.0","@types/node":"^22.19.19","@types/react":"^19.2.14","@types/react-dom":"^19.2.3","cross-env":"^10.1.0","typescript":"^5.9.3","vitest":"^3.2.4"}
+  "name": "adventurer-ledger",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "cross-env NEXT_TELEMETRY_DISABLED=1 next dev",
+    "build": "cross-env NEXT_TELEMETRY_DISABLED=1 next build && node scripts/build-service-worker.mjs",
+    "start": "node scripts/serve-static.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "cross-env NEXT_PUBLIC_BASE_PATH= playwright test",
+    "test:e2e:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger playwright test",
+    "test:e2e:update": "playwright test --config=playwright.update.config.ts",
+    "test:e2e:all": "npm run test:e2e && npm run test:e2e:pages && npm run test:e2e:update",
+    "build:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger npm run build",
+    "verify:build": "node scripts/verify-static-build.mjs",
+    "verify:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger node scripts/verify-static-build.mjs",
+    "preview": "npm run build && node scripts/serve-static.mjs",
+    "preview:update": "node scripts/build-update-fixtures.mjs && cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger PREVIEW_ROOT=.playwright-update/old PREVIEW_NEXT_ROOT=.playwright-update/new node scripts/serve-static.mjs"
+  },
+  "dependencies": {
+    "dexie": "^4.2.0",
+    "lucide-react": "^0.468.0",
+    "next": "16.2.12",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "zod": "^3.24.2",
+    "zustand": "^5.0.8"
+  },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.19.19",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "cross-env": "^10.1.0",
+    "fake-indexeddb": "^6.2.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
 }
