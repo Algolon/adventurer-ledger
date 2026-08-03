@@ -130,6 +130,10 @@ const mechanicsByCategory = {
 } as const;
 export const classMechanicsSchema = mechanicsByCategory.class;
 export const subclassMechanicsSchema = mechanicsByCategory.subclass;
+export const speciesMechanicsSchema = mechanicsByCategory.species;
+export const raceMechanicsSchema = mechanicsByCategory.race;
+export const lineageMechanicsSchema = mechanicsByCategory.lineage;
+export const backgroundMechanicsSchema = mechanicsByCategory.background;
 const categorized = <C extends string, M extends z.ZodTypeAny>(category: C, mechanics: M) => common.extend({ category: z.literal(category), mechanics });
 const generic = z.object({ kind: z.string().min(1), data: z.record(z.unknown()).default({}) }).strict();
 export const contentEntrySchema = z.discriminatedUnion("category", [

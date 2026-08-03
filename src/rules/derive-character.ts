@@ -1,4 +1,11 @@
-import { classMechanicsSchema, subclassMechanicsSchema } from "@/src/domain/content-pack";
+import {
+  backgroundMechanicsSchema,
+  classMechanicsSchema,
+  lineageMechanicsSchema,
+  raceMechanicsSchema,
+  speciesMechanicsSchema,
+  subclassMechanicsSchema,
+} from "@/src/domain/content-pack";
 import type { Character, ChoiceDefinition, ContentEntry, Effect, EquipmentBundleDefinition, ID } from "@/src/domain/model";
 import { resolveChoices, type ChoiceSelections } from "@/src/rules/choice-resolution";
 import { resolveEquipmentBundles, type EquipmentChoiceSelections, type EquipmentResolution } from "@/src/rules/equipment";
@@ -8,6 +15,7 @@ export interface DerivedCharacterIssue {
   code:
     | "CHARACTER_LEVEL_MISMATCH" | "DUPLICATE_CLASS_SELECTION" | "CLASS_MISSING" | "CLASS_MECHANICS_INVALID" | "MULTICLASS_PREREQUISITE_FAILED"
     | "MULTICLASS_COMBINATION_UNSUPPORTED" | "MULTICLASS_PACT_SLOTS_SEPARATE" | "SUBCLASS_INVALID"
+    | "IDENTITY_MECHANICS_INVALID" | "LINEAGE_INVALID"
     | "FEATURE_REFERENCE_MISSING" | "ENTRY_PREREQUISITE_FAILED" | "CHOICE_UNRESOLVED" | "EQUIPMENT_UNRESOLVED" | "EFFECT_REVIEW_REQUIRED" | "EFFECT_FAILED";
   severity: "error" | "review-required";
   recordId: ID;
@@ -19,6 +27,8 @@ export interface DerivedCharacterState {
   status: "ready" | "review-required" | "invalid";
   activeEntryIds: Set<ID>;
   classFeatureIds: Set<ID>;
+  /** Species, lineage and legacy-race traits activated after lineage replacement. */
+  identityTraitIds: Set<ID>;
   pendingChoiceIds: Set<ID>;
   ruleResult: RuleResult;
   equipment: EquipmentResolution;
@@ -124,9 +134,64 @@ export function deriveCharacterState(input: {
     }
   });
 
-  for (const id of [character.speciesId, character.lineageId, character.legacyRaceId, character.backgroundId].filter((value): value is string => typeof value === "string")) {
-    if (byId.has(id)) activeEntryIds.add(id);
-    else issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: id, message: `Selected entry ${id} is unavailable` });
+  const identityEntry = (id: ID | undefined, category: ContentEntry["category"]): ContentEntry | undefined => {
+    if (!id) return undefined;
+    const entry = byId.get(id);
+    if (!entry || entry.category !== category) {
+      issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: id, message: `Selected entry ${id} is unavailable` });
+      return undefined;
+    }
+    activeEntryIds.add(entry.id);
+    return entry;
+  };
+  const mechanicsInvalid = (entry: ContentEntry) =>
+    issues.push({ code: "IDENTITY_MECHANICS_INVALID", severity: "error", recordId: entry.id, message: `Entry ${entry.id} has invalid runtime mechanics` });
+  const inheritedTraitIds = new Set<ID>(), replacedTraitIds = new Set<ID>(), identityTraitIds = new Set<ID>();
+  let baseSpeed: number | undefined;
+  const species = identityEntry(character.speciesId, "species");
+  if (species) {
+    const parsed = speciesMechanicsSchema.safeParse(species.mechanics);
+    if (!parsed.success) mechanicsInvalid(species);
+    else {
+      baseSpeed = parsed.data.speed;
+      for (const traitId of parsed.data.traitIds) inheritedTraitIds.add(traitId);
+    }
+  }
+  const legacyRace = identityEntry(character.legacyRaceId, "race");
+  if (legacyRace) {
+    const parsed = raceMechanicsSchema.safeParse(legacyRace.mechanics);
+    if (!parsed.success) mechanicsInvalid(legacyRace);
+    else {
+      baseSpeed = baseSpeed ?? parsed.data.speed;
+      for (const traitId of parsed.data.traitIds) inheritedTraitIds.add(traitId);
+    }
+  }
+  const lineage = identityEntry(character.lineageId, "lineage");
+  if (lineage) {
+    const parsed = lineageMechanicsSchema.safeParse(lineage.mechanics);
+    if (!parsed.success) mechanicsInvalid(lineage);
+    else {
+      if (species && parsed.data.parentSpeciesIds.length && !parsed.data.parentSpeciesIds.includes(species.id))
+        issues.push({ code: "LINEAGE_INVALID", severity: "error", recordId: lineage.id, message: `Lineage ${lineage.id} is not available for species ${species.id}` });
+      for (const traitId of parsed.data.replacesTraitIds) replacedTraitIds.add(traitId);
+      for (const traitId of parsed.data.traitIds) identityTraitIds.add(traitId);
+    }
+  }
+  for (const traitId of inheritedTraitIds) if (!replacedTraitIds.has(traitId)) identityTraitIds.add(traitId);
+  const background = identityEntry(character.backgroundId, "background");
+  if (background) {
+    const parsed = backgroundMechanicsSchema.safeParse(background.mechanics);
+    if (!parsed.success) mechanicsInvalid(background);
+    else {
+      for (const proficiencyId of parsed.data.proficiencyIds) context.proficiencies.add(proficiencyId);
+      if (byId.has(parsed.data.featId)) activeEntryIds.add(parsed.data.featId);
+      else issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: parsed.data.featId, message: `Background feat ${parsed.data.featId} is unavailable` });
+    }
+  }
+  if (baseSpeed !== undefined) context.values.speed = baseSpeed;
+  for (const traitId of identityTraitIds) {
+    if (byId.has(traitId)) activeEntryIds.add(traitId);
+    else issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: traitId, message: `Trait ${traitId} is unavailable` });
   }
   for (const featureId of classFeatureIds) {
     if (byId.has(featureId)) activeEntryIds.add(featureId);
@@ -177,5 +242,5 @@ export function deriveCharacterState(input: {
   if (Object.keys(spellSlots.pactClassLevels).length && casterClasses.some(item => item.progression !== "none" && item.progression !== "pact"))
     issues.push({ code: "MULTICLASS_PACT_SLOTS_SEPARATE", severity: "review-required", recordId: character.id, message: `Character ${character.id} requires separate pact-slot tracking` });
   const status = issues.some(issue => issue.severity === "error") ? "invalid" : issues.length ? "review-required" : "ready";
-  return { status, activeEntryIds, classFeatureIds, pendingChoiceIds: new Set([...choiceResolution.unresolvedChoiceIds, ...ruleResult.pendingChoices]), ruleResult, equipment, spellSlots, issues };
+  return { status, activeEntryIds, classFeatureIds, identityTraitIds, pendingChoiceIds: new Set([...choiceResolution.unresolvedChoiceIds, ...ruleResult.pendingChoices]), ruleResult, equipment, spellSlots, issues };
 }

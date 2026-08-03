@@ -163,6 +163,85 @@ describe("choice, equipment, progression, and multiclass coverage", () => {
   });
 });
 
+function identityEntries(): ContentEntry[] {
+  return [
+    ...multiclassEntries(),
+    entry("species:synthetic", "species", { creatureType: "humanoid", sizeChoices: ["medium"], speed: 35, traitIds: ["trait:species", "trait:replaced"], lineageIds: ["lineage:synthetic"] }),
+    entry("lineage:synthetic", "lineage", { parentSpeciesIds: ["species:synthetic"], traitIds: ["trait:lineage"], replacesTraitIds: ["trait:replaced"] }),
+    entry("trait:species", "rule", { kind: "trait", data: {} }, { effects: [{ id: "effect:trait-speed", type: "modifySpeed", operation: "add", value: { kind: "literal", value: 10 } }] }),
+    entry("trait:lineage", "rule", { kind: "trait", data: {} }, { effects: [{ id: "effect:trait-initiative", type: "modifyInitiative", operation: "add", value: { kind: "literal", value: 2 } }] }),
+    entry("trait:replaced", "rule", { kind: "trait", data: {} }, { effects: [{ id: "effect:trait-replaced", type: "modifyArmorClass", operation: "add", value: { kind: "literal", value: 99 } }] }),
+    entry("background:synthetic", "background", { abilityScoreChoices: { abilities: ["strength", "dexterity"], increasePattern: [2, 1] }, featId: "feat:synthetic", proficiencyIds: ["proficiency:insight"], equipmentChoiceIds: [], equipmentBundleIds: [] }),
+    entry("feat:synthetic", "feat", { category: "origin", repeatable: false }, { effects: [{ id: "effect:feat-proficiency", type: "grantProficiency", proficiencyId: "proficiency:survival" }] }),
+  ];
+}
+const identityCharacter = (): Character => ({ ...character(), speciesId: "species:synthetic", lineageId: "lineage:synthetic", backgroundId: "background:synthetic" });
+
+describe("derived identity relations", () => {
+  it("activates species, lineage and background relations the schema already declares", () => {
+    const result = deriveCharacterState({ character: identityCharacter(), entries: identityEntries() });
+    expect(result.status).toBe("ready");
+    expect(result.identityTraitIds).toEqual(new Set(["trait:lineage", "trait:species"]));
+    expect([...result.activeEntryIds]).toEqual(expect.arrayContaining([
+      "species:synthetic", "lineage:synthetic", "background:synthetic", "feat:synthetic", "trait:species", "trait:lineage",
+    ]));
+    // The lineage replaces a species trait, so neither the entry nor its effect is active.
+    expect(result.activeEntryIds.has("trait:replaced")).toBe(false);
+    expect(result.ruleResult.context.values.armorClass).toBeUndefined();
+    // Species speed is the base the modifiers then apply to.
+    expect(result.ruleResult.context.values.speed).toBe(45);
+    expect(result.ruleResult.context.values.initiative).toBe(3);
+    // Background proficiency IDs and the background feat's own effects both land.
+    expect([...result.ruleResult.context.proficiencies]).toEqual(expect.arrayContaining(["proficiency:insight", "proficiency:survival"]));
+  });
+
+  it("uses the legacy race speed and traits when no species is selected", () => {
+    const entries = [
+      ...multiclassEntries(),
+      entry("race:synthetic", "race", { creatureType: "humanoid", sizeChoices: ["medium"], speed: 25, traitIds: ["trait:legacy"], legacyAbilityScores: {} }),
+      entry("trait:legacy", "rule", { kind: "trait", data: {} }),
+    ];
+    const result = deriveCharacterState({ character: { ...character(), legacyRaceId: "race:synthetic" }, entries });
+    expect(result.status).toBe("ready");
+    expect(result.identityTraitIds).toEqual(new Set(["trait:legacy"]));
+    expect(result.ruleResult.context.values.speed).toBe(25);
+  });
+
+  it("reports unavailable trait and background-feat targets instead of ignoring them", () => {
+    const entries = identityEntries().filter(item => item.id !== "trait:species" && item.id !== "feat:synthetic");
+    const result = deriveCharacterState({ character: identityCharacter(), entries });
+    expect(result.status).toBe("invalid");
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "FEATURE_REFERENCE_MISSING", recordId: "trait:species" }),
+      expect.objectContaining({ code: "FEATURE_REFERENCE_MISSING", recordId: "feat:synthetic" }),
+    ]));
+  });
+
+  it("rejects a lineage that does not belong to the selected species", () => {
+    const entries = identityEntries(), lineage = entries.find(item => item.id === "lineage:synthetic");
+    if (!lineage) throw new Error("Synthetic lineage fixture is missing");
+    (lineage.mechanics as { parentSpeciesIds: string[] }).parentSpeciesIds = ["species:other"];
+    const result = deriveCharacterState({ character: identityCharacter(), entries });
+    expect(result.status).toBe("invalid");
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "LINEAGE_INVALID", recordId: "lineage:synthetic" }));
+  });
+
+  it("reports invalid identity mechanics rather than deriving from them", () => {
+    const entries = identityEntries(), species = entries.find(item => item.id === "species:synthetic");
+    if (!species) throw new Error("Synthetic species fixture is missing");
+    species.mechanics = { creatureType: "humanoid", sizeChoices: [], speed: -5, traitIds: [] };
+    const result = deriveCharacterState({ character: identityCharacter(), entries });
+    expect(result.status).toBe("invalid");
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "IDENTITY_MECHANICS_INVALID", recordId: "species:synthetic" }));
+    expect(result.ruleResult.context.values.speed).toBeUndefined();
+  });
+
+  it("reports a selected entry whose category does not match the selection slot", () => {
+    const result = deriveCharacterState({ character: { ...character(), speciesId: "class:sentinel" }, entries: identityEntries() });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "FEATURE_REFERENCE_MISSING", recordId: "class:sentinel" }));
+  });
+});
+
 describe("import and conflict visibility", () => {
   let database: LedgerDB | undefined;
   afterEach(async () => { if (database) { database.close(); await database.delete(); database = undefined; } });
