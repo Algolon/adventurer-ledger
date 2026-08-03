@@ -1,5 +1,7 @@
 # Runefolio design system direction
 
+The responsive low-fidelity evidence is recorded in [prototype/FINDINGS.md](prototype/FINDINGS.md).
+
 ## Direction
 
 Runefolio should feel like a dependable field tool with a hint of fantasy, not a themed imitation of a published rulebook. Brand character comes from restrained color, typography, original icon treatment, and tactile state changes. Information density and legibility win over ornament during play.
@@ -64,7 +66,7 @@ Rules:
 - pair unfamiliar icons with text until repeated context makes them unambiguous;
 - chevron means navigation/disclosure, not submit;
 - pencil means edit durable data; plus/minus means runtime increment/decrement only when the target is labelled;
-- cloud icons are prohibited for transfer because there is no cloud sync;
+- cloud icons are prohibited for transfer because the user moves a file between devices;
 - source badges use text labels; a lock alone cannot distinguish private, restricted, or device-local.
 
 Suggested mappings:
@@ -157,7 +159,7 @@ Minimum bar for M2:
 
 ## Motion
 
-Use 120–200 ms transitions for local disclosure and 180–240 ms for route/task changes. Resource spend may animate from old to new value, but the text change and receipt are authoritative. Respect `prefers-reduced-motion`. No simulated dice physics is required for M2.
+Use 120–200 ms transitions for local disclosure and 180–240 ms for route/task changes. Resource spend may animate from old to new value, but the text change and receipt are authoritative. Respect `prefers-reduced-motion`. M2.1 has no random dice result or dice animation.
 
 ## Responsive acceptance matrix
 
@@ -181,7 +183,7 @@ Horizontal scroll is permitted only inside an explicitly labelled data table or 
 - Use verbs: “Choose class,” “Apply 3 damage,” “Transfer character.”
 - Explain consequence before mechanism.
 - Replace “invalid” with the specific issue and its effect.
-- Say “saved on this device,” never “synced.”
+- Say “saved on this device”; never imply another device has received the change.
 - Keep recommendation copy neutral: “Recommended because…”
 - For destructive action, name both object and recovery: “Replace local Brammel; a restore point will be kept.”
 - Sanitized errors identify operation, stable ID/path when safe, and next action; they never echo imported JSON, full text, or notes.

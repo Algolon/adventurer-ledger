@@ -1,5 +1,7 @@
 # Runefolio active mobile character sheet
 
+M2.1 runtime, dice-expression, and renderability decisions follow [M2_DECISIONS.md](M2_DECISIONS.md).
+
 ## Purpose
 
 The active sheet is an instrument panel for play, not a paper sheet squeezed onto a phone. It prioritizes “what can I do now?” and “what changed?” while keeping every number explainable.
@@ -21,7 +23,7 @@ On compact phones, use a bottom tab bar with Play, Actions, Spells (conditional)
 ```text
 ┌──────────────────────────────────┐
 │ ‹ Characters       Brammel   ⋯  │
-│ Fighter 1 · 2024      Offline ✓ │
+│ Vanguard 1 · Synthetic Offline ✓│
 │                                  │
 │  AC 16    Speed 30    Init +2   │
 │                                  │
@@ -33,7 +35,7 @@ On compact phones, use a bottom tab bar with Play, Actions, Spells (conditional)
 │                                  │
 │ Favorite actions                 │
 │ Longsword       +5 · 1d8+3   ›  │
-│ Second Wind     1 / 1         ›  │
+│ Rallying Breath 1 / 1         ›  │
 │                                  │
 │ Conditions                  [＋] │
 ├──────────────────────────────────┤
@@ -52,10 +54,10 @@ Tapping a rollable row opens a bottom sheet with:
 - roll label and expression;
 - advantage/normal/disadvantage segmented choice if relevant;
 - situational modifiers;
-- Roll and Copy expression actions;
+- a Copy expression action;
 - compact breakdown and source link.
 
-The Brammel slice may omit animated dice, but the roll expression and result behavior must be specified and accessible. If random rolling is not implemented, the primary action is “Show roll” or “Copy expression,” never an inert Roll button.
+M2.1 displays the roll expression and offers Copy expression. It has no random result, animation, or roll history, and therefore no control labelled Roll.
 
 ### Hit points
 
@@ -92,7 +94,7 @@ Favorite actions can be pinned to Play. Pinning changes presentation only, not c
 
 ## Spells
 
-When relevant, the Spells tab contains:
+Spells are not part of M2.1. When a later class path makes them relevant, the Spells tab contains:
 
 - casting summary and save DC/attack modifier;
 - slot/resource trackers;
@@ -126,7 +128,7 @@ Use a bottom sheet on phone and a dockable side panel on desktop. The browser Ba
 | Intent | Play surface | Edit surface |
 | --- | --- | --- |
 | Take damage | Damage action | Edit current/max HP |
-| Spend Second Wind | Spend/use | Change resource definition/override maximum |
+| Spend Rallying Breath | Spend/use | Change resource definition/override maximum |
 | Equip shield | Equip toggle with preview | Add/delete/edit inventory item |
 | Use an attack | Roll/use action | Edit manual attack or build choice |
 | Read feature | Detail | Replace/manual/override feature choice |
@@ -169,7 +171,7 @@ No alternate source is matched by display name alone.
 | ---: | --- |
 | 360 / 390 / 412 | One column; bottom tabs; full-width sheets; no horizontal document scroll |
 | 768 | One or two columns by content; bottom tabs or compact rail; detail sheet up to readable width |
-| 1024 | Two-column play dashboard; persistent secondary navigation optional |
+| 1024 | Two-column play dashboard with compact persistent rail when effective CSS width permits; off-canvas fallback under zoom/width pressure |
 | 1440 | Three-region composition possible: nav, sheet dashboard, docked detail |
 
 All widths preserve the same task order. Long names wrap to two lines or truncate with accessible full name; numeric values never shrink below readable size. Cards and grid children use `min-width: 0`.

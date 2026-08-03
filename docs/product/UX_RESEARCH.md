@@ -204,7 +204,7 @@ Source: [official App Store listing](https://apps.apple.com/us/app/fight-club-5t
 | Detail | Click/tap for rules context | Compact summary → drawer/detail route; preserve position | Full rules text in every option card |
 | Play | Tap values/actions, track resources | Separate intent (“take damage”) from raw field edit | Making edit mode the default play surface |
 | Flexibility | Custom/manual fields | Require provenance and optional reason; show automatic baseline | Reducing custom values to generic errors |
-| Transfer | Export/import as user ownership | Manifest, dependencies, fingerprint, preview, conflict choice | “Sync” language or blind replace |
+| Transfer | Export/import as user ownership | Manifest, dependencies, fingerprint, preview, conflict choice | Automatic-device wording or blind replace |
 | Sources | Pre-filter option catalog | Ruleset preset first, advanced source controls in Settings | Mixing legacy/private without badges |
 
 ## Research limitations

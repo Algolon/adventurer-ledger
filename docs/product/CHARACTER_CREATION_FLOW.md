@@ -1,5 +1,7 @@
 # Runefolio character creation, level-up, and edit flows
 
+Settled M2.1 scope and semantics are recorded in [M2_DECISIONS.md](M2_DECISIONS.md); transactional ownership is defined in [M2_SERVICE_BOUNDARIES.md](M2_SERVICE_BOUNDARIES.md).
+
 ## Flow contract
 
 Runefolio offers two presentations of one persisted draft:
@@ -60,7 +62,7 @@ A blank draft is created only after the user chooses Start. The app then confirm
 │ What do you want to do in play? │
 │ [ Search classes              ]  │
 │                                  │
-│ ★ Fighter             Recommended│
+│ ★ Vanguard            Recommended│
 │ Durable, direct weapon play   ›  │
 │                                  │
 │   Show all classes               │
@@ -83,7 +85,7 @@ Autosave occurs after an accepted choice or committed field edit, not on every k
 | Incompatible choice | Warning with compatible alternatives | Can keep with reason/override |
 | Manual input | Available under “Enter manually” | First-class option |
 | Derived value edit | “Override automatic value” disclosure | Direct but still records provenance |
-| Review completion | Offers “Finish playable character” when criteria met | Offers “Open incomplete sheet” if minimum play shell can render |
+| Review completion | Offers “Finish and open sheet” when guided-complete | Offers automatic or explicitly Manual sheet only when its corresponding renderable minimum is met |
 | Mode switch | Always available from step menu | Always available from step menu |
 
 Recommendations are deterministic and ruleset/source-aware. Each recommendation answers “Why this?” in one or two sentences and can link to a deeper explanation. Never claim that a recommendation is objectively best.
@@ -110,7 +112,7 @@ Purpose: establish the character’s primary play loop and unlock dependent choi
 
 Option cards show name, source badge, short play-style summary, primary abilities, and complexity indicator. Guided mode can ask an optional intent question—front line, protect, explore, support, magic—used only for ranking.
 
-Selecting a class opens a compact preview before commitment. For Brammel: select the synthetic Fighter definition. Multiclass controls are absent, not disabled teasers.
+Selecting a class opens a compact preview before commitment. For Brammel: select the original synthetic Vanguard definition. Multiclass controls are absent, not disabled teasers.
 
 ### 3. Origin
 
@@ -122,7 +124,7 @@ Use progressive disclosure:
 
 ```text
 Origin
-✓ Species: Human
+✓ Species: Riverborn
 ! Background: choose one
 ✓ Languages: Common + 1
   Review origin benefits ›
@@ -195,11 +197,12 @@ Review has three sections:
 Primary actions depend on state:
 
 - **Finish and open sheet** — guided completion criteria satisfied;
-- **Open sheet with issues** — flexible minimum play shell available;
+- **Open automatic sheet with issues** — the automatic minimum resolves but warnings remain;
+- **Open Manual character sheet** — a classless flexible character meets every explicit manual minimum;
 - **Resolve next issue** — calculation cannot produce a safe sheet;
 - **Save and return to library** — always available.
 
-Review never silently fixes issues. Applying creates a character version and a restore point. If the commit fails, remain on Review with all edits intact and a sanitized error.
+Review never silently fixes issues. Initial apply creates character version 1 and runtime state atomically; it does not need a restore point because no prior committed character exists. Replacement, level-up, explicit session snapshot, and restore/import boundaries create restore points as specified in [M2_SERVICE_BOUNDARIES.md](M2_SERVICE_BOUNDARIES.md). If the commit fails, remain on Review with all edits intact and a sanitized error.
 
 ## Error and recovery behavior
 
@@ -249,7 +252,7 @@ Reuse the creation choice components, filtered to decisions introduced at the ta
 
 ### Review diff
 
-Show before → after for level, max HP, proficiency bonus, attacks, resources, spells, and features. Separate durable build changes from runtime consequences. Increasing a maximum does not silently decide whether current HP or spent resources also increase; apply explicit rules and explain them.
+Show before → after for level, max/current HP, proficiency bonus, attacks, resources, and features. M2.1 has no spells. The synthetic ruleset preserves deficit/expenditure: a +2 HP maximum also adds 2 current HP, and a +1 resource maximum also adds 1 current use. Show the policy and result before confirmation; an explicit user adjustment is stored with manual/override provenance.
 
 ### Commit and rollback
 
@@ -291,8 +294,8 @@ When underlying choices change, recalculate the automatic baseline but preserve 
 
 ## Completion criteria
 
-A level-1 Brammel sheet is **playable** when the app can render name/fallback label, level/class, ability modifiers, AC, max/current HP, proficiency bonus, saves/skills, at least one action/attack, and any required resource tracker without unknown calculation inputs.
+A level-1 Brammel sheet is **renderable automatic** when the app can render name/fallback label, level/class, all six ability scores/modifiers, proficiency bonus, max/current HP, AC, initiative, speed, saves/checks, at least one action/attack, and every class-required resource tracker without unknown calculation inputs.
 
 It is **guided-complete** when all required choices for the active ruleset are resolved and no blocking or unacknowledged incompatible choice remains.
 
-It may be **flexible-playable** with missing narrative fields, warnings, manual entries, and acknowledged overrides.
+It may be **renderable automatic with warnings** when that minimum resolves but non-blocking issues remain. A classless flexible character is **renderable manual** only when name/fallback, all six abilities, current/max HP, AC, initiative, and at least one action are explicitly entered. Otherwise it remains an incomplete draft. Missing narrative fields never block either renderable contract.

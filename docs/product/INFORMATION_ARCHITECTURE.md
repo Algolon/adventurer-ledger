@@ -1,5 +1,7 @@
 # Runefolio information architecture
 
+M2.1 transfer, Manual-sheet, and 1024 px behavior follow [M2_DECISIONS.md](M2_DECISIONS.md).
+
 ## IA model
 
 Runefolio organizes the product around user context rather than storage tables.
@@ -97,14 +99,14 @@ Each character row/card shows, in order:
 
 1. name or “Unnamed character”;
 2. level, class, and subclass when known;
-3. state: Playable, Incomplete, Issues, or Missing source;
+3. state: Automatic, Manual, Incomplete, Issues, or Missing source;
 4. ruleset badge and local last-edited time;
 5. optional portrait/monogram;
 6. device/transfer status only when actionable.
 
 Primary tap opens the most appropriate destination:
 
-- playable character → Sheet;
+- renderable automatic/manual character → Sheet;
 - incomplete draft → last unresolved creation step;
 - missing-source character → read-only sheet with recovery banner;
 - conflicted import copy → conflict resolution.
@@ -119,7 +121,7 @@ Overflow menu: Resume build/Edit, Level up, Duplicate, Export/Transfer, Archive.
 │ [ Search characters          ]   │
 │                                  │
 │ Brammel “Boss” Voss              │
-│ Fighter 1 · 2024        Playable │
+│ Vanguard 1 · Synthetic Automatic│
 │ Edited on this device 2m ago  ›  │
 │                                  │
 │ Unnamed character                │
@@ -140,23 +142,23 @@ Empty library offers New character and Import from another device. It does not s
 | Rules | Rulesets, compatibility policy, default creation mode | Select defaults and inspect effective policy | Create/compare/edit profiles |
 | Data & transfer | Transfer, imports, exports, backups | Receive/export character or portable bundle | Compose, preview, compare, archive |
 | Device & app | Storage, offline readiness, updates, app install | Device-specific health and actions | Same device-specific information |
-| Accessibility | Text size, reduced motion, contrast, dice animation, haptics/sound | Immediate preview | Same controls |
+| Accessibility | Text size, reduced motion, contrast, copy-expression behavior | Immediate preview | Same controls |
 | About | Version, privacy model, licenses | Compact | Compact |
 
 “Imports & exports” is too implementation-oriented as a top-level product destination. “Data & transfer” describes the job and can contain the existing content import/export interfaces without changing their service boundaries.
 
-## PC-to-mobile transfer without cloud sync
+## PC-to-mobile file transfer
 
 ### Transfer artifact
 
-A transfer is a file or QR-delivered local payload containing a sanitized manifest and selected records. The UI must distinguish:
+A transfer is a user-controlled file containing a sanitized manifest and selected records. The UI must distinguish:
 
 - character-only safe export;
 - character plus allowed dependencies;
 - restricted/private dependencies, which require separate explicit confirmation;
 - full backup, which is not the default phone-transfer path.
 
-The manifest shown before import includes character stable ID, name, updated timestamp, ruleset, level, dependency counts, restricted-content presence, format version, and fingerprint. It must not expose private full text in diagnostics or QR labels.
+The manifest shown before import includes character stable ID, name, updated timestamp, ruleset, level, dependency counts, restriction status, format version, and fingerprint. It must not expose private full text in diagnostics or filenames.
 
 ```mermaid
 sequenceDiagram
@@ -166,7 +168,7 @@ sequenceDiagram
   PC->>PC: Select character and export scope
   PC->>PC: Preview dependencies and restrictions
   PC->>File: Create portable transfer
-  File->>Phone: Share / save / scan locally
+  File->>Phone: Share or save locally
   Phone->>Phone: Validate and preview without mutation
   alt no matching character
     Phone->>Phone: Import atomically
@@ -185,7 +187,7 @@ Conflict choices:
 - **Cancel** performs no mutation;
 - field-by-field merge is deferred until its semantics are fully specified.
 
-QR is an encoding/transport option, not sync. Large or restricted bundles should fall back to a file with explicit size and privacy explanation.
+QR encoding is deferred. A self-contained restricted export is outside the standard character-transfer boundary and requires its own explicit confirmation design.
 
 ## Cross-product states
 
@@ -220,7 +222,7 @@ Global search should not remain an inert header field. Until it can return chara
 
 | Use | Avoid | Reason |
 | --- | --- | --- |
-| On this device | Synced | No automatic cloud sync |
+| On this device | Up to date everywhere | Devices do not exchange changes automatically |
 | Transfer | Share to cloud | User controls transport |
 | Issue / warning | Invalid character | Flexible builds remain saveable |
 | Automatic value | Correct value | Overrides may be intentional |

@@ -5,6 +5,8 @@ Audience: product, design, engineering, QA
 Visible product name: **Runefolio** (working name)
 Scope boundary: this document does not rename the repository, Pages base path, manifest ID, or production code.
 
+M2.1 decisions and deferrals are authoritative in [M2_DECISIONS.md](M2_DECISIONS.md).
+
 ## Vision
 
 Runefolio is a mobile-first, local-first D&D 2024/5.5e character builder and active digital character sheet. It should help a first-time player make a coherent character without hiding the rules, and let an experienced player preserve an unconventional or temporarily invalid build without fighting the tool.
@@ -14,7 +16,7 @@ The same app has two deliberately different centers of gravity:
 - **Mobile:** create, level, and play a character with one hand, weak connectivity, and limited attention.
 - **Desktop:** perform wide-screen comparison, detailed configuration, content management, and import/export.
 
-IndexedDB remains authoritative on each device. “Local-first” must be visible in normal workflows, not relegated to a privacy statement. There is no automatic cloud sync and no implication that another device is current.
+IndexedDB remains authoritative on each device. “Local-first” must be visible in normal workflows, not relegated to a privacy statement. Devices never exchange changes automatically and no device is implied to be current elsewhere.
 
 ## Product promise
 
@@ -60,12 +62,13 @@ Runefolio earns trust by making four things consistently clear:
 
 ## Product principles
 
-### 1. Playable beats perfectly complete
+### 1. Renderable beats perfectly complete
 
 A draft may be incomplete or invalid and still be valuable. Runefolio distinguishes:
 
 - **complete:** all required choices resolved;
-- **playable with warnings:** key play values exist, but issues remain;
+- **renderable automatic with warnings:** every automatic-sheet minimum resolves, but issues remain;
+- **renderable manual:** the explicit classless manual-sheet minimum is present;
 - **incomplete:** required choices are absent;
 - **blocked calculation:** a required dependency is missing or contradictory.
 
@@ -81,11 +84,11 @@ Every important derived value has a compact breakdown: base, contributors, overr
 
 ### 4. Separate build state from play state
 
-Build choices, derived values, and mutable session state are visually and conceptually distinct. Level-up changes class features; spending Second Wind changes runtime state. Editing maximum hit points is not the same action as taking damage.
+Build choices, derived values, and mutable session state are visually and conceptually distinct. Level-up changes class features; spending Rallying Breath changes runtime state. Editing maximum hit points is not the same action as taking damage.
 
 ### 5. Device truth is explicit
 
-The UI says “On this device,” shows last local save and backup/transfer status, and never uses cloud vocabulary such as “synced” unless an actual future sync capability exists.
+The UI says “On this device,” shows last local save and transfer status, and never implies that another device has the same state.
 
 ### 6. Sources remain legible
 
@@ -120,18 +123,19 @@ These are modes of work, not permanent personas; one user can occupy all five.
 
 The first vertical slice should prove the product model, not broad rules coverage:
 
-- A new user can create synthetic Brammel from blank draft to a level-1 playable sheet on a 360 px viewport.
+- A new user can create synthetic Brammel from blank draft to a level-1 renderable automatic sheet on a 360 px viewport.
 - A returning user can resume at the exact unresolved choice after reload and offline restart.
 - Guided and flexible mode share one saved draft and can be switched without data loss.
 - Every Brammel headline value identifies its inputs and any override.
-- A level-up preview shows decisions and before/after results before committing.
-- A PC-to-phone transfer can be previewed and imported without network or automatic sync.
+- A level 1→2 preview shows decisions, the preserve-deficit/resource policy, and before/after results before committing.
+- A PC-to-phone standard file can be previewed and imported without network or automatic device transfer.
 - Missing source and conflict states preserve the character and offer safe next actions.
 
 ## Non-goals for M2
 
 - broad official-book coverage or copied non-SRD text;
-- multiclassing, campaign management, VTT integration, or automatic cloud sync;
+- multiclassing, campaign management, VTT integration, or automatic cross-device transfer;
+- level 3–5 content, subclass/Champion-like progression, spells, or digital random rolls;
 - production visual redesign in this documentation branch;
 - changes to schemas, Dexie, repositories, import/export services, or production UI;
 - perfect automation for every house rule;
