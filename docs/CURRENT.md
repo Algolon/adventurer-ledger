@@ -1,5 +1,10 @@
 # Current state
 
+The application is presented as Runefolio. Its deterministic vector identity,
+favicon and complete `any`/`maskable` PWA icon sets are documented in
+[`BRAND.md`](BRAND.md); technical installation and local-storage identities stay
+unchanged.
+
 ## Baseline before M1
 
 - Next.js 16/React 19 PWA shell with responsive navigation;

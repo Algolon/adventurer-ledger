@@ -1,6 +1,10 @@
-# Adventurer Ledger
+# Runefolio
 
 Private, local-first D&D 2024/5.5e character builder, library and declarative rules ledger.
+
+The visible product is Runefolio; the repository and stable PWA/storage identity
+remain `adventurer-ledger`. See [`docs/BRAND.md`](docs/BRAND.md) for the canonical
+logo geometry, color tokens, production assets, and regeneration workflow.
 
 This repository contains code, schemas, original test content and empty templates only—no paid rulebook text.
 
