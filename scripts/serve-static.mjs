@@ -2,12 +2,14 @@ import http from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-const root = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "out",
-  ),
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+  initialRoot = path.resolve(projectRoot, process.env.PREVIEW_ROOT || "out"),
+  nextRoot = process.env.PREVIEW_NEXT_ROOT
+    ? path.resolve(projectRoot, process.env.PREVIEW_NEXT_ROOT)
+    : undefined,
   port = Number(process.env.PORT || 4173),
+  configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "",
+  basePath = configuredBasePath === "/" ? "" : configuredBasePath.replace(/\/+$/, ""),
   types = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -17,12 +19,30 @@ const root = path.resolve(
     ".webmanifest": "application/manifest+json; charset=utf-8",
     ".woff2": "font/woff2",
   };
+let root = initialRoot;
 http
   .createServer((request, response) => {
     const pathname = decodeURIComponent(
         new URL(request.url ?? "/", "http://localhost").pathname,
-      ),
-      relative = pathname.replace(/^\/+/, "");
+      );
+    if (nextRoot && request.method === "POST" && pathname === "/__test__/activate-next") {
+      root = nextRoot;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (basePath && pathname === basePath) {
+      response.writeHead(308, { Location: `${basePath}/` });
+      response.end();
+      return;
+    }
+    if (basePath && !pathname.startsWith(`${basePath}/`)) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const scopedPathname = pathname.slice(basePath.length) || "/",
+      relative = scopedPathname.replace(/^\/+/, "");
     let file = path.resolve(root, relative || "index.html");
     if (
       !file.startsWith(`${root}${path.sep}`) &&
@@ -47,15 +67,14 @@ http
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
     };
-    if (pathname === "/sw.js")
+    if (scopedPathname === "/sw.js")
       Object.assign(headers, {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Content-Security-Policy": "default-src 'self'; script-src 'self'",
-        "Service-Worker-Allowed": "/",
       });
     response.writeHead(200, headers);
     createReadStream(file).pipe(response);
   })
   .listen(port, "127.0.0.1", () =>
-    process.stdout.write(`Static preview on http://127.0.0.1:${port}\n`),
+    process.stdout.write(`Static preview on http://127.0.0.1:${port}${basePath}/\n`),
   );

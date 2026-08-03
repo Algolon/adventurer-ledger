@@ -17,6 +17,8 @@ No account, cloud database, API key or external service is required.
 
 `npm run build` produces the complete static site in `out/`, including a content-versioned `sw.js`. Serve it over HTTPS and reproduce the service-worker headers in `public/_headers`. Each device has independent IndexedDB storage; transfer data manually with confirmed exports/imports.
 
+For the temporary GitHub Pages project deployment, use `npm run build:pages`; see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the scoped URL, workflow, and host limitations.
+
 ## Foundation
 
 - Next.js/React/TypeScript strict PWA shell

@@ -8,8 +8,15 @@
     "start": "node scripts/serve-static.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
-    "preview": "npm run build && node scripts/serve-static.mjs"
+    "test:e2e": "cross-env NEXT_PUBLIC_BASE_PATH= playwright test",
+    "test:e2e:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger playwright test",
+    "test:e2e:update": "playwright test --config=playwright.update.config.ts",
+    "test:e2e:all": "npm run test:e2e && npm run test:e2e:pages && npm run test:e2e:update",
+    "build:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger npm run build",
+    "verify:build": "node scripts/verify-static-build.mjs",
+    "verify:pages": "cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger node scripts/verify-static-build.mjs",
+    "preview": "npm run build && node scripts/serve-static.mjs",
+    "preview:update": "node scripts/build-update-fixtures.mjs && cross-env NEXT_PUBLIC_BASE_PATH=/adventurer-ledger PREVIEW_ROOT=.playwright-update/old PREVIEW_NEXT_ROOT=.playwright-update/new node scripts/serve-static.mjs"
   },
   "dependencies": {
     "dexie": "^4.2.0",

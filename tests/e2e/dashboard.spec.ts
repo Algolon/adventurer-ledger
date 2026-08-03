@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "",
+  APP_ROOT = `${BASE_PATH}/`,
+  scoped = (pathname: `/${string}`) => `${BASE_PATH}${pathname}`;
+
 async function navigate(page: Page, label: string) {
   const toggle = page.getByRole("button", { name: "Toggle navigation" });
   if (await toggle.isVisible()) await toggle.click();
@@ -63,7 +67,7 @@ function pack(prefix: string, name: string, fullText: string) {
 }
 
 test("opens and advances Brammel builder", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(APP_ROOT);
   await expect(
     page.getByRole("heading", { name: "Brammel “Boss” Voss" }),
   ).toBeVisible();
@@ -75,14 +79,14 @@ test("opens and advances Brammel builder", async ({ page }) => {
   await expect(page.getByText("Step 6 of 6")).toBeVisible();
 });
 test("navigates to sources", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(APP_ROOT);
   await navigate(page, "Sources");
   await expect(
     page.getByRole("heading", { name: "Source management" }),
   ).toBeVisible();
 });
 test("shows device-local storage health in settings", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(APP_ROOT);
   await navigate(page, "Settings");
   await expect(
     page.getByRole("heading", { name: "Settings", level: 2 }),
@@ -96,7 +100,7 @@ test("shows device-local storage health in settings", async ({ page }) => {
 test("previews, imports, and finds a synthetic compendium entry", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto(APP_ROOT);
   await navigate(page, "Imports & exports");
   await page
     .getByLabel("Pack JSON")
@@ -114,7 +118,7 @@ test("previews, imports, and finds a synthetic compendium entry", async ({
     page.getByRole("heading", { name: "Ready to import" }),
   ).toBeVisible();
   await page.getByRole("button", { name: /Confirm atomic import/ }).click();
-  await expect(page.getByRole("status")).toContainText("completed atomically");
+  await expect(page.locator(".formmessage")).toContainText("completed atomically");
   await navigate(page, "Compendium");
   await expect(
     page.getByRole("heading", { name: "E2E Starlight Rule" }),
@@ -123,7 +127,7 @@ test("previews, imports, and finds a synthetic compendium entry", async ({
 test("blocks an invalid import without echoing private text in diagnostics", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto(APP_ROOT);
   await navigate(page, "Imports & exports");
   await page
     .getByLabel("Pack JSON")
@@ -145,18 +149,8 @@ test("works offline with local compendium edit, search, and export", async ({
 }) => {
   const failed: string[] = [],
     responses: Array<{ url: string; fromWorker: boolean }> = [];
-  await page.goto("/");
-  await page.evaluate(async () => {
-    await navigator.serviceWorker.ready;
-    if (!navigator.serviceWorker.controller)
-      await new Promise<void>((resolve) =>
-        navigator.serviceWorker.addEventListener(
-          "controllerchange",
-          () => resolve(),
-          { once: true },
-        ),
-      );
-  });
+  await page.goto(APP_ROOT);
+  await expect(page.locator(".offline")).toContainText("Offline ready");
   await navigate(page, "Imports & exports");
   const original =
     "<img src=x onerror=PRIVATE_SYNTHETIC_EXECUTION()> Original offline-safe text.";
@@ -165,7 +159,7 @@ test("works offline with local compendium edit, search, and export", async ({
     .fill(JSON.stringify(pack("offline-star", "Offline Star", original)));
   await page.getByRole("button", { name: /Preview import/ }).click();
   await page.getByRole("button", { name: /Confirm atomic import/ }).click();
-  await expect(page.getByRole("status")).toContainText("completed atomically");
+  await expect(page.locator(".formmessage")).toContainText("completed atomically");
   page.on("requestfailed", (request) => failed.push(request.url()));
   page.on("response", (response) =>
     responses.push({
@@ -193,7 +187,7 @@ test("works offline with local compendium edit, search, and export", async ({
   await expect(fullText).toHaveValue(original);
   await fullText.fill("Edited entirely offline with original synthetic text.");
   await page.getByRole("button", { name: /Save pack and entry/ }).click();
-  await expect(page.getByRole("status")).toContainText("saved locally");
+  await expect(page.locator(".formmessage")).toContainText("saved locally");
   await navigate(page, "Compendium");
   await page.getByLabel("Filter compendium").fill("Offline Star");
   await page.getByText(/Full text/).click();
@@ -215,22 +209,64 @@ test("works offline with local compendium edit, search, and export", async ({
   await context.setOffline(false);
 });
 
-test("serves versioned worker and safe service-worker headers", async ({
+test("serves a scoped versioned worker through the preview contract", async ({
   page,
 }) => {
-  await page.goto("/");
-  const worker = await page.request.get("/sw.js"),
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(new URL(request.url()).pathname));
+  await page.goto(APP_ROOT);
+  await expect(page.locator(".offline")).toContainText("Offline ready");
+  const worker = await page.request.get(scoped("/sw.js")),
     source = await worker.text();
   expect(worker.headers()["content-type"]).toContain("application/javascript");
   expect(worker.headers()["cache-control"]).toContain("no-cache");
-  expect(worker.headers()["service-worker-allowed"]).toBe("/");
+  expect(worker.headers()["service-worker-allowed"]).toBeUndefined();
   expect(source).not.toContain("__CACHE_VERSION__");
   expect(source).toContain("adventurer-ledger-shell-");
+  const precache = JSON.parse(
+    source.match(/const PRECACHE=(\[[^;]+\]);/)?.[1] ?? "[]",
+  ) as string[];
+  expect(precache.length).toBeGreaterThan(10);
+  expect(precache.every((asset) => asset.startsWith(APP_ROOT))).toBe(true);
   const cachesAfterInstall = await page.evaluate(async () => {
-    await navigator.serviceWorker.ready;
     return (await caches.keys()).filter((key) =>
       key.startsWith("adventurer-ledger-shell-"),
     );
   });
   expect(cachesAfterInstall).toHaveLength(1);
+  const registration = await page.evaluate(async () => ({
+    scope: (await navigator.serviceWorker.ready).scope,
+    controller: navigator.serviceWorker.controller?.scriptURL,
+  }));
+  expect(new URL(registration.scope).pathname).toBe(APP_ROOT);
+  expect(new URL(registration.controller ?? "").pathname).toBe(
+    scoped("/sw.js"),
+  );
+  const manifestResponse = await page.request.get(scoped("/manifest.webmanifest"));
+  expect(manifestResponse.ok()).toBe(true);
+  const manifest = (await manifestResponse.json()) as {
+    id: string;
+    start_url: string;
+    scope: string;
+    icons: Array<{ src: string }>;
+  };
+  expect(manifest).toMatchObject({
+    id: APP_ROOT,
+    start_url: APP_ROOT,
+    scope: APP_ROOT,
+  });
+  for (const icon of manifest.icons) {
+    expect(icon.src.startsWith(scoped("/icons/"))).toBe(true);
+    expect((await page.request.get(icon.src)).ok()).toBe(true);
+  }
+  const shellAssets = await page.locator('script[src],link[rel="stylesheet"]').evaluateAll(
+    (elements) => elements.map((element) => element.getAttribute("src") ?? element.getAttribute("href")),
+  );
+  expect(shellAssets.length).toBeGreaterThan(0);
+  expect(shellAssets.every((asset) => asset?.startsWith(`${BASE_PATH}/_next/`))).toBe(true);
+  if (BASE_PATH) {
+    expect((await page.request.get("/")).status()).toBe(404);
+    expect(requested).not.toContain("/sw.js");
+    expect(requested.some((path) => path.startsWith("/icons/"))).toBe(false);
+  }
 });

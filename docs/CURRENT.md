@@ -15,6 +15,8 @@ M1 now owns source, content-pack, and content-entry CRUD; immutable Dexie v2 pac
 
 M1.1 adds a fully static Next.js production export and first-party offline worker. Build output creates a content-derived cache version and precaches the complete local app shell. Updates wait for explicit user action, old shell caches are removed on activation, and Settings exposes storage estimates, quota pressure, persistence status, and `navigator.storage.persist()` where supported.
 
+M1.2 makes that static PWA portable between domain-root hosting and the temporary GitHub Pages project URL. Manifest, Next.js assets, service-worker scope, precache and fallback derive from one build-time base path. A real two-build browser regression proves that the active shell remains internally consistent until update consent. The header status now reflects actual worker/cache readiness.
+
 ## Device and installation behavior
 
 - Every phone, desktop browser, browser profile, and installed PWA has its own IndexedDB.

@@ -2,7 +2,6 @@
   Content-Type: application/javascript; charset=utf-8
   Cache-Control: no-cache, no-store, must-revalidate
   Content-Security-Policy: default-src 'self'; script-src 'self'
-  Service-Worker-Allowed: /
   X-Content-Type-Options: nosniff
 
 /*

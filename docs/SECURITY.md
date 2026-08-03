@@ -28,8 +28,10 @@ IndexedDB is only as protected as the browser profile. M1 exports are plain JSON
 - The service worker caches only build-produced application shell assets, icons, the manifest, and same-origin GET responses. IndexedDB content and generated exports are never placed in Cache Storage.
 - Service-worker installation and updates require HTTPS in normal deployments. Localhost is the browser-defined development exception.
 - New workers wait until the user selects **Update now**. The reload then lets Dexie run database migrations before content repositories are used.
-- `sw.js` must be served with JavaScript content type, `no-cache`, `Service-Worker-Allowed: /`, `nosniff`, and a same-origin worker CSP. [`../public/_headers`](../public/_headers) documents the static-host contract; hosts with different configuration formats must reproduce it.
+- Self-hosted `sw.js` should use JavaScript content type, `no-cache`, `nosniff`, and a same-origin worker CSP. [`../public/_headers`](../public/_headers) is a reference for hosts that support this format.
+- GitHub Pages does not apply `_headers` files or expose project-controlled custom response headers. The Pages worker is therefore deployed inside `/adventurer-ledger/` and uses that natural scope without `Service-Worker-Allowed`. Missing custom CSP and response hardening are accepted host limitations for the temporary test deployment.
 - A content hash versions each shell cache. Activation deletes only older Adventurer Ledger shell caches and the known pre-M1 `ledger-v1` cache.
+- The active worker serves navigation and shell assets only from its own versioned cache. A waiting worker's completed cache cannot mix new HTML or chunks into the active shell.
 
 ## Dependency overrides
 
