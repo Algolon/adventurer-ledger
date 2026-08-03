@@ -24,9 +24,9 @@ import {
   RestrictedExportConfirmationError,
 } from "@/src/export/content-export";
 import {
-  confirmImport,
-  previewContentPack,
-  type ImportPreview,
+  confirmImportSet,
+  previewContentPackSet,
+  type ImportSetPreview,
 } from "@/src/import/content-pipeline";
 import { db } from "@/src/storage/db";
 import {
@@ -602,18 +602,19 @@ function PackEditor() {
 
 function ImportExportPanel() {
   const [text, setText] = useState(""),
-    [preview, setPreview] = useState<ImportPreview>(),
+    [preview, setPreview] = useState<ImportSetPreview>(),
     [message, setMessage] = useState(""),
     [includeRestricted, setIncludeRestricted] = useState(false),
     [confirmed, setConfirmed] = useState(false);
+  // Always the set boundary, so the preview shows exactly what confirmation revalidates.
   const inspect = async () => {
     setMessage("");
-    setPreview(await previewContentPack(text, db));
+    setPreview(await previewContentPackSet([text], db));
   };
   const commit = async () => {
     if (!preview) return;
     try {
-      await confirmImport(preview, db);
+      await confirmImportSet(preview, db);
       setMessage("Import completed atomically.");
       setPreview(undefined);
       setText("");

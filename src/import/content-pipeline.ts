@@ -47,6 +47,11 @@ export interface ImportPlan {
   packs: { add: string[]; update: string[] };
   entries: { add: string[]; update: string[] };
 }
+/**
+ * Per-document preview. It validates one file against the installed database but
+ * carries no cross-file dependency, link, progression or conflict guarantee: those
+ * belong to the set boundary. Confirmation always revalidates at the set boundary.
+ */
 export interface ImportPreview {
   readonly document?: ContentPackDocument;
   readonly issues: ImportIssue[];
@@ -60,6 +65,29 @@ export interface ImportSetPreview {
   readonly canImport: boolean;
 }
 
+export type ImportConfirmationCode =
+  | "PREVIEW_INVALID"
+  | "PREVIEW_STALE"
+  | "SET_REVALIDATION_FAILED";
+/**
+ * Typed confirmation outcome. Nothing is written when this is thrown. Diagnostics
+ * carry issue codes, stable IDs and field paths only, never imported private text.
+ */
+export class ImportConfirmationError extends Error {
+  readonly code: ImportConfirmationCode;
+  readonly issues: readonly ImportIssue[];
+  constructor(
+    code: ImportConfirmationCode,
+    message: string,
+    issues: readonly ImportIssue[] = [],
+  ) {
+    super(message);
+    this.name = "ImportConfirmationError";
+    this.code = code;
+    this.issues = issues;
+  }
+}
+
 interface Observations {
   sources: Map<string, string | undefined>;
   packs: Map<string, string | undefined>;
@@ -69,6 +97,11 @@ interface PreviewState {
   json: string;
   observations: Observations;
 }
+/** Database state every reference, dependency and conflict check is resolved against. */
+interface InstalledSnapshot {
+  entries: readonly ContentEntry[];
+  packIds: ReadonlySet<string>;
+}
 const previewStates = new WeakMap<ImportPreview, PreviewState>();
 const importSetStates = new WeakMap<ImportSetPreview, { previews: ImportPreview[] }>();
 const emptyPlan = (): ImportPlan => ({
@@ -76,9 +109,15 @@ const emptyPlan = (): ImportPlan => ({
   packs: { add: [], update: [] },
   entries: { add: [], update: [] },
 });
-const duplicates = (ids: string[]) => [
-  ...new Set(ids.filter((id, index) => ids.indexOf(id) !== index)),
-];
+const duplicates = (ids: readonly string[]) => {
+  const seen = new Set<string>(),
+    repeated = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) repeated.add(id);
+    else seen.add(id);
+  }
+  return [...repeated];
+};
 const compareVersions = (left: string, right: string) => {
   const parse = (value: string) =>
     value
@@ -93,6 +132,14 @@ const compareVersions = (left: string, right: string) => {
   }
   return 0;
 };
+
+async function readInstalledSnapshot(database: LedgerDB): Promise<InstalledSnapshot> {
+  const entries = await database.contentEntries.toArray();
+  const packIds = new Set(
+    (await database.contentPacks.toCollection().primaryKeys()).map(String),
+  );
+  return { entries, packIds };
+}
 
 function nestedEffects(entry: Pick<ContentEntry, "effects" | "choices">): Effect[] {
   const output: Effect[] = [];
@@ -224,9 +271,10 @@ function parseAndMigrate(json: string): {
   return { document: validation.data, issues };
 }
 
-export async function previewContentPack(
+async function previewDocument(
   json: string,
   database: LedgerDB,
+  installed: InstalledSnapshot,
 ): Promise<ImportPreview> {
   const plan = emptyPlan(),
     parsed = parseAndMigrate(json);
@@ -331,7 +379,7 @@ export async function previewContentPack(
       });
     else plan.entries.update.push(entry.id);
   });
-  const installedEntries = await database.contentEntries.toArray(), referenceEntries = [...installedEntries, ...document.entries];
+  const referenceEntries = [...installed.entries, ...document.entries];
   const availableItemIds = new Set(referenceEntries.filter(entry => ["item", "weapon", "armor", "tool"].includes(entry.category)).map(entry => entry.id));
   const availableBundleIds = new Set(referenceEntries.flatMap(entry => (entry.equipmentBundles ?? []).map(bundle => bundle.id)));
   issues.push(...equipmentReferenceIssues(document.entries, availableItemIds, availableBundleIds));
@@ -345,11 +393,20 @@ export async function previewContentPack(
   return preview;
 }
 
+export async function previewContentPack(
+  json: string,
+  database: LedgerDB,
+): Promise<ImportPreview> {
+  return previewDocument(json, database, await readInstalledSnapshot(database));
+}
+
 const abortIfNeeded = (signal?: AbortSignal) => {
   if (signal?.aborted)
     throw new DOMException("Import was cancelled", "AbortError");
 };
 async function assertNotStale(state: PreviewState, database: LedgerDB) {
+  const stale = (message: string) =>
+    new ImportConfirmationError("PREVIEW_STALE", message);
   const sourceIds = [...state.observations.sources.keys()],
     currentSources = await database.sources.bulkGet(sourceIds);
   for (let index = 0; index < sourceIds.length; index++) {
@@ -358,7 +415,7 @@ async function assertNotStale(state: PreviewState, database: LedgerDB) {
       id &&
       currentSources[index]?.updatedAt !== state.observations.sources.get(id)
     )
-      throw new Error(`Import preview is stale for source ${id}`);
+      throw stale(`Import preview is stale for source ${id}`);
   }
   const packIds = [...state.observations.packs.keys()],
     currentPacks = await database.contentPacks.bulkGet(packIds);
@@ -368,7 +425,7 @@ async function assertNotStale(state: PreviewState, database: LedgerDB) {
       id &&
       currentPacks[index]?.updatedAt !== state.observations.packs.get(id)
     )
-      throw new Error(`Import preview is stale for pack ${id}`);
+      throw stale(`Import preview is stale for pack ${id}`);
   }
   const entryIds = [...state.observations.entries.keys()],
     currentEntries = await database.contentEntries.bulkGet(entryIds);
@@ -380,140 +437,28 @@ async function assertNotStale(state: PreviewState, database: LedgerDB) {
       (current ? `${current.revision}:${current.updatedAt}` : undefined) !==
         state.observations.entries.get(id)
     )
-      throw new Error(`Import preview is stale for entry ${id}`);
+      throw stale(`Import preview is stale for entry ${id}`);
   }
 }
 
-export async function confirmImport(
-  preview: ImportPreview,
-  database: LedgerDB,
-  signal?: AbortSignal,
-): Promise<void> {
-  const state = previewStates.get(preview);
-  if (!preview.canImport || !state)
-    throw new Error("Import preview is invalid or contains blocking issues");
-  abortIfNeeded(signal);
-  await database.transaction(
-    "rw",
-    database.sources,
-    database.contentPacks,
-    database.contentEntries,
-    database.contentPackVersions,
-    database.contentEntryVersions,
-    async () => {
-      abortIfNeeded(signal);
-      await assertNotStale(state, database);
-      const refreshed = await previewContentPack(state.json, database);
-      if (!refreshed.canImport || !refreshed.document)
-        throw new Error("Import preview no longer passes validation");
-      const document = refreshed.document,
-        now = new Date().toISOString();
-      abortIfNeeded(signal);
-      const currentPack = await database.contentPacks.get(document.pack.id),
-        currentSources = await database.sources.bulkGet(
-          document.sources.map((source) => source.id),
-        );
-      const sourceRecords: Source[] = document.sources.map(
-        (incoming, index) => ({
-          ...incoming,
-          createdAt: currentSources[index]?.createdAt ?? now,
-          updatedAt: now,
-        }),
-      );
-      await database.sources.bulkPut(sourceRecords);
-      abortIfNeeded(signal);
-      const sourceIds = [
-          ...new Set([
-            ...document.sources.map((source) => source.id),
-            ...document.entries.map((entry) => entry.sourceId),
-          ]),
-        ],
-        entryIds = document.entries.map((entry) => entry.id);
-      if (currentPack) {
-        const count = await database.contentPackVersions
-          .where("packId")
-          .equals(currentPack.id)
-          .count();
-        const archived: ContentPackVersion = {
-          id: `${currentPack.id}@${count + 1}`,
-          packId: currentPack.id,
-          sequence: count + 1,
-          reason: "import",
-          snapshot: currentPack,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await database.contentPackVersions.add(archived);
-      }
-      abortIfNeeded(signal);
-      const pack: ContentPack = {
-        ...document.pack,
-        schemaVersion: document.schemaVersion,
-        sourceIds,
-        entryIds,
-        createdAt: currentPack?.createdAt ?? now,
-        updatedAt: now,
-      };
-      await database.contentPacks.put(pack);
-      const currentEntries = await database.contentEntries.bulkGet(
-          document.entries.map((entry) => entry.id),
-        ),
-        histories: ContentEntryVersion[] = [],
-        records: ContentEntry[] = [];
-      document.entries.forEach((incoming, index) => {
-        const current = currentEntries[index];
-        if (current)
-          histories.push({
-            id: `${current.id}@${current.revision}`,
-            entryId: current.id,
-            revision: current.revision,
-            reason: "import",
-            snapshot: current,
-            createdAt: now,
-            updatedAt: now,
-          });
-        records.push({
-          ...incoming,
-          createdAt: current?.createdAt ?? incoming.createdAt,
-          updatedAt: now,
-        });
-      });
-      abortIfNeeded(signal);
-      if (histories.length)
-        await database.contentEntryVersions.bulkAdd(histories);
-      await database.contentEntries.bulkPut(records);
-      abortIfNeeded(signal);
-    },
-  );
-}
-
-/** Validate several files as one dependency and reference namespace. */
-export async function previewContentPackSet(
-  jsonFiles: readonly string[],
-  database: LedgerDB,
-): Promise<ImportSetPreview> {
-  const previews = await Promise.all(jsonFiles.map(json => previewContentPack(json, database)));
-  const documents = previews.flatMap(preview => preview.document ? [preview.document] : []);
-  const plan = emptyPlan();
-  for (const preview of previews) {
-    plan.sources.add.push(...preview.plan.sources.add); plan.sources.update.push(...preview.plan.sources.update);
-    plan.packs.add.push(...preview.plan.packs.add); plan.packs.update.push(...preview.plan.packs.update);
-    plan.entries.add.push(...preview.plan.entries.add); plan.entries.update.push(...preview.plan.entries.update);
-  }
-  const allSourceIds = documents.flatMap(document => document.sources.map(source => source.id)), sourceIds = new Set(allSourceIds);
-  const entriesById = new Map(documents.flatMap(document => document.entries.map(entry => [entry.id, entry] as const)));
-  const issues = previews.flatMap(preview => preview.issues).filter(issue =>
-    issue.code !== "MISSING_ITEM_REFERENCE" && issue.code !== "MISSING_EQUIPMENT_BUNDLE" &&
-    (issue.code !== "MISSING_SOURCE" || !issue.recordId || !sourceIds.has(entriesById.get(issue.recordId)?.sourceId ?? ""))
-  );
+/**
+ * Cross-file validation. Pure with respect to `installed`, so preview and
+ * confirmation run exactly the same checks against different database snapshots.
+ */
+function setValidationIssues(
+  documents: readonly ContentPackDocument[],
+  installed: InstalledSnapshot,
+): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  const allSourceIds = documents.flatMap(document => document.sources.map(source => source.id));
   const packIds = documents.map(document => document.pack.id), entryIds = documents.flatMap(document => document.entries.map(entry => entry.id));
   for (const duplicate of duplicates(allSourceIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "sources.id", message: `Source ID ${duplicate} occurs more than once in the import set` });
   for (const duplicate of duplicates(packIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "pack.id", message: `Pack ID ${duplicate} occurs more than once in the import set` });
   for (const duplicate of duplicates(entryIds)) issues.push({ code: "DUPLICATE_ID", severity: "error", recordId: duplicate, path: "entries.id", message: `Entry ID ${duplicate} occurs more than once in the import set` });
-  const importedPacks = new Set(packIds), installedPacks = new Set((await database.contentPacks.toCollection().primaryKeys()).map(String));
+  const importedPacks = new Set(packIds);
   for (const document of documents) {
-    for (const dependency of document.pack.dependencies) if (!importedPacks.has(dependency) && !installedPacks.has(dependency)) issues.push({ code: "MISSING_DEPENDENCY", severity: "error", recordId: document.pack.id, path: "pack.dependencies", message: `Pack ${document.pack.id} requires missing dependency ${dependency}` });
-    for (const dependency of document.pack.optionalDependencies) if (!importedPacks.has(dependency) && !installedPacks.has(dependency)) issues.push({ code: "OPTIONAL_DEPENDENCY_MISSING", severity: "warning", recordId: document.pack.id, path: "pack.optionalDependencies", message: `Pack ${document.pack.id} has unavailable optional dependency ${dependency}` });
+    for (const dependency of document.pack.dependencies) if (!importedPacks.has(dependency) && !installed.packIds.has(dependency)) issues.push({ code: "MISSING_DEPENDENCY", severity: "error", recordId: document.pack.id, targetId: dependency, path: "pack.dependencies", message: `Pack ${document.pack.id} requires missing dependency ${dependency}` });
+    for (const dependency of document.pack.optionalDependencies) if (!importedPacks.has(dependency) && !installed.packIds.has(dependency)) issues.push({ code: "OPTIONAL_DEPENDENCY_MISSING", severity: "warning", recordId: document.pack.id, targetId: dependency, path: "pack.optionalDependencies", message: `Pack ${document.pack.id} has unavailable optional dependency ${dependency}` });
   }
   const dependencies = new Map(documents.map(document => [document.pack.id, document.pack.dependencies.filter(dependency => importedPacks.has(dependency))]));
   const visiting = new Set<string>(), visited = new Set<string>();
@@ -525,8 +470,8 @@ export async function previewContentPackSet(
     visiting.delete(packId); visited.add(packId); return cyclic;
   };
   for (const packId of packIds) if (checkCycle(packId)) { issues.push({ code: "DEPENDENCY_CYCLE", severity: "error", recordId: packId, path: "pack.dependencies", message: `Dependency cycle includes pack ${packId}` }); break; }
-  const importedEntries = new Set(entryIds), installedEntryRecords = await database.contentEntries.toArray(), installedEntries = new Set(installedEntryRecords.map(entry => entry.id));
-  const combinedEntryRecords = [...new Map([...installedEntryRecords, ...documents.flatMap(document => document.entries)].map(entry => [entry.id, entry] as const)).values()];
+  const importedEntries = new Set(entryIds), installedEntries = new Set(installed.entries.map(entry => entry.id));
+  const combinedEntryRecords = [...new Map([...installed.entries, ...documents.flatMap(document => document.entries)].map(entry => [entry.id, entry] as const)).values()];
   const bundleOwners = new Map<string, string>();
   for (const entry of combinedEntryRecords) for (const bundle of entry.equipmentBundles ?? []) {
     const owner = bundleOwners.get(bundle.id);
@@ -540,7 +485,7 @@ export async function previewContentPackSet(
   for (const document of documents) for (const entry of document.entries) {
     const inspectChoice = (choice: ChoiceDefinition) => {
       for (const option of choice.options) {
-        if (option.entryId && !importedEntries.has(option.entryId) && !installedEntries.has(option.entryId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.choices", message: `Entry ${entry.id} has an unresolved choice reference to ${option.entryId}` });
+        if (option.entryId && !importedEntries.has(option.entryId) && !installedEntries.has(option.entryId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId: option.entryId, path: "entries.choices", message: `Entry ${entry.id} has an unresolved choice reference to ${option.entryId}` });
         for (const child of option.childChoices ?? []) inspectChoice(child);
       }
       for (const child of choice.childChoices ?? []) inspectChoice(child);
@@ -548,13 +493,13 @@ export async function previewContentPackSet(
     for (const choice of entry.choices) inspectChoice(choice);
     if (entry.category === "class") {
       const mechanics = entry.mechanics as { progression: Array<{ featureIds: string[]; choiceIds: string[] }>; subclassIds: string[]; savingThrows: string[]; startingProficiencyIds: string[]; multiclass?: { grantedProficiencyIds: string[] } };
-      for (const targetId of [...mechanics.progression.flatMap(row => row.featureIds), ...mechanics.subclassIds, ...mechanics.savingThrows, ...mechanics.startingProficiencyIds, ...(mechanics.multiclass?.grantedProficiencyIds ?? [])]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Class ${entry.id} has an unresolved progression reference to ${targetId}` });
+      for (const targetId of [...mechanics.progression.flatMap(row => row.featureIds), ...mechanics.subclassIds, ...mechanics.savingThrows, ...mechanics.startingProficiencyIds, ...(mechanics.multiclass?.grantedProficiencyIds ?? [])]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId, path: "entries.mechanics.progression", message: `Class ${entry.id} has an unresolved progression reference to ${targetId}` });
       const knownChoiceIds = new Set(entry.choices.map(choice => choice.id));
       for (const choiceId of mechanics.progression.flatMap(row => row.choiceIds)) if (!knownChoiceIds.has(choiceId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId: choiceId, path: "entries.mechanics.progression.choiceIds", message: `Class ${entry.id} has an unresolved progression choice ${choiceId}` });
     }
     if (entry.category === "subclass") {
       const mechanics = entry.mechanics as { classId: string; progression: Array<{ featureIds: string[]; choiceIds: string[] }> };
-      for (const targetId of [mechanics.classId, ...mechanics.progression.flatMap(row => row.featureIds)]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.mechanics.progression", message: `Subclass ${entry.id} has an unresolved progression reference to ${targetId}` });
+      for (const targetId of [mechanics.classId, ...mechanics.progression.flatMap(row => row.featureIds)]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId, path: "entries.mechanics.progression", message: `Subclass ${entry.id} has an unresolved progression reference to ${targetId}` });
       const knownChoiceIds = new Set(entry.choices.map(choice => choice.id));
       for (const choiceId of mechanics.progression.flatMap(row => row.choiceIds)) if (!knownChoiceIds.has(choiceId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId: choiceId, path: "entries.mechanics.progression.choiceIds", message: `Subclass ${entry.id} has an unresolved progression choice ${choiceId}` });
     }
@@ -562,8 +507,8 @@ export async function previewContentPackSet(
       const mechanics = entry.mechanics as { featId: string; proficiencyIds: string[]; equipmentChoiceIds: string[] };
       for (const targetId of [mechanics.featId, ...mechanics.proficiencyIds, ...mechanics.equipmentChoiceIds]) if (!importedEntries.has(targetId) && !installedEntries.has(targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId, path: "entries.mechanics", message: `Background ${entry.id} has an unresolved mechanics reference to ${targetId}` });
     }
-    for (const link of entry.links) if (link.required && !importedEntries.has(link.targetId) && !installedEntries.has(link.targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, path: "entries.links", message: `Entry ${entry.id} has an unresolved required ${link.type} reference to ${link.targetId}` });
-    for (const target of [entry.replacementOf, entry.replacedBy, ...entry.editionRelations].filter((item): item is string => typeof item === "string")) if (!importedEntries.has(target) && !installedEntries.has(target)) issues.push({ code: "REPLACEMENT_INVALID", severity: "error", recordId: entry.id, path: "entries.editionRelations", message: `Entry ${entry.id} has an unresolved revision or edition relation to ${target}` });
+    for (const link of entry.links) if (link.required && !importedEntries.has(link.targetId) && !installedEntries.has(link.targetId)) issues.push({ code: "MISSING_REFERENCE", severity: "error", recordId: entry.id, targetId: link.targetId, path: "entries.links", message: `Entry ${entry.id} has an unresolved required ${link.type} reference to ${link.targetId}` });
+    for (const target of [entry.replacementOf, entry.replacedBy, ...entry.editionRelations].filter((item): item is string => typeof item === "string")) if (!importedEntries.has(target) && !installedEntries.has(target)) issues.push({ code: "REPLACEMENT_INVALID", severity: "error", recordId: entry.id, targetId: target, path: "entries.editionRelations", message: `Entry ${entry.id} has an unresolved revision or edition relation to ${target}` });
     for (const alias of [entry.slug, ...entry.aliases].map(value => value.trim().toLocaleLowerCase()).filter(Boolean)) {
       const owner = aliases.get(alias);
       if (owner && owner !== entry.id) issues.push({ code: "ALIAS_CONFLICT", severity: "warning", recordId: entry.id, path: "entries.aliases", message: `Alias conflict between entries ${owner} and ${entry.id}` });
@@ -580,38 +525,244 @@ export async function previewContentPackSet(
     if (policies.size > 1) issues.push({ code: "CONFLICT_POLICY_MISMATCH", severity: "error", recordId: key, path: "entries.conflict.resolution", message: `Conflict group ${key} declares inconsistent resolution policies` });
     else if (policies.has("explicit-selection")) issues.push({ code: "CONFLICT_REVIEW_REQUIRED", severity: "warning", recordId: key, path: "entries.conflict.resolution", message: `Conflict group ${key} requires an explicit user selection` });
   }
-  const result: ImportSetPreview = { documents, issues, plan, canImport: documents.length === jsonFiles.length && !issues.some(issue => issue.severity === "error") };
-  importSetStates.set(result, { previews });
+  return issues;
+}
+
+interface BuiltSetPreview {
+  previews: ImportPreview[];
+  documents: ContentPackDocument[];
+  issues: ImportIssue[];
+  plan: ImportPlan;
+  canImport: boolean;
+}
+
+async function buildSetPreview(
+  jsonFiles: readonly string[],
+  database: LedgerDB,
+  installed: InstalledSnapshot,
+): Promise<BuiltSetPreview> {
+  const previews: ImportPreview[] = [];
+  for (const json of jsonFiles) previews.push(await previewDocument(json, database, installed));
+  const documents = previews.flatMap(preview => preview.document ? [preview.document] : []);
+  const plan = emptyPlan();
+  for (const preview of previews) {
+    plan.sources.add.push(...preview.plan.sources.add); plan.sources.update.push(...preview.plan.sources.update);
+    plan.packs.add.push(...preview.plan.packs.add); plan.packs.update.push(...preview.plan.packs.update);
+    plan.entries.add.push(...preview.plan.entries.add); plan.entries.update.push(...preview.plan.entries.update);
+  }
+  const sourceIds = new Set(documents.flatMap(document => document.sources.map(source => source.id)));
+  const entriesById = new Map(documents.flatMap(document => document.entries.map(entry => [entry.id, entry] as const)));
+  const issues = previews.flatMap(preview => preview.issues).filter(issue =>
+    issue.code !== "MISSING_ITEM_REFERENCE" && issue.code !== "MISSING_EQUIPMENT_BUNDLE" &&
+    (issue.code !== "MISSING_SOURCE" || !issue.recordId || !sourceIds.has(entriesById.get(issue.recordId)?.sourceId ?? ""))
+  );
+  issues.push(...setValidationIssues(documents, installed));
+  return {
+    previews,
+    documents,
+    issues,
+    plan,
+    canImport: documents.length === jsonFiles.length && !issues.some(issue => issue.severity === "error"),
+  };
+}
+
+/** Validate several files as one dependency and reference namespace. */
+export async function previewContentPackSet(
+  jsonFiles: readonly string[],
+  database: LedgerDB,
+): Promise<ImportSetPreview> {
+  const built = await buildSetPreview(
+    jsonFiles,
+    database,
+    await readInstalledSnapshot(database),
+  );
+  const result: ImportSetPreview = {
+    documents: built.documents,
+    issues: built.issues,
+    plan: built.plan,
+    canImport: built.canImport,
+  };
+  importSetStates.set(result, { previews: built.previews });
   return result;
 }
 
-/** Confirm every file in one Dexie transaction; any failure rolls back the set. */
-export async function confirmImportSet(preview: ImportSetPreview, database: LedgerDB, signal?: AbortSignal): Promise<void> {
-  const state = importSetStates.get(preview);
-  if (!preview.canImport || !state) throw new Error("Import set preview is invalid or contains blocking issues");
-  const byId = new Map(state.previews.flatMap(item => item.document ? [[item.document.pack.id, item] as const] : []));
-  const ordered: ImportPreview[] = [], visiting = new Set<string>(), visited = new Set<string>();
+/** Dependencies first, so a dependent pack never observes a half-installed set. */
+function orderDocuments(documents: readonly ContentPackDocument[]): ContentPackDocument[] {
+  const byId = new Map(documents.map(document => [document.pack.id, document] as const));
+  const ordered: ContentPackDocument[] = [], visiting = new Set<string>(), visited = new Set<string>();
   const visit = (packId: string) => {
     if (visited.has(packId)) return;
-    if (visiting.has(packId)) throw new Error(`Dependency cycle includes pack ${packId}`);
+    if (visiting.has(packId)) throw new ImportConfirmationError("SET_REVALIDATION_FAILED", `Dependency cycle includes pack ${packId}`, [{ code: "DEPENDENCY_CYCLE", severity: "error", recordId: packId, path: "pack.dependencies", message: `Dependency cycle includes pack ${packId}` }]);
     visiting.add(packId);
-    const item = byId.get(packId);
-    for (const dependency of item?.document?.pack.dependencies ?? []) if (byId.has(dependency)) visit(dependency);
-    visiting.delete(packId); visited.add(packId); if (item) ordered.push(item);
+    const document = byId.get(packId);
+    for (const dependency of document?.pack.dependencies ?? []) if (byId.has(dependency)) visit(dependency);
+    visiting.delete(packId); visited.add(packId); if (document) ordered.push(document);
   };
   for (const packId of byId.keys()) visit(packId);
-  await database.transaction("rw", database.sources, database.contentPacks, database.contentEntries, database.contentPackVersions, database.contentEntryVersions, async () => {
-    for (const item of ordered) {
-      const original = previewStates.get(item);
-      if (!original) throw new Error("Import set preview state is unavailable");
-      await assertNotStale(original, database);
-    }
-    for (const item of ordered) {
-      abortIfNeeded(signal);
-      const original = previewStates.get(item);
-      if (!original) throw new Error("Import set preview state is unavailable");
-      const refreshed = await previewContentPack(original.json, database);
-      await confirmImport(refreshed, database, signal);
-    }
+  return ordered;
+}
+
+async function writeDocument(
+  document: ContentPackDocument,
+  database: LedgerDB,
+  now: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  abortIfNeeded(signal);
+  const currentPack = await database.contentPacks.get(document.pack.id),
+    currentSources = await database.sources.bulkGet(
+      document.sources.map((source) => source.id),
+    );
+  const sourceRecords: Source[] = document.sources.map((incoming, index) => ({
+    ...incoming,
+    createdAt: currentSources[index]?.createdAt ?? now,
+    updatedAt: now,
+  }));
+  await database.sources.bulkPut(sourceRecords);
+  abortIfNeeded(signal);
+  const sourceIds = [
+      ...new Set([
+        ...document.sources.map((source) => source.id),
+        ...document.entries.map((entry) => entry.sourceId),
+      ]),
+    ],
+    entryIds = document.entries.map((entry) => entry.id);
+  if (currentPack) {
+    const count = await database.contentPackVersions
+      .where("packId")
+      .equals(currentPack.id)
+      .count();
+    const archived: ContentPackVersion = {
+      id: `${currentPack.id}@${count + 1}`,
+      packId: currentPack.id,
+      sequence: count + 1,
+      reason: "import",
+      snapshot: currentPack,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await database.contentPackVersions.add(archived);
+  }
+  abortIfNeeded(signal);
+  const pack: ContentPack = {
+    ...document.pack,
+    schemaVersion: document.schemaVersion,
+    sourceIds,
+    entryIds,
+    createdAt: currentPack?.createdAt ?? now,
+    updatedAt: now,
+  };
+  await database.contentPacks.put(pack);
+  const currentEntries = await database.contentEntries.bulkGet(
+      document.entries.map((entry) => entry.id),
+    ),
+    histories: ContentEntryVersion[] = [],
+    records: ContentEntry[] = [];
+  document.entries.forEach((incoming, index) => {
+    const current = currentEntries[index];
+    if (current)
+      histories.push({
+        id: `${current.id}@${current.revision}`,
+        entryId: current.id,
+        revision: current.revision,
+        reason: "import",
+        snapshot: current,
+        createdAt: now,
+        updatedAt: now,
+      });
+    records.push({
+      ...incoming,
+      createdAt: current?.createdAt ?? incoming.createdAt,
+      updatedAt: now,
+    });
   });
+  abortIfNeeded(signal);
+  if (histories.length) await database.contentEntryVersions.bulkAdd(histories);
+  await database.contentEntries.bulkPut(records);
+  abortIfNeeded(signal);
+}
+
+/**
+ * The single confirmation boundary for every import. One flat Dexie transaction
+ * asserts preview freshness, revalidates the complete set against confirmation-time
+ * database state, and only then writes packs, sources, entries and history. Any
+ * failure or cancellation rolls back every file in the set.
+ */
+async function commitImportStates(
+  states: readonly PreviewState[],
+  database: LedgerDB,
+  signal?: AbortSignal,
+): Promise<void> {
+  abortIfNeeded(signal);
+  await database.transaction(
+    "rw",
+    database.sources,
+    database.contentPacks,
+    database.contentEntries,
+    database.contentPackVersions,
+    database.contentEntryVersions,
+    async () => {
+      abortIfNeeded(signal);
+      for (const state of states) await assertNotStale(state, database);
+      abortIfNeeded(signal);
+      const revalidated = await buildSetPreview(
+        states.map((state) => state.json),
+        database,
+        await readInstalledSnapshot(database),
+      );
+      if (!revalidated.canImport)
+        throw new ImportConfirmationError(
+          "SET_REVALIDATION_FAILED",
+          "Import set no longer passes validation at confirmation time",
+          revalidated.issues.filter((issue) => issue.severity === "error"),
+        );
+      const now = new Date().toISOString();
+      for (const document of orderDocuments(revalidated.documents))
+        await writeDocument(document, database, now, signal);
+      abortIfNeeded(signal);
+    },
+  );
+}
+
+/**
+ * Confirm one previewed file. The document is revalidated as a one-file import set,
+ * so a single-file import cannot bypass the dependency, reference and conflict
+ * guarantees of the set boundary.
+ */
+export async function confirmImport(
+  preview: ImportPreview,
+  database: LedgerDB,
+  signal?: AbortSignal,
+): Promise<void> {
+  const state = previewStates.get(preview);
+  if (!preview.canImport || !state)
+    throw new ImportConfirmationError(
+      "PREVIEW_INVALID",
+      "Import preview is invalid or contains blocking issues",
+    );
+  await commitImportStates([state], database, signal);
+}
+
+/** Confirm every file in one Dexie transaction; any failure rolls back the set. */
+export async function confirmImportSet(
+  preview: ImportSetPreview,
+  database: LedgerDB,
+  signal?: AbortSignal,
+): Promise<void> {
+  const setState = importSetStates.get(preview);
+  if (!preview.canImport || !setState)
+    throw new ImportConfirmationError(
+      "PREVIEW_INVALID",
+      "Import set preview is invalid or contains blocking issues",
+    );
+  const states = setState.previews.map((item) => {
+    const state = previewStates.get(item);
+    if (!state)
+      throw new ImportConfirmationError(
+        "PREVIEW_INVALID",
+        "Import set preview state is unavailable",
+      );
+    return state;
+  });
+  await commitImportStates(states, database, signal);
 }
