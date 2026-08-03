@@ -22,6 +22,7 @@ import type {
 import type { ID, ISODate } from "@/src/domain/model";
 import { computeContentFingerprint, resolveDerivedCharacter } from "@/src/services/derived-resolver";
 import { canonicalHash } from "@/src/services/canonical";
+import { loadRulesetScope } from "@/src/services/content-scope";
 import { derivedSnapshotOf, type ServiceContext } from "@/src/services/character-services";
 import {
   invalid,
@@ -255,12 +256,12 @@ export class CharacterTransferService {
     const { repositories } = this.context;
     const character = await repositories.characters.get(characterId);
     if (!character) return notFound(characterId);
-    const [runtime, overrides, entries, ruleset] = await Promise.all([
+    const [runtime, overrides, scope] = await Promise.all([
       repositories.runtime.get(characterId),
       repositories.overrides.listByCharacter(characterId),
-      repositories.content.listEntries(),
-      repositories.content.getRuleset(character.rulesetProfileId),
+      loadRulesetScope(repositories, character.rulesetProfileId),
     ]);
+    const { entries, ruleset } = scope;
     if (!runtime) return notFound(characterId);
 
     const sheet = resolveDerivedCharacter({ character, runtime, overrides, entries, ...(ruleset ? { ruleset } : {}) });
@@ -342,11 +343,13 @@ export class CharacterTransferService {
 
     const document = parsed.data;
     const { repositories } = this.context;
-    const [existing, entries, localOverrides] = await Promise.all([
+    const [existing, scope, localOverrides] = await Promise.all([
       repositories.characters.get(document.character.id),
-      repositories.content.listEntries(),
+      // Dependencies are judged against the ruleset the incoming character uses.
+      loadRulesetScope(repositories, document.character.rulesetProfileId),
       repositories.overrides.listByCharacter(document.character.id),
     ]);
+    const entries = scope.entries;
     const availableIds = new Set(entries.map(entry => entry.id));
     const missingDependencyIds = document.dependencies.filter(item => !availableIds.has(item.id)).map(item => item.id);
 
@@ -395,9 +398,10 @@ export class CharacterTransferService {
         database.characterActions,
         database.characterDerivedSnapshots,
         database.contentEntries,
+        database.rulesetProfiles,
       ],
       async (): Promise<ServiceOutcome<ImportReceipt>> => {
-        const entries = await repositories.content.listEntries();
+        const { entries } = await loadRulesetScope(repositories, document.character.rulesetProfileId);
         const availableIds = new Set(entries.map(entry => entry.id));
         const unresolvedDependencyIds = document.dependencies.filter(item => !availableIds.has(item.id)).map(item => item.id);
         const existing = await repositories.characters.get(document.character.id);

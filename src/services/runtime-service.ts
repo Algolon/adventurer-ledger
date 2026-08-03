@@ -24,6 +24,7 @@ import type {
 } from "@/src/domain/character-record";
 import type { ID } from "@/src/domain/model";
 import { resolveDerivedCharacter, type DerivedCharacterSheet } from "@/src/services/derived-resolver";
+import { loadRulesetScope } from "@/src/services/content-scope";
 import type { ServiceContext } from "@/src/services/character-services";
 import {
   invalid,
@@ -293,6 +294,7 @@ export class CharacterRuntimeService {
         database.characterActions,
         database.characterOverrides,
         database.contentEntries,
+        database.rulesetProfiles,
       ],
       async (): Promise<ServiceOutcome<RuntimeResult>> => {
         const character = await repositories.characters.get(characterId);
@@ -311,11 +313,17 @@ export class CharacterRuntimeService {
         if (intent.kind === "operation") {
           // The resolver supplies the bounds and recharge behaviour; the runtime
           // service applies no rules of its own.
-          const [entries, overrides] = await Promise.all([
-            repositories.content.listEntries(),
+          const [scope, overrides] = await Promise.all([
+            loadRulesetScope(repositories, character.rulesetProfileId),
             repositories.overrides.listByCharacter(characterId),
           ]);
-          const sheet = resolveDerivedCharacter({ character, runtime, overrides, entries });
+          const sheet = resolveDerivedCharacter({
+            character,
+            runtime,
+            overrides,
+            entries: scope.entries,
+            ...(scope.ruleset ? { ruleset: scope.ruleset } : {}),
+          });
           const preview = previewRuntimeOperation(runtime, sheet, intent.operation);
           if (preview.warnings.some(warning => warning.severity === "error")) return invalid(preview.warnings);
           proposed = preview.next;

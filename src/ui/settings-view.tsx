@@ -13,7 +13,7 @@ import { Archive, Download, FolderLock, HardDrive, Import, RefreshCw, ScrollText
 import { ContentWorkspace } from "@/src/ui/content-workspace";
 import { StorageSettings } from "@/src/ui/storage-settings";
 import { TransferPanel } from "@/src/ui/transfer-panel";
-import { SYNTHETIC_RULESET } from "@/src/content/runefolio-synthetic";
+import { useAsync, useServices } from "@/src/ui/services-context";
 
 type SettingsPage =
   | "overview"
@@ -101,6 +101,35 @@ export function SettingsView({ onOpenCharacter }: { onOpenCharacter(id: string):
   );
 }
 
+/** Lists whatever ruleset profiles are installed on this device. */
+function RulesetsPage() {
+  const { query } = useServices();
+  const state = useAsync(() => query.rulesets(), []);
+  const rulesets = state.status === "ready" ? state.value : [];
+  return (
+    <div className="m2-step">
+      <h2 className="m2-page-title">Rulesets</h2>
+      {rulesets.length ? (
+        rulesets.map(ruleset => (
+          <div className="m2-card" key={ruleset.id}>
+            <div className="m2-card-head">
+              <h3>{ruleset.name}</h3>
+              <span className="m2-badge">Installed</span>
+            </div>
+            <p className="m2-muted">
+              Conflict resolution: {ruleset.conflictResolution} · requirement enforcement: {ruleset.requirementEnforcement} ·
+              legacy content {ruleset.allowLegacy ? "allowed" : "not allowed"}.
+            </p>
+            <p className="m2-muted">Active sources: {ruleset.activeSourceIds.join(", ")}</p>
+          </div>
+        ))
+      ) : (
+        <p className="m2-muted">No ruleset profiles are installed on this device.</p>
+      )}
+    </div>
+  );
+}
+
 function SettingsPageBody({ page, onOpenCharacter }: { page: SettingsPage; onOpenCharacter(id: string): void }) {
   switch (page) {
     case "packs":
@@ -114,22 +143,7 @@ function SettingsPageBody({ page, onOpenCharacter }: { page: SettingsPage; onOpe
     case "storage":
       return <StorageSettings />;
     case "rulesets":
-      return (
-        <div className="m2-step">
-          <h2 className="m2-page-title">Rulesets</h2>
-          <div className="m2-card">
-            <div className="m2-card-head">
-              <h3>{SYNTHETIC_RULESET.name}</h3>
-              <span className="m2-badge">Active</span>
-            </div>
-            <p className="m2-muted">
-              Conflict resolution: {SYNTHETIC_RULESET.conflictResolution} · requirement enforcement:{" "}
-              {SYNTHETIC_RULESET.requirementEnforcement} · legacy content {SYNTHETIC_RULESET.allowLegacy ? "allowed" : "not allowed"}.
-            </p>
-            <p className="m2-muted">Active sources: {SYNTHETIC_RULESET.activeSourceIds.join(", ")}</p>
-          </div>
-        </div>
-      );
+      return <RulesetsPage />;
     case "backups":
       return (
         <div className="m2-step">

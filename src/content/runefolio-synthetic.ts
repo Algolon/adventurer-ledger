@@ -89,8 +89,20 @@ const entry = (
   ...partial,
 });
 
-const proficiency = (id: string, slug: string, name: string, type: string, key: string) =>
-  entry({ id, slug, name, category: "proficiency", mechanics: { type, key } });
+/**
+ * `ability:<name>` is the declarative convention the resolver reads to associate
+ * a save or skill with the ability it is rolled with. It uses the existing
+ * `tags` field, so no shared schema changes for it.
+ */
+const proficiency = (id: string, slug: string, name: string, type: string, key: string, ability?: string) =>
+  entry({
+    id,
+    slug,
+    name,
+    category: "proficiency",
+    mechanics: { type, key },
+    ...(ability ? { tags: ["synthetic", "runefolio-2024-synthetic", `ability:${ability}`] } : {}),
+  });
 
 export const PROFICIENCY_IDS = {
   saveStrength: "proficiency:save-strength",
@@ -106,26 +118,13 @@ export const PROFICIENCY_IDS = {
   languageRiverSigns: "proficiency:language-river-signs",
 } as const;
 
-/** Display metadata for saves and checks the sheet renders. */
-export const SAVE_PROFICIENCIES: readonly { id: string; ability: string; label: string }[] = [
-  { id: PROFICIENCY_IDS.saveStrength, ability: "strength", label: "Strength save" },
-  { id: PROFICIENCY_IDS.saveConstitution, ability: "constitution", label: "Constitution save" },
-];
-
-export const SKILL_PROFICIENCIES: readonly { id: string; ability: string; label: string }[] = [
-  { id: PROFICIENCY_IDS.skillWatchcraft, ability: "wisdom", label: "Watchcraft" },
-  { id: PROFICIENCY_IDS.skillHaulage, ability: "strength", label: "Haulage" },
-  { id: PROFICIENCY_IDS.skillRiverlore, ability: "intelligence", label: "Riverlore" },
-  { id: PROFICIENCY_IDS.skillParley, ability: "charisma", label: "Parley" },
-];
-
 const proficiencyEntries: ContentEntry[] = [
-  proficiency(PROFICIENCY_IDS.saveStrength, "save-strength", "Strength save", "save", "strength"),
-  proficiency(PROFICIENCY_IDS.saveConstitution, "save-constitution", "Constitution save", "save", "constitution"),
-  proficiency(PROFICIENCY_IDS.skillWatchcraft, "skill-watchcraft", "Watchcraft", "skill", "watchcraft"),
-  proficiency(PROFICIENCY_IDS.skillHaulage, "skill-haulage", "Haulage", "skill", "haulage"),
-  proficiency(PROFICIENCY_IDS.skillRiverlore, "skill-riverlore", "Riverlore", "skill", "riverlore"),
-  proficiency(PROFICIENCY_IDS.skillParley, "skill-parley", "Parley", "skill", "parley"),
+  proficiency(PROFICIENCY_IDS.saveStrength, "save-strength", "Strength save", "save", "strength", "strength"),
+  proficiency(PROFICIENCY_IDS.saveConstitution, "save-constitution", "Constitution save", "save", "constitution", "constitution"),
+  proficiency(PROFICIENCY_IDS.skillWatchcraft, "skill-watchcraft", "Watchcraft", "skill", "watchcraft", "wisdom"),
+  proficiency(PROFICIENCY_IDS.skillHaulage, "skill-haulage", "Haulage", "skill", "haulage", "strength"),
+  proficiency(PROFICIENCY_IDS.skillRiverlore, "skill-riverlore", "Riverlore", "skill", "riverlore", "intelligence"),
+  proficiency(PROFICIENCY_IDS.skillParley, "skill-parley", "Parley", "skill", "parley", "charisma"),
   proficiency(PROFICIENCY_IDS.armorMedium, "armor-medium", "Medium armour", "armor", "medium"),
   proficiency(PROFICIENCY_IDS.armorShield, "armor-shield", "Shields", "armor", "shield"),
   proficiency(PROFICIENCY_IDS.weaponMartial, "weapon-martial", "Martial weapons", "weapon", "martial"),
@@ -204,10 +203,17 @@ const classEntry = entry({
       min: 2,
       max: 2,
       repeatable: false,
-      options: SKILL_PROFICIENCIES.map(skill => ({
-        id: `option:${skill.id}`,
-        label: skill.label,
-        effects: [{ id: `effect:grant-${skill.id}`, type: "grantProficiency", proficiencyId: skill.id } satisfies Effect],
+      options: (
+        [
+          [PROFICIENCY_IDS.skillWatchcraft, "Watchcraft"],
+          [PROFICIENCY_IDS.skillHaulage, "Haulage"],
+          [PROFICIENCY_IDS.skillRiverlore, "Riverlore"],
+          [PROFICIENCY_IDS.skillParley, "Parley"],
+        ] as const
+      ).map(([id, label]) => ({
+        id: `option:${id}`,
+        label,
+        effects: [{ id: `effect:grant-${id}`, type: "grantProficiency", proficiencyId: id } satisfies Effect],
       })),
     },
   ],
@@ -405,6 +411,29 @@ const attackEntry = entry({
   },
 });
 
+/**
+ * Ability generation as declarative rule content, so the planner reads the
+ * ruleset's method rather than importing a hard-coded array.
+ */
+const abilityGenerationEntries: ContentEntry[] = [
+  entry({
+    id: "rule:ability-generation-standard-array",
+    slug: "ability-generation-standard-array",
+    name: "Standard array",
+    category: "rule",
+    summary: "Assign one fixed set of six scores, then apply your origin's increases.",
+    mechanics: { kind: "ability-generation", data: { method: "standard-array", scores: [...STANDARD_ARRAY], label: "Standard array" } },
+  }),
+  entry({
+    id: "rule:ability-generation-manual",
+    slug: "ability-generation-manual",
+    name: "Enter scores manually",
+    category: "rule",
+    summary: "Record scores your table generated another way.",
+    mechanics: { kind: "ability-generation", data: { method: "manual", label: "Enter scores manually" } },
+  }),
+];
+
 /** Conditions the play sheet can apply. Tracking only; no derived effect in M2.1. */
 export const SYNTHETIC_CONDITION_IDS = ["condition:winded", "condition:braced"] as const;
 
@@ -499,6 +528,7 @@ export const SYNTHETIC_ENTRIES: readonly ContentEntry[] = [
   attackEntry,
   resourceEntry,
   ...conditionEntries,
+  ...abilityGenerationEntries,
   ...equipmentEntries,
   ...proficiencyEntries,
 ];

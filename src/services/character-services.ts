@@ -28,6 +28,7 @@ import {
   resolveDerivedCharacter,
   type DerivedCharacterSheet,
 } from "@/src/services/derived-resolver";
+import { loadRulesetScope } from "@/src/services/content-scope";
 import {
   invalid,
   noopLogger,
@@ -188,7 +189,7 @@ export class CharacterDraftService {
   }
 
   private async snapshot(draft: CharacterDraftRecord): Promise<DraftSnapshot> {
-    const entries = await this.context.repositories.content.listEntries();
+    const { entries } = await loadRulesetScope(this.context.repositories, draft.rulesetProfileId);
     return { draft, plan: planBuild(draft.build, entries, draft.presentation), revision: draft.revision };
   }
 }
@@ -250,7 +251,7 @@ export class CharacterBuildCommitService {
         if (draft.status !== "in-progress")
           return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: command.draftId, severity: "error" }]);
 
-        const entries = await repositories.content.listEntries();
+        const { entries, ruleset } = await loadRulesetScope(repositories, draft.rulesetProfileId);
         // Recheck the reviewed fingerprint immediately before writing.
         const fingerprint = computeContentFingerprint(entries, draft.rulesetProfileId);
         if (fingerprint !== command.expectedContentFingerprint)
@@ -276,7 +277,7 @@ export class CharacterBuildCommitService {
 
         const character = characterFromDraft(draft, command, fingerprint, existing, now);
         const overrides = await repositories.overrides.listByCharacter(command.characterId);
-        const sheet = resolveDerivedCharacter({ character, overrides, entries });
+        const sheet = resolveDerivedCharacter({ character, overrides, entries, ...(ruleset ? { ruleset } : {}) });
 
         if (command.intent === "manual-sheet" && sheet.completeness === "incomplete")
           return invalid([{ code: "MANUAL_MINIMUM_NOT_MET", recordId: command.characterId, severity: "error" }]);
@@ -585,6 +586,7 @@ export class CharacterOverrideService {
         database.characterRuntimeStates,
         database.characterDerivedSnapshots,
         database.contentEntries,
+        database.rulesetProfiles,
       ],
       async (): Promise<ServiceOutcome<OverrideResult>> => {
         const character = await repositories.characters.get(characterId);
@@ -592,8 +594,8 @@ export class CharacterOverrideService {
         if (character.revision !== expectedCharacterRevision)
           return stale(characterId, expectedCharacterRevision, character.revision);
 
-        const [entries, overrides] = await Promise.all([
-          repositories.content.listEntries(),
+        const [{ entries }, overrides] = await Promise.all([
+          loadRulesetScope(repositories, character.rulesetProfileId),
           repositories.overrides.listByCharacter(characterId),
         ]);
         const applied = await apply(character, entries, overrides);
@@ -688,38 +690,48 @@ export interface DraftCard {
 export class CharacterQueryService {
   constructor(private readonly context: ServiceContext) {}
 
-  private async content(): Promise<ContentEntry[]> {
-    return this.context.repositories.content.listEntries();
+  /** Content the given ruleset activates. */
+  private async scopedContent(rulesetProfileId: ID): Promise<ContentEntry[]> {
+    const { entries } = await loadRulesetScope(this.context.repositories, rulesetProfileId);
+    return entries;
   }
 
   async sheet(characterId: ID): Promise<DerivedCharacterSheet | undefined> {
     const { repositories } = this.context;
     const character = await repositories.characters.get(characterId);
     if (!character) return undefined;
-    const [runtime, overrides, entries, ruleset] = await Promise.all([
+    const [runtime, overrides, scope] = await Promise.all([
       repositories.runtime.get(characterId),
       repositories.overrides.listByCharacter(characterId),
-      this.content(),
-      repositories.content.getRuleset(character.rulesetProfileId),
+      loadRulesetScope(repositories, character.rulesetProfileId),
     ]);
-    return resolveDerivedCharacter({ character, runtime, overrides, entries, ...(ruleset ? { ruleset } : {}) });
+    return resolveDerivedCharacter({
+      character,
+      runtime,
+      overrides,
+      entries: scope.entries,
+      ...(scope.ruleset ? { ruleset: scope.ruleset } : {}),
+    });
   }
 
   async library(): Promise<{ characters: LibraryCard[]; drafts: DraftCard[] }> {
     const { repositories } = this.context;
-    const [records, drafts, entries] = await Promise.all([
-      repositories.characters.list(),
-      repositories.drafts.list(),
-      this.content(),
-    ]);
+    const [records, drafts] = await Promise.all([repositories.characters.list(), repositories.drafts.list()]);
     const characters: LibraryCard[] = [];
     for (const character of records) {
       if (character.status === "archived") continue;
-      const [runtime, overrides] = await Promise.all([
+      const [runtime, overrides, scope] = await Promise.all([
         repositories.runtime.get(character.id),
         repositories.overrides.listByCharacter(character.id),
+        loadRulesetScope(repositories, character.rulesetProfileId),
       ]);
-      const sheet = resolveDerivedCharacter({ character, runtime, overrides, entries });
+      const sheet = resolveDerivedCharacter({
+        character,
+        runtime,
+        overrides,
+        entries: scope.entries,
+        ...(scope.ruleset ? { ruleset: scope.ruleset } : {}),
+      });
       const state =
         sheet.missingDependencyIds.length > 0
           ? "missing-source"
@@ -743,18 +755,21 @@ export class CharacterQueryService {
     }
     return {
       characters,
-      drafts: drafts
-        .filter(draft => draft.status === "in-progress")
-        .map(draft => {
-          const plan = planBuild(draft.build, entries, draft.presentation);
-          return {
-            draftId: draft.id,
-            name: draft.build.name.trim() || "Unnamed character",
-            issueCount: plan.issueCount,
-            updatedAt: draft.updatedAt,
-            resumeStepId: plan.nextUnresolvedStepId,
-          };
-        }),
+      drafts: await Promise.all(
+        drafts
+          .filter(draft => draft.status === "in-progress")
+          .map(async draft => {
+            const { entries } = await loadRulesetScope(repositories, draft.rulesetProfileId);
+            const plan = planBuild(draft.build, entries, draft.presentation);
+            return {
+              draftId: draft.id,
+              name: draft.build.name.trim() || "Unnamed character",
+              issueCount: plan.issueCount,
+              updatedAt: draft.updatedAt,
+              resumeStepId: plan.nextUnresolvedStepId,
+            };
+          }),
+      ),
     };
   }
 
@@ -782,8 +797,18 @@ export class CharacterQueryService {
     };
   }
 
+  /** Content the given ruleset activates, for builder option lists. */
+  async contentForRuleset(rulesetId: ID): Promise<ContentEntry[]> {
+    return this.scopedContent(rulesetId);
+  }
+
+  /** Ruleset profiles installed on this device. */
+  async rulesets() {
+    return this.context.repositories.content.listRulesets();
+  }
+
   async contentFingerprint(rulesetId: ID): Promise<string> {
-    return computeContentFingerprint(await this.content(), rulesetId);
+    return computeContentFingerprint(await this.scopedContent(rulesetId), rulesetId);
   }
 
   async overrides(characterId: ID): Promise<CharacterOverrideRecord[]> {

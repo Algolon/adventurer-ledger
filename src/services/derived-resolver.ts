@@ -27,11 +27,11 @@ import type { Ability, Character, ContentEntry, ID, RulesetProfile } from "@/src
 import { deriveCharacterState, type DerivedCharacterState } from "@/src/rules/derive-character";
 import { abilityModifier, proficiencyBonus } from "@/src/rules/engine";
 import {
-  SAVE_PROFICIENCIES,
-  SKILL_PROFICIENCIES,
-  SYNTHETIC_IDS,
-  VANGUARD_HIT_DIE,
-} from "@/src/content/runefolio-synthetic";
+  hitDieForClass,
+  masteryWeaponRelations,
+  proficiencyCatalog,
+  scopeEntriesToRuleset,
+} from "@/src/services/content-scope";
 
 export const UNKNOWN_DISPLAY = "—";
 
@@ -277,7 +277,9 @@ export interface ResolveInput {
 export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSheet {
   const { character, runtime } = input;
   const overrides = input.overrides ?? [];
-  const entries = input.entries;
+  // A character resolves against its own ruleset's active sources, so content
+  // installed for another ruleset cannot alter this sheet.
+  const entries = scopeEntriesToRuleset(input.entries, input.ruleset);
   const byId = new Map(entries.map(item => [item.id, item]));
   const issues: SanitizedIssue[] = [];
   const missingDependencyIds = new Set<ID>();
@@ -409,10 +411,11 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
           : unknown({ code: "MANUAL_VALUE_MISSING", fieldPath: "hitPoints.current", action: "Enter current hit points" });
 
   // ---- hit dice ------------------------------------------------------------
+  const hitDie = hitDieForClass(classEntry);
   const hitDice: DerivedValue<string> =
-    mode === "automatic" && classEntry
+    mode === "automatic" && classEntry && hitDie !== undefined
       ? {
-          value: `${character.level}d${VANGUARD_HIT_DIE}`,
+          value: `${character.level}d${hitDie}`,
           contributors: [{ kind: "base", label: `${classEntry.name} hit die`, entryId: classEntry.id, sourceId: classEntry.sourceId }],
         }
       : { value: null, contributors: [], recovery: { code: "CLASS_MISSING", fieldPath: "hitDice.total", action: "Choose a class" } };
@@ -519,11 +522,12 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   speed = applyOverride(speed, "speed", overrides);
 
   // ---- saves and checks ----------------------------------------------------
+  const catalog = proficiencyCatalog(entries);
   const proficiencyEntry = (
-    definition: { id: ID; ability: string; label: string },
+    definition: { id: ID; ability: Ability; label: string },
     prefix: "savingThrow" | "check",
   ): DerivedProficiencyEntry => {
-    const ability = definition.ability as Ability;
+    const ability = definition.ability;
     const modifier = modifierOf(ability);
     const proficient = proficiencies.has(definition.id);
     const path = `${prefix}.${definition.id}`;
@@ -536,11 +540,12 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
           ]);
     return { id: definition.id, label: definition.label, ability, proficient, total: applyOverride(base, path, overrides) };
   };
-  const saves = mode === "automatic" ? SAVE_PROFICIENCIES.map(item => proficiencyEntry(item, "savingThrow")) : [];
-  const checks = mode === "automatic" ? SKILL_PROFICIENCIES.map(item => proficiencyEntry(item, "check")) : [];
+  const saves = mode === "automatic" ? catalog.saves.map(item => proficiencyEntry(item, "savingThrow")) : [];
+  const checks = mode === "automatic" ? catalog.skills.map(item => proficiencyEntry(item, "check")) : [];
 
   // ---- actions -------------------------------------------------------------
   const actions: DerivedAction[] = [];
+  const masteryRelations = masteryWeaponRelations(entries);
   for (const grant of state?.ruleResult.actionGrants ?? []) {
     const definition = byId.get(grant.definitionId);
     if (!definition) {
@@ -608,9 +613,13 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
       damageExpression: meta.damageDice ? `${meta.damageDice} ${signed(damageTotal)}`.trim() : null,
       damageContributors,
       ...(meta.range ? { range: meta.range } : {}),
-      ...(state?.ruleResult.optionGrants.weaponMasteries.has(SYNTHETIC_IDS.mastery) && meta.weaponId === SYNTHETIC_IDS.weapon
-        ? { masteryId: SYNTHETIC_IDS.mastery }
-        : {}),
+      // A granted mastery attaches when its declared weapon matches the action's.
+      ...(() => {
+        const granted = [...(state?.ruleResult.optionGrants.weaponMasteries ?? [])]
+          .sort()
+          .find(masteryId => meta.weaponId !== undefined && masteryRelations.get(masteryId) === meta.weaponId);
+        return granted ? { masteryId: granted } : {};
+      })(),
     });
   }
   for (const manualAction of character.manualActions)

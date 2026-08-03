@@ -74,7 +74,7 @@ export function isAllowedTargetPath(path: string): boolean {
   if (!prefix) return false;
   const remainder = path.slice(prefix.length);
   if (!remainder || remainder.length > 160) return false;
-  // Stable IDs and one optional suffix segment, e.g. `resource:rallying-breath.maximum`.
+  // A stable ID plus one optional suffix segment, e.g. `resource:<id>.maximum`.
   return /^[a-z0-9][a-z0-9:_-]*(?:\.[a-z][a-zA-Z]*)?$/.test(remainder);
 }
 

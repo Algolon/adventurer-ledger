@@ -23,7 +23,6 @@ import { PlaySheet } from "@/src/ui/play-sheet";
 import { LevelUpDialog } from "@/src/ui/level-up-dialog";
 import { SettingsView } from "@/src/ui/settings-view";
 import { TransferPanel } from "@/src/ui/transfer-panel";
-import { SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
 import "./m2.css";
 
 type View = "characters" | "sheet" | "compendium" | "settings" | "transfer";
@@ -43,25 +42,28 @@ export default function Home() {
 }
 
 function Shell() {
-  const { drafts, refresh } = useServices();
+  const { drafts, query, refresh } = useServices();
   const [view, setView] = useState<View>("characters");
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
   const [levelUpFor, setLevelUpFor] = useState<string | null>(null);
 
+  /** The ruleset a new build starts in: whichever profile is installed. */
+  const defaultRulesetId = useCallback(async () => {
+    const installed = await query.rulesets();
+    return installed[0]?.id;
+  }, [query]);
+
   const startNewCharacter = useCallback(async () => {
+    const rulesetProfileId = await defaultRulesetId();
+    if (!rulesetProfileId) return;
     const draftId = `draft:${Date.now().toString(36)}`;
-    const outcome = await drafts.create({
-      draftId,
-      rulesetProfileId: SYNTHETIC_RULESET_ID,
-      level: 1,
-      presentation: "guided",
-    });
+    const outcome = await drafts.create({ draftId, rulesetProfileId, level: 1, presentation: "guided" });
     if (outcome.status === "ok") {
       setBuilderDraftId(draftId);
       refresh();
     }
-  }, [drafts, refresh]);
+  }, [defaultRulesetId, drafts, refresh]);
 
   const navigate = useCallback(
     (destination: LibraryDestination) => {
@@ -77,17 +79,21 @@ function Shell() {
           setView("sheet");
           return;
         case "edit": {
-          // Editing a committed character opens a draft bound to it.
+          // Editing a committed character opens a draft bound to it, in that
+          // character's own ruleset.
           const draftId = `draft:edit:${destination.characterId}`;
-          void drafts
-            .create({
+          void query.sheet(destination.characterId).then(async sheet => {
+            const rulesetProfileId = sheet?.activeRulesetId ?? (await defaultRulesetId());
+            if (!rulesetProfileId) return;
+            await drafts.create({
               draftId,
-              rulesetProfileId: SYNTHETIC_RULESET_ID,
+              rulesetProfileId,
               level: 1,
               presentation: "guided",
               editingCharacterId: destination.characterId,
-            })
-            .then(() => setBuilderDraftId(draftId));
+            });
+            setBuilderDraftId(draftId);
+          });
           return;
         }
         case "level-up":
@@ -99,7 +105,7 @@ function Shell() {
           return;
       }
     },
-    [drafts, startNewCharacter],
+    [defaultRulesetId, drafts, query, startNewCharacter],
   );
 
   // A modal task owns the whole surface and supplies its own task footer.

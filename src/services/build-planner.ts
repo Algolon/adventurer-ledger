@@ -11,7 +11,12 @@ import { classMechanicsSchema } from "@/src/domain/content-pack";
 import type { CharacterDraftBuild, CharacterPresentationMode } from "@/src/domain/character-record";
 import { ABILITIES } from "@/src/domain/character-record";
 import type { Ability, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
-import { STANDARD_ARRAY, SYNTHETIC_EQUIPMENT_CHOICE } from "@/src/content/runefolio-synthetic";
+import {
+  abilityGenerationMethods,
+  equipmentChoicesFor,
+  grantingEntriesFor,
+  standardArrayFor,
+} from "@/src/services/content-scope";
 import type { ServiceIssue } from "@/src/services/contracts";
 
 export type BuilderStepId =
@@ -114,6 +119,17 @@ export function requiredChoicesFor(build: CharacterDraftBuild, entries: readonly
   return required;
 }
 
+/** Equipment choices the build's granted bundles require. */
+export function requiredEquipmentChoices(build: CharacterDraftBuild, entries: readonly ContentEntry[]) {
+  const granting = grantingEntriesFor([build.classId, build.speciesId, build.backgroundId], entries);
+  return equipmentChoicesFor(granting, entries);
+}
+
+/** Ability-generation methods the ruleset offers. */
+export function abilityMethodsFor(entries: readonly ContentEntry[]) {
+  return abilityGenerationMethods(entries);
+}
+
 /** True when the class grants no spells at the draft's level (D-02). */
 export function classHasSpells(build: CharacterDraftBuild, entries: readonly ContentEntry[]): boolean {
   const classEntry = build.classId ? entries.find(entry => entry.id === build.classId) : undefined;
@@ -147,6 +163,9 @@ const sameMultiset = (left: readonly number[], right: readonly number[]) =>
  * with the Caravan Warden +2 on Strength and +1 on Constitution.
  */
 export function standardArrayConsistent(build: CharacterDraftBuild, entries: readonly ContentEntry[]): boolean {
+  const standardArray = standardArrayFor(entries);
+  // A ruleset that declares no fixed array has nothing to check against.
+  if (!standardArray) return true;
   const scores = ABILITIES.map(ability => build.abilityScores[ability]);
   if (scores.some(score => typeof score !== "number")) return true;
   const finals = scores as number[];
@@ -158,14 +177,14 @@ export function standardArrayConsistent(build: CharacterDraftBuild, entries: rea
   const pattern = Array.isArray(choices?.increasePattern)
     ? choices.increasePattern.filter((item): item is number => typeof item === "number")
     : [];
-  if (!allowed.length || !pattern.length) return sameMultiset(finals, STANDARD_ARRAY);
+  if (!allowed.length || !pattern.length) return sameMultiset(finals, standardArray);
 
   // Try every assignment of the increase pattern to distinct allowed abilities.
   const indexes = allowed
     .map(name => ABILITIES.indexOf(name as Ability))
     .filter(index => index >= 0);
   const assign = (remaining: readonly number[], used: ReadonlySet<number>, candidate: readonly number[]): boolean => {
-    if (!remaining.length) return sameMultiset(candidate, STANDARD_ARRAY);
+    if (!remaining.length) return sameMultiset(candidate, standardArray);
     const [increase, ...rest] = remaining;
     return indexes.some(index => {
       if (used.has(index)) return false;
@@ -227,11 +246,13 @@ export function planBuild(
     if (!choice.resolved)
       stepIssues[choice.stepId].push({ code: "CHOICE_UNRESOLVED", recordId: choice.choiceId, severity: "error" });
 
-  // Equipment: the class field kit carries one bounded choice in this slice.
-  if (build.classId && byId.has(build.classId)) {
-    const selected = build.equipmentSelections[SYNTHETIC_EQUIPMENT_CHOICE] ?? [];
-    if (selected.length !== 1)
-      stepIssues.equipment.push({ code: "EQUIPMENT_CHOICE_REQUIRED", recordId: SYNTHETIC_EQUIPMENT_CHOICE, severity: "error" });
+  // Equipment choices come from whatever bundles the build's entries grant.
+  for (const choice of requiredEquipmentChoices(build, entries)) {
+    const selected = build.equipmentSelections[choice.choiceId] ?? [];
+    const resolved =
+      selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length;
+    if (!resolved)
+      stepIssues.equipment.push({ code: "EQUIPMENT_CHOICE_REQUIRED", recordId: choice.choiceId, severity: "error" });
   }
 
   // Identity never blocks the sheet; a missing name falls back safely (D-03).
@@ -328,16 +349,21 @@ export function recommendationsFor(
     recommendations.push({ optionId: "manual", label: "Enter scores manually", why: "Use this when your table agreed a different generation method.", rank: 2 });
   }
 
-  if (stepId === "class-choices" || stepId === "equipment") {
-    const required = requiredChoicesFor(build, entries).filter(choice => choice.stepId === stepId);
-    for (const choice of required)
+  if (stepId === "class-choices") {
+    for (const choice of requiredChoicesFor(build, entries).filter(choice => choice.stepId === stepId))
       for (const option of choice.options)
         recommendations.push({
           optionId: option.id,
           label: option.label,
-          why: "The only context-valid option for this class at this level in the synthetic slice.",
+          why: "A context-valid option for this class at this level.",
           rank: 1,
         });
+  }
+
+  if (stepId === "equipment") {
+    for (const choice of requiredEquipmentChoices(build, entries))
+      for (const option of choice.options)
+        recommendations.push({ optionId: option.id, label: option.label, why: "Offered by the granted starting kit.", rank: 1 });
   }
 
   return recommendations.sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label));

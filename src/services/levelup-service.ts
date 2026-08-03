@@ -20,6 +20,7 @@ import type { ContentEntry, ID } from "@/src/domain/model";
 import { requiredChoicesFor, type RequiredChoice } from "@/src/services/build-planner";
 import { computeContentFingerprint, resolveDerivedCharacter, type DerivedCharacterSheet } from "@/src/services/derived-resolver";
 import { derivedSnapshotOf, type ServiceContext } from "@/src/services/character-services";
+import { loadRulesetScope } from "@/src/services/content-scope";
 import {
   invalid,
   noopLogger,
@@ -207,11 +208,11 @@ export class CharacterLevelUpService {
     if (!character) return notFound(characterId);
     const runtime = await repositories.runtime.get(characterId);
     if (!runtime) return notFound(characterId);
-    const [entries, overrides] = await Promise.all([
-      repositories.content.listEntries(),
+    const [scope, overrides] = await Promise.all([
+      loadRulesetScope(repositories, character.rulesetProfileId),
       repositories.overrides.listByCharacter(characterId),
     ]);
-    return ok(this.buildPreview(character, runtime, entries, overrides, choiceSelections));
+    return ok(this.buildPreview(character, runtime, scope.entries, overrides, choiceSelections));
   }
 
   private buildPreview(
@@ -252,6 +253,7 @@ export class CharacterLevelUpService {
         database.characterOverrides,
         database.characterDerivedSnapshots,
         database.contentEntries,
+        database.rulesetProfiles,
       ],
       async (): Promise<ServiceOutcome<LevelUpResult>> => {
         const character = await repositories.characters.get(command.characterId);
@@ -266,7 +268,7 @@ export class CharacterLevelUpService {
         if (command.targetLevel !== character.level + 1)
           return invalid([{ code: "LEVEL_STEP_UNSUPPORTED", recordId: command.characterId, severity: "error" }]);
 
-        const entries = await repositories.content.listEntries();
+        const { entries } = await loadRulesetScope(repositories, character.rulesetProfileId);
         const fingerprint = computeContentFingerprint(entries, character.rulesetProfileId);
         if (fingerprint !== command.expectedContentFingerprint)
           return { status: "conflict", code: "STALE_PREVIEW", recordId: command.characterId };
@@ -394,6 +396,7 @@ export class CharacterLevelUpService {
         database.characterDerivedSnapshots,
         database.characterOverrides,
         database.contentEntries,
+        database.rulesetProfiles,
       ],
       async (): Promise<ServiceOutcome<LevelUpResult>> => {
         const character = await repositories.characters.get(characterId);
@@ -439,7 +442,7 @@ export class CharacterLevelUpService {
         const restoredOverrides = snapshot.overrides.map(item => ({ ...item, characterId, updatedAt: now }));
         for (const override of restoredOverrides) await repositories.overrides.put(override);
 
-        const entries = await repositories.content.listEntries();
+        const { entries } = await loadRulesetScope(repositories, restored.rulesetProfileId);
         await repositories.derivedSnapshots.put(
           derivedSnapshotOf(
             resolveDerivedCharacter({ character: restored, runtime: restoredRuntime, overrides: restoredOverrides, entries }),

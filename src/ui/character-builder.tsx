@@ -15,10 +15,10 @@ import { ArrowLeft, ArrowRight, Check, CircleHelp, ListChecks, TriangleAlert } f
 import { BUILDER_STEPS, recommendationsFor, type BuilderStepId, type PlannedStep } from "@/src/services/build-planner";
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
 import type { Ability, ContentEntry } from "@/src/domain/model";
-import { STANDARD_ARRAY, SYNTHETIC_EQUIPMENT_CHOICE, SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
+import { standardArrayFor } from "@/src/services/content-scope";
+import { requiredEquipmentChoices } from "@/src/services/build-planner";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import type { DraftSnapshot } from "@/src/services/character-services";
-import { db } from "@/src/storage/db";
 
 const ISSUE_LABELS: Record<string, string> = {
   CLASS_NOT_CHOSEN: "Choose a class",
@@ -82,7 +82,11 @@ export function CharacterBuilder({
   /** Freshest snapshot, readable after awaiting the save queue. */
   const snapshotRef = useRef<DraftSnapshot | null>(null);
 
-  const entriesState = useAsync(() => db.contentEntries.toArray(), []);
+  const rulesetId = snapshot?.draft.rulesetProfileId;
+  const entriesState = useAsync(
+    () => (rulesetId ? query.contentForRuleset(rulesetId) : Promise.resolve([])),
+    [rulesetId],
+  );
   const entries = useMemo<ContentEntry[]>(() => (entriesState.status === "ready" ? entriesState.value : []), [entriesState]);
 
   useEffect(() => {
@@ -148,6 +152,7 @@ export function CharacterBuilder({
     );
 
   const { draft, plan } = snapshot;
+  const rulesetLabel = draft.rulesetProfileId.replace(/^ruleset:/, "");
   const build = draft.build;
   const steps = plan.steps;
   const index = steps.findIndex(step => step.id === stepId);
@@ -294,6 +299,7 @@ export function CharacterBuilder({
           step={current}
           build={build}
           entries={entries}
+          rulesetLabel={rulesetLabel}
           presentation={draft.presentation}
           plan={snapshot.plan}
           onChange={save}
@@ -332,6 +338,7 @@ function StepContent({
   step,
   build,
   entries,
+  rulesetLabel,
   presentation,
   plan,
   onChange,
@@ -339,6 +346,7 @@ function StepContent({
   step: PlannedStep;
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
+  rulesetLabel: string;
   presentation: "guided" | "flexible";
   plan: DraftSnapshot["plan"];
   onChange(patch: DraftPatch): void;
@@ -361,7 +369,7 @@ function StepContent({
         <div className="m2-step">
           <h3>Ruleset</h3>
           <p className="m2-muted">
-            This build uses <b>{SYNTHETIC_RULESET_ID.replace("ruleset:", "")}</b>. Everything is stored on this device only.
+            This build uses <b>{rulesetLabel}</b>. Everything is stored on this device only.
           </p>
           <label className="m2-field">
             <span>Starting level</span>
@@ -662,7 +670,7 @@ function AbilitiesStep({
     });
 
   const used = ABILITIES.map(ability => build.abilityBaseScores[ability]).filter((value): value is number => typeof value === "number");
-  const remaining = [...STANDARD_ARRAY];
+  const remaining = [...(standardArrayFor(entries) ?? [])];
   for (const value of used) {
     const at = remaining.indexOf(value);
     if (at >= 0) remaining.splice(at, 1);
@@ -796,53 +804,59 @@ function EquipmentStep({
   entries: readonly ContentEntry[];
   onChange(patch: DraftPatch): void;
 }) {
+  const choices = requiredEquipmentChoices(build, entries);
   const classEntry = build.classId ? entries.find(entry => entry.id === build.classId) : undefined;
-  const bundle = classEntry?.equipmentBundles?.[0];
-  const choiceNode = bundle?.entries.find(node => node.type === "choice");
-  const selected = build.equipmentSelections[SYNTHETIC_EQUIPMENT_CHOICE] ?? [];
+  const bundles = classEntry?.equipmentBundles ?? [];
 
-  if (!bundle) return <p className="m2-muted">Choose a class first to see its starting equipment.</p>;
+  if (!classEntry) return <p className="m2-muted">Choose a class first to see its starting equipment.</p>;
 
   return (
     <div className="m2-step">
-      <h3>{bundle.label}</h3>
-      <ul className="m2-plain-list">
-        {bundle.entries
-          .filter(node => node.type === "item")
-          .map(node => (
-            <li key={node.type === "item" ? node.itemId : ""}>
-              {node.type === "item" ? entries.find(entry => entry.id === node.itemId)?.name ?? node.itemId : null}
-            </li>
-          ))}
-      </ul>
-      {choiceNode && choiceNode.type === "choice" ? (
-        <fieldset className="m2-fieldset">
-          <legend>{choiceNode.label}</legend>
-          <ul className="m2-options">
-            {choiceNode.options.map(option => (
-              <li key={option.id}>
-                <button
-                  type="button"
-                  className={selected.includes(option.id) ? "m2-option m2-option-selected" : "m2-option"}
-                  aria-pressed={selected.includes(option.id)}
-                  onClick={() =>
-                    onChange(current => ({
-                      equipmentSelections: { ...current.equipmentSelections, [SYNTHETIC_EQUIPMENT_CHOICE]: [option.id] },
-                    }))
-                  }
-                >
-                  <span className="m2-option-mark" aria-hidden="true">
-                    {selected.includes(option.id) ? <Check /> : "○"}
-                  </span>
-                  <span>
-                    <b>{option.label}</b>
-                  </span>
-                </button>
-              </li>
-            ))}
+      {bundles.map(bundle => (
+        <div key={bundle.id}>
+          <h3>{bundle.label}</h3>
+          <ul className="m2-plain-list">
+            {bundle.entries
+              .filter(node => node.type === "item")
+              .map(node => (
+                <li key={node.type === "item" ? node.itemId : ""}>
+                  {node.type === "item" ? entries.find(entry => entry.id === node.itemId)?.name ?? node.itemId : null}
+                </li>
+              ))}
           </ul>
-        </fieldset>
-      ) : null}
+        </div>
+      ))}
+      {choices.map(choice => {
+        const selected = build.equipmentSelections[choice.choiceId] ?? [];
+        return (
+          <fieldset className="m2-fieldset" key={choice.choiceId}>
+            <legend>{choice.label}</legend>
+            <ul className="m2-options">
+              {choice.options.map(option => (
+                <li key={option.id}>
+                  <button
+                    type="button"
+                    className={selected.includes(option.id) ? "m2-option m2-option-selected" : "m2-option"}
+                    aria-pressed={selected.includes(option.id)}
+                    onClick={() =>
+                      onChange(current => ({
+                        equipmentSelections: { ...current.equipmentSelections, [choice.choiceId]: [option.id] },
+                      }))
+                    }
+                  >
+                    <span className="m2-option-mark" aria-hidden="true">
+                      {selected.includes(option.id) ? <Check /> : "○"}
+                    </span>
+                    <span>
+                      <b>{option.label}</b>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </fieldset>
+        );
+      })}
     </div>
   );
 }
