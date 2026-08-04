@@ -192,9 +192,12 @@ describe("ruleset import and selection", () => {
     expect(await harness.install.activate("ruleset:absent")).toMatchObject({ status: "not-found" });
   });
 
-  it("derives the profile ID from the pack ID rather than inventing one", () => {
-    expect(rulesetIdForPack("pack:emberline-acceptance")).toBe("ruleset:emberline-acceptance");
+  it("derives the profile ID from the whole pack ID rather than inventing one", () => {
+    expect(rulesetIdForPack("pack:emberline-acceptance")).toBe("ruleset:pack:emberline-acceptance");
+    // The pack ID is kept whole, so two packs whose IDs differ only by the
+    // conventional prefix no longer land on the same profile.
     expect(rulesetIdForPack("emberline-acceptance")).toBe("ruleset:emberline-acceptance");
+    expect(rulesetIdForPack("pack:emberline-acceptance")).not.toBe(rulesetIdForPack("emberline-acceptance"));
   });
 
   it("clears content-scoped selections when a draft moves to another ruleset", async () => {
@@ -209,7 +212,18 @@ describe("ruleset import and selection", () => {
     expect(moved.draft.build.choiceSelections).toEqual({});
     // What does not depend on the ruleset survives.
     expect(moved.draft.build.name).toBe("Wren Halloway");
-    expect(moved.draft.build.abilityScores.strength).toBe(17);
+    expect(moved.draft.build.abilityBaseScores.strength).toBe(15);
+    /*
+     * The final score is not one of those things.
+     *
+     * It was 17 because the outgoing ruleset's background granted +2, and that
+     * background has just been cleared along with everything else the old
+     * ruleset defined. Keeping 17 would leave the character carrying an increase
+     * no active content grants — invisible, because a final score does not say
+     * where it came from. It falls back to the base score instead.
+     */
+    expect(moved.draft.build.abilityIncreases).toEqual({});
+    expect(moved.draft.build.abilityScores.strength).toBe(15);
   });
 });
 

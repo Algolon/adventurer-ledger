@@ -28,8 +28,10 @@ import {
 import {
   describeInstalledRulesets,
   proposeRulesetForPack,
+  rulesetIdCandidatesForPack,
   rulesetProfileFrom,
   type InstalledRulesetView,
+  type ResolvedDependency,
   type RulesetProposal,
 } from "@/src/services/ruleset-planner";
 import type { ServiceContext } from "@/src/services/character-services";
@@ -46,8 +48,14 @@ import {
 
 /** A proposal plus what installing it would mean against current state. */
 export interface RulesetOffer extends RulesetProposal {
-  /** True when a profile already holds the ID this pack maps to. */
+  /**
+   * True when a profile already holds one of the IDs this pack maps to,
+   * including the ID an earlier derivation would have produced. Checking both is
+   * what stops a re-import creating a second profile for the same pack.
+   */
   alreadyInstalled: boolean;
+  /** The ID it is installed under, when it already is. */
+  installedRulesetId?: ID;
 }
 
 export interface InstallPreview {
@@ -91,12 +99,25 @@ export class ContentInstallService {
   async preview(jsonFiles: readonly string[]): Promise<InstallPreview> {
     const set = await previewContentPackSet(jsonFiles, this.context.database);
     const installed = new Set((await this.context.repositories.content.listRulesets()).map(profile => profile.id));
+    // A dependency is satisfiable from another pack in the same set, so the set
+    // is indexed once and consulted explicitly rather than inferred from sources.
+    const inSet = new Map(set.documents.map(document => [document.pack.id, document.entries]));
     const offers = set.documents.map<RulesetOffer>(document => {
+      const dependencies: ResolvedDependency[] = (document.pack.dependencies ?? []).flatMap(packId => {
+        const entries = inSet.get(packId);
+        return entries ? [{ packId, entries }] : [];
+      });
       const proposal = proposeRulesetForPack(
-        { id: document.pack.id, name: document.pack.name, sourceIds: document.sources.map(source => source.id) },
+        {
+          id: document.pack.id,
+          name: document.pack.name,
+          sourceIds: document.sources.map(source => source.id),
+          dependencies: document.pack.dependencies ?? [],
+        },
         document.entries,
+        dependencies,
       );
-      return { ...proposal, alreadyInstalled: installed.has(proposal.rulesetId) };
+      return { ...proposal, ...describeInstallation(proposal.packId, installed) };
     });
     return { set, offers, issues: set.issues, canImport: set.canImport };
   }
@@ -124,7 +145,13 @@ export class ContentInstallService {
       const offer = offersById.get(packId);
       if (!offer) return [{ code: "RULESET_PACK_NOT_IN_SET", recordId: packId, severity: "error" as const }];
       if (offer.alreadyInstalled)
-        return [{ code: "RULESET_ALREADY_INSTALLED", recordId: offer.rulesetId, severity: "error" as const }];
+        return [
+          {
+            code: "RULESET_ALREADY_INSTALLED",
+            recordId: offer.installedRulesetId ?? offer.rulesetId,
+            severity: "error" as const,
+          },
+        ];
       if (!offer.usable) return [{ code: "RULESET_NOT_USABLE", recordId: offer.rulesetId, severity: "error" as const }];
       return [];
     });
@@ -138,8 +165,13 @@ export class ContentInstallService {
           const offer = offersById.get(document.pack.id);
           if (!offer) continue;
           // Refuse rather than overwrite: a profile that already exists may be
-          // the one an existing character is resolved against.
-          if (await database.rulesetProfiles.get(offer.rulesetId)) continue;
+          // the one an existing character is resolved against. Every ID this
+          // pack could be installed under is checked, so a profile created by an
+          // earlier derivation is not duplicated under the current one.
+          let taken = false;
+          for (const candidate of rulesetIdCandidatesForPack(offer.packId))
+            if (await database.rulesetProfiles.get(candidate)) taken = true;
+          if (taken) continue;
           await database.rulesetProfiles.put(rulesetProfileFrom(offer, now));
           createdRulesetIds.push(offer.rulesetId);
         }
@@ -182,10 +214,15 @@ export class ContentInstallService {
     ]);
     const installed = new Set(profiles.map(profile => profile.id));
     const byId = new Map(entries.map(entry => [entry.id, entry]));
+    const packsById = new Map(packs.map(pack => [pack.id, pack]));
     return packs
       .map<RulesetOffer>(pack => {
-        const proposal = proposeRulesetForPack(pack, entriesOfPack(pack, byId, entries));
-        return { ...proposal, alreadyInstalled: installed.has(proposal.rulesetId) };
+        const dependencies: ResolvedDependency[] = (pack.dependencies ?? []).flatMap(packId => {
+          const dependency = packsById.get(packId);
+          return dependency ? [{ packId, entries: entriesOfPack(dependency, byId, entries) }] : [];
+        });
+        const proposal = proposeRulesetForPack(pack, entriesOfPack(pack, byId, entries), dependencies);
+        return { ...proposal, ...describeInstallation(proposal.packId, installed) };
       })
       .filter(offer => !offer.alreadyInstalled)
       .sort((left, right) => left.name.localeCompare(right.name) || left.packId.localeCompare(right.packId));
@@ -203,7 +240,12 @@ export class ContentInstallService {
         if (!pack) return notFound(packId);
         const entries = await repositories.content.listEntries();
         const byId = new Map(entries.map(entry => [entry.id, entry]));
-        const proposal = proposeRulesetForPack(pack, entriesOfPack(pack, byId, entries));
+        const dependencies: ResolvedDependency[] = [];
+        for (const dependencyId of pack.dependencies ?? []) {
+          const dependency = await database.contentPacks.get(dependencyId);
+          if (dependency) dependencies.push({ packId: dependencyId, entries: entriesOfPack(dependency, byId, entries) });
+        }
+        const proposal = proposeRulesetForPack(pack, entriesOfPack(pack, byId, entries), dependencies);
         if (!proposal.usable)
           return invalid(
             proposal.missingCategories.map(category => ({
@@ -212,8 +254,9 @@ export class ContentInstallService {
               severity: "error" as const,
             })),
           );
-        if (await database.rulesetProfiles.get(proposal.rulesetId))
-          return { status: "conflict", code: "RULESET_ALREADY_INSTALLED", recordId: proposal.rulesetId };
+        for (const candidate of rulesetIdCandidatesForPack(proposal.packId))
+          if (await database.rulesetProfiles.get(candidate))
+            return { status: "conflict", code: "RULESET_ALREADY_INSTALLED", recordId: candidate };
         await database.rulesetProfiles.put(rulesetProfileFrom(proposal, now));
         return ok({ rulesetId: proposal.rulesetId });
       },
@@ -255,6 +298,15 @@ export class ContentInstallService {
     if (usable.length === 1) return { kind: "resolved", rulesetId: usable[0].id, reason: "only-usable" };
     return { kind: "ambiguous", options: usable.length ? usable : views };
   }
+}
+
+/** Whether this pack already has a profile, under any ID it maps to. */
+function describeInstallation(
+  packId: ID,
+  installed: ReadonlySet<ID>,
+): { alreadyInstalled: boolean; installedRulesetId?: ID } {
+  const found = rulesetIdCandidatesForPack(packId).find(candidate => installed.has(candidate));
+  return found ? { alreadyInstalled: true, installedRulesetId: found } : { alreadyInstalled: false };
 }
 
 /**

@@ -10,6 +10,7 @@
  */
 import { useState } from "react";
 import { Archive, Download, FolderLock, HardDrive, Import, RefreshCw, ScrollText, ShieldCheck, WifiOff } from "lucide-react";
+import { RULESET_PRIVACY_LABELS } from "@/src/services/content-scope";
 import { ContentWorkspace } from "@/src/ui/content-workspace";
 import { StorageSettings } from "@/src/ui/storage-settings";
 import { TransferPanel } from "@/src/ui/transfer-panel";
@@ -132,6 +133,12 @@ function RulesetsPage() {
               {ruleset.entryCount} entries · creation levels 1 to {ruleset.maxSupportedLevel}
               {ruleset.usable ? "" : ` · missing ${ruleset.missingCategories.join(", ")}`}
             </p>
+            {/*
+             * Whether this profile reaches private or export-restricted content,
+             * classified from record metadata. Private content stays local; this
+             * says that it is in scope without reproducing any of it.
+             */}
+            <p className="m2-muted m2-ruleset-privacy">{RULESET_PRIVACY_LABELS[ruleset.privacy]}</p>
             <p className="m2-muted">Active sources: {ruleset.activeSourceIds.join(", ")}</p>
             {ruleset.id === active ? null : (
               <button

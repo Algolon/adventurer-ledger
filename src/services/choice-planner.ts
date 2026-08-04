@@ -20,7 +20,7 @@
  *    owns it is actually active at the draft's level, so no diagnostic can name
  *    a choice the UI never offered.
  */
-import { classMechanicsSchema, subclassMechanicsSchema } from "@/src/domain/content-pack";
+import { classMechanicsSchema, lineageMechanicsSchema, subclassMechanicsSchema } from "@/src/domain/content-pack";
 import type { CharacterDraftBuild } from "@/src/domain/character-record";
 import { ABILITIES } from "@/src/domain/character-record";
 import type { Category, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
@@ -35,16 +35,28 @@ export type ActivationRoute =
   | "subclass-progression"
   | "species"
   | "species-trait"
+  | "lineage-trait"
   | "background"
   | "background-feat"
-  | "selection";
+  | "selection"
+  | "link";
 
 const ORIGIN_ROUTES: ReadonlySet<ActivationRoute> = new Set<ActivationRoute>([
   "species",
   "species-trait",
+  "lineage-trait",
   "background",
   "background-feat",
 ]);
+
+/**
+ * Origin categories.
+ *
+ * `race` predates `species` and is still in the public schema, so a character
+ * whose origin was recorded under it has to activate its traits by exactly the
+ * same rules. Both declare `traitIds`, which is all the traversal reads.
+ */
+const ORIGIN_CATEGORIES: ReadonlySet<Category> = new Set<Category>(["species", "race"]);
 
 export interface ActivatedEntry {
   entry: ContentEntry;
@@ -53,6 +65,8 @@ export interface ActivatedEntry {
   level?: number;
   /** The choice whose selected option activated the entry, when one did. */
   viaChoiceId?: ID;
+  /** The entry whose typed link activated this one, when one did. */
+  viaLinkFromEntryId?: ID;
   /** Which builder step owns anything this entry contributes. */
   stepId: BuilderStepId;
 }
@@ -84,6 +98,21 @@ export interface SubclassRequirement {
   unresolved: boolean;
 }
 
+/**
+ * Whether the draft's level is backed by a class progression.
+ *
+ * Deliberately four states rather than a boolean. "No class is selected" is not
+ * the same answer as "the class covers this level", and collapsing them is how a
+ * build with no class ends up reporting that its level is fine.
+ */
+export type LevelCoverage =
+  | "covered"
+  | "not-covered"
+  /** No class is selected, so there is nothing to check the level against. */
+  | "no-class"
+  /** A class is selected but its progression cannot be read. */
+  | "class-unreadable";
+
 export interface ActivationPlan {
   entries: readonly ActivatedEntry[];
   choices: readonly ActivatedChoice[];
@@ -94,7 +123,13 @@ export interface ActivationPlan {
   subclass?: SubclassRequirement;
   /** The highest level the selected class actually defines a progression row for. */
   classProgressionMax?: number;
-  /** True when the class defines a row for every level up to the draft's level. */
+  /** Trait IDs an activated lineage replaces. They are not in `entries`. */
+  replacedTraitIds: readonly ID[];
+  levelCoverage: LevelCoverage;
+  /**
+   * True only when a readable class progression reaches the draft's level.
+   * A build with no class is not covered; it is simply not yet answerable.
+   */
   levelCovered: boolean;
 }
 
@@ -158,6 +193,21 @@ interface Pending {
   route: ActivationRoute;
   level?: number;
   viaChoiceId?: ID;
+  viaLinkFromEntryId?: ID;
+  /** Step inherited from the entry that activated this one, for links. */
+  inheritedStepId?: BuilderStepId;
+}
+
+/** Trait IDs the lineages in an activation set declare they replace. */
+function replacedTraitsIn(activated: readonly ActivatedEntry[]): Set<ID> {
+  const replaced = new Set<ID>();
+  for (const item of activated) {
+    if (item.entry.category !== "lineage") continue;
+    const mechanics = lineageMechanicsSchema.safeParse(item.entry.mechanics);
+    if (!mechanics.success) continue;
+    for (const traitId of mechanics.data.replacesTraitIds) replaced.add(traitId);
+  }
+  return replaced;
 }
 
 /**
@@ -165,8 +215,27 @@ interface Pending {
  *
  * The walk is a queue seeded in a fixed root order, so activation order — and
  * therefore the presented choice order — is stable for a given draft.
+ *
+ * It runs twice. A lineage is only reachable through a selection, so which
+ * traits it replaces is not known until the first walk has found it; the second
+ * walk repeats the traversal with those traits blocked. Two passes are enough
+ * because a lineage cannot be activated by a trait it itself replaces — that
+ * would require the replaced trait to be active, which the second pass denies —
+ * and the result is compared so a pathological cycle cannot loop.
  */
 export function planActivation(build: CharacterDraftBuild, entries: readonly ContentEntry[]): ActivationPlan {
+  const first = traverseActivation(build, entries, new Set());
+  const replaced = replacedTraitsIn(first.entries);
+  if (!replaced.size) return { ...first, replacedTraitIds: [] };
+  const second = traverseActivation(build, entries, replaced);
+  return { ...second, replacedTraitIds: [...replaced].sort() };
+}
+
+function traverseActivation(
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+  suppressed: ReadonlySet<ID>,
+): Omit<ActivationPlan, "replacedTraitIds"> {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   const context = draftContext(build);
   const activated: ActivatedEntry[] = [];
@@ -182,17 +251,38 @@ export function planActivation(build: CharacterDraftBuild, entries: readonly Con
   const queue: Pending[] = [];
 
   const stepFor = (route: ActivationRoute, inherited?: BuilderStepId): BuilderStepId =>
-    route === "selection" ? (inherited ?? "class-choices") : ORIGIN_ROUTES.has(route) ? "origin" : "class-choices";
+    route === "selection" || route === "link"
+      ? (inherited ?? "class-choices")
+      : ORIGIN_ROUTES.has(route)
+        ? "origin"
+        : "class-choices";
 
-  const enqueue = (id: ID | undefined, route: ActivationRoute, level?: number, viaChoiceId?: ID) => {
+  const enqueue = (
+    id: ID | undefined,
+    route: ActivationRoute,
+    level?: number,
+    viaChoiceId?: ID,
+    extra: { viaLinkFromEntryId?: ID; inheritedStepId?: BuilderStepId } = {},
+  ) => {
     if (!id || activatedIds.has(id)) return;
+    // A trait an activated lineage replaces is not active, whichever route
+    // reaches it: holding the replacement and the replaced trait at once would
+    // give the character two things where the content describes one.
+    if (suppressed.has(id)) return;
     const entry = byId.get(id);
     if (!entry) return;
     // An automatically granted entry the draft cannot satisfy is not activated,
     // so nothing it declares is ever presented or reported.
     if (route !== "selection" && hardBlocked(entry, context)) return;
     activatedIds.add(id);
-    queue.push({ entry, route, ...(level === undefined ? {} : { level }), ...(viaChoiceId ? { viaChoiceId } : {}) });
+    queue.push({
+      entry,
+      route,
+      ...(level === undefined ? {} : { level }),
+      ...(viaChoiceId ? { viaChoiceId } : {}),
+      ...(extra.viaLinkFromEntryId ? { viaLinkFromEntryId: extra.viaLinkFromEntryId } : {}),
+      ...(extra.inheritedStepId ? { inheritedStepId: extra.inheritedStepId } : {}),
+    });
   };
 
   const classEntry = build.classId ? byId.get(build.classId) : undefined;
@@ -270,10 +360,14 @@ export function planActivation(build: CharacterDraftBuild, entries: readonly Con
   if (subclass?.valid) enqueue(subclass.selectedId, "subclass");
   for (const feature of classFeatureIds) enqueue(feature.id, "class-progression", feature.level);
   for (const feature of subclassFeatureIds) enqueue(feature.id, "subclass-progression", feature.level);
+  // The origin may be recorded under `species` or the older `race`; both declare
+  // their traits the same way, so both activate them the same way.
   enqueue(build.speciesId, "species");
   const speciesEntry = build.speciesId ? byId.get(build.speciesId) : undefined;
-  const traitIds = (speciesEntry?.mechanics as { traitIds?: unknown } | undefined)?.traitIds;
-  if (Array.isArray(traitIds)) for (const id of traitIds) if (typeof id === "string") enqueue(id, "species-trait");
+  if (speciesEntry && ORIGIN_CATEGORIES.has(speciesEntry.category)) {
+    const traitIds = (speciesEntry.mechanics as { traitIds?: unknown }).traitIds;
+    if (Array.isArray(traitIds)) for (const id of traitIds) if (typeof id === "string") enqueue(id, "species-trait");
+  }
   enqueue(build.backgroundId, "background");
   const backgroundEntry = build.backgroundId ? byId.get(build.backgroundId) : undefined;
   const featId = (backgroundEntry?.mechanics as { featId?: unknown } | undefined)?.featId;
@@ -315,15 +409,48 @@ export function planActivation(build: CharacterDraftBuild, entries: readonly Con
   // inside a choice is processed in the same pass without re-ordering earlier work.
   for (let index = 0; index < queue.length; index++) {
     const pending = queue[index];
-    const inherited = pending.route === "selection" ? stepForSelection(pending, activated) : undefined;
+    const inherited =
+      pending.route === "selection"
+        ? stepForSelection(pending, activated)
+        : pending.route === "link"
+          ? pending.inheritedStepId
+          : undefined;
     const activation: ActivatedEntry = {
       entry: pending.entry,
       route: pending.route,
       ...(pending.level === undefined ? {} : { level: pending.level }),
       ...(pending.viaChoiceId ? { viaChoiceId: pending.viaChoiceId } : {}),
+      ...(pending.viaLinkFromEntryId ? { viaLinkFromEntryId: pending.viaLinkFromEntryId } : {}),
       stepId: stepFor(pending.route, inherited),
     };
     activated.push(activation);
+
+    // A lineage brings its own traits. What it replaces is handled by the second
+    // traversal pass, which is the only place that can know the full set.
+    if (pending.entry.category === "lineage") {
+      const mechanics = lineageMechanicsSchema.safeParse(pending.entry.mechanics);
+      if (mechanics.success)
+        for (const traitId of mechanics.data.traitIds)
+          enqueue(traitId, "lineage-trait", pending.level, undefined, { inheritedStepId: activation.stepId });
+    }
+
+    /*
+     * Typed links.
+     *
+     * A link with its own level is due at that level; a required link without
+     * one is due as soon as its owner is. Anything above the draft's level is
+     * not activated, so a level 7 grant never reaches a level 5 build. Cycles
+     * terminate on the same identity guard every other route uses.
+     */
+    for (const link of pending.entry.links) {
+      if (!link.required && link.level === undefined) continue;
+      const dueAt = link.level ?? pending.level ?? 1;
+      if (dueAt > build.level) continue;
+      enqueue(link.targetId, "link", dueAt, undefined, {
+        viaLinkFromEntryId: pending.entry.id,
+        inheritedStepId: activation.stepId,
+      });
+    }
 
     const gated = pending.entry.category === "class" || pending.entry.category === "subclass";
     for (const choice of pending.entry.choices) {
@@ -332,6 +459,14 @@ export function planActivation(build: CharacterDraftBuild, entries: readonly Con
     }
   }
 
+  const levelCoverage: LevelCoverage = !build.classId
+    ? "no-class"
+    : classProgressionMax === undefined
+      ? "class-unreadable"
+      : classProgressionMax >= build.level
+        ? "covered"
+        : "not-covered";
+
   return {
     entries: activated,
     choices,
@@ -339,7 +474,8 @@ export function planActivation(build: CharacterDraftBuild, entries: readonly Con
     missingFeatureIds: [...new Set(missingFeatureIds)].sort(),
     ...(subclass ? { subclass } : {}),
     ...(classProgressionMax === undefined ? {} : { classProgressionMax }),
-    levelCovered: classProgressionMax === undefined || classProgressionMax >= build.level,
+    levelCoverage,
+    levelCovered: levelCoverage === "covered",
   };
 }
 

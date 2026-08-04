@@ -28,12 +28,16 @@ import {
 } from "@/src/services/build-planner";
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
 import type { Ability, ContentEntry } from "@/src/domain/model";
-import { selectedEquipmentFor, standardArrayFor } from "@/src/services/content-scope";
+import { RULESET_PRIVACY_LABELS, selectedEquipmentFor, standardArrayFor } from "@/src/services/content-scope";
 import { abilityModifier } from "@/src/rules/engine";
 import { signed } from "@/src/ui/primitives";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import type { DraftSnapshot } from "@/src/services/character-services";
+import type { RulesetChangePreview } from "@/src/services/ruleset-change";
 import type { InstalledRulesetView } from "@/src/services/content-install-service";
+
+/** Origin categories the builder offers. `race` is the older spelling. */
+const ORIGIN_CATEGORIES = new Set<ContentEntry["category"]>(["species", "race"]);
 
 const ISSUE_LABELS: Record<string, string> = {
   CLASS_NOT_CHOSEN: "Choose a class",
@@ -57,6 +61,8 @@ const ISSUE_LABELS: Record<string, string> = {
   PROGRESSION_CHOICE_MISSING: "The class progression names a choice this content does not define",
   PROGRESSION_FEATURE_MISSING: "The class progression names a feature this content does not define",
   PROFICIENCY_DUPLICATE_SELECTION: "A selected option grants a proficiency you already have",
+  ORIGIN_INCREASE_NOT_AVAILABLE:
+    "An ability increase is not offered by your current origin. Place it again on the Abilities step.",
 };
 
 const labelFor = (code: string) => ISSUE_LABELS[code] ?? code;
@@ -103,6 +109,8 @@ export function CharacterBuilder({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [commitErrors, setCommitErrors] = useState<{ code: string; label: string }[]>([]);
   const [showSteps, setShowSteps] = useState(false);
+  /** A ruleset change that has been previewed and not yet answered. */
+  const [rulesetChange, setRulesetChange] = useState<RulesetChangePreview | null>(null);
   const revisionRef = useRef<number | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   /** Freshest snapshot, readable after awaiting the save queue. */
@@ -233,6 +241,10 @@ export function CharacterBuilder({
     void flushPending();
     setStepId(id);
     setShowSteps(false);
+    // The error summary describes one submission. Carrying it to another step
+    // leaves it asserting a problem the user may have just repaired, which is
+    // worse than showing nothing: the live per-step issues are still on screen.
+    setCommitErrors([]);
     void save({}, id);
   };
 
@@ -304,20 +316,54 @@ export function CharacterBuilder({
     }
   };
 
-  /** Moving a draft to another ruleset clears the selections that belonged to the old one. */
-  const changeRuleset = async (nextRulesetId: string) => {
+  /**
+   * Asks what moving to another ruleset would cost, and writes nothing.
+   *
+   * Every queued autosave is flushed first, so the revision the preview reports
+   * is the revision a confirmation can actually use, and the preview describes
+   * the draft as it really is rather than as it was one keystroke ago.
+   */
+  const requestRulesetChange = async (nextRulesetId: string) => {
     await flushPending();
     await queueRef.current;
-    const outcome = await drafts.changeRuleset(draftId, revisionRef.current ?? snapshot.revision, nextRulesetId);
+    const outcome = await drafts.previewRulesetChange(draftId, nextRulesetId);
     if (outcome.status !== "ok") {
+      setSaveError("That ruleset could not be read on this device.");
+      return;
+    }
+    if (outcome.result.noop) return;
+    setRulesetChange(outcome.result);
+  };
+
+  /**
+   * Applies exactly the previewed change.
+   *
+   * The preview's revision is sent rather than the current one. If anything
+   * touched the draft between the preview and this confirmation, the write is
+   * refused as stale and the user is re-shown a fresh preview — which is what
+   * stops a late autosave reinstating a value the confirmed change had cleared.
+   */
+  const confirmRulesetChange = async (preview: RulesetChangePreview) => {
+    await flushPending();
+    await queueRef.current;
+    const outcome = await drafts.changeRuleset(draftId, preview.expectedRevision, preview.proposedRulesetId);
+    if (outcome.status === "stale") {
+      setRulesetChange(null);
+      setSaveError("This build changed while the ruleset switch was open. Choose the ruleset again to see the current effect.");
+      return;
+    }
+    if (outcome.status !== "ok") {
+      setRulesetChange(null);
       setSaveError("That ruleset could not be selected on this device.");
       return;
     }
     revisionRef.current = outcome.result.revision;
     snapshotRef.current = outcome.result;
     setSnapshot(outcome.result);
+    setRulesetChange(null);
+    setSaveError(null);
     // The activation is an explicit decision, so it is remembered for next time.
-    await install.activate(nextRulesetId);
+    await install.activate(preview.proposedRulesetId);
     refresh();
   };
 
@@ -430,9 +476,17 @@ export function CharacterBuilder({
           plan={snapshot.plan}
           onChange={save}
           onType={scheduleSave}
-          onSelectRuleset={id => void changeRuleset(id)}
+          onSelectRuleset={id => void requestRulesetChange(id)}
         />
       </div>
+
+      {rulesetChange ? (
+        <RulesetChangeConfirmation
+          preview={rulesetChange}
+          onCancel={() => setRulesetChange(null)}
+          onConfirm={() => void confirmRulesetChange(rulesetChange)}
+        />
+      ) : null}
 
       {/* Exactly two actions, one row, equal height: Back secondary, Continue primary. */}
       <footer className="m2-task-footer">
@@ -464,6 +518,102 @@ export function CharacterBuilder({
   );
 }
 
+/**
+ * The ruleset-change confirmation.
+ *
+ * It states the whole effect before anything is written: what goes, what stays,
+ * and what is recalculated. Cancel is the default action — it is focused on
+ * open and bound to Escape — because the destructive path should never be the
+ * one a user reaches by pressing Enter out of habit.
+ *
+ * `alertdialog` rather than `dialog`: this interrupts to report a consequence,
+ * and the role is what makes a screen reader announce the description rather
+ * than only the title.
+ */
+function RulesetChangeConfirmation({
+  preview,
+  onCancel,
+  onConfirm,
+}: {
+  preview: RulesetChangePreview;
+  onCancel(): void;
+  onConfirm(): void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      className="m2-confirm-backdrop"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="ruleset-change-title"
+      aria-describedby="ruleset-change-body"
+      onKeyDown={event => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onCancel();
+        }
+      }}
+    >
+      <div className="m2-confirm-panel">
+        <h3 id="ruleset-change-title">Switch to {preview.proposedRulesetName}?</h3>
+        <div id="ruleset-change-body">
+          <p className="m2-muted">
+            This build is currently in {preview.currentRulesetName}. Nothing has been changed yet.
+          </p>
+
+          {preview.cleared.length ? (
+            <>
+              <h4>This will be cleared</h4>
+              <ul className="m2-plain-list m2-issue-errors">
+                {preview.cleared.map(field => (
+                  <li key={field.fieldPath}>{field.label}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="m2-muted">Nothing in this build belongs to the current ruleset yet, so nothing is cleared.</p>
+          )}
+
+          {preview.recomputed.length ? (
+            <>
+              <h4>This will be recalculated</h4>
+              <ul className="m2-plain-list">
+                {preview.recomputed.map(field => (
+                  <li key={field.fieldPath}>{field.label}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+
+          {preview.retained.length ? (
+            <>
+              <h4>This is kept</h4>
+              <ul className="m2-plain-list">
+                {preview.retained.map(field => (
+                  <li key={field.fieldPath}>{field.label}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+
+        <div className="m2-confirm-actions">
+          <button type="button" className="m2-button m2-button-secondary" ref={cancelRef} onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="m2-button m2-button-primary" onClick={onConfirm}>
+            Switch ruleset
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface StepProps {
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
@@ -490,7 +640,9 @@ function StepContent({
   onType(patch: Partial<CharacterDraftBuild>): void;
   onSelectRuleset(id: string): void;
 }) {
-  const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries) : [];
+  // The plan is passed through, so guided recommendations describe the pass that
+  // has already run rather than starting a second traversal on every render.
+  const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries, plan) : [];
 
   switch (step.id) {
     case "start":
@@ -550,7 +702,9 @@ function StepContent({
         <div className="m2-step">
           <OptionStep
             legend="Species"
-            options={entries.filter(entry => entry.category === "species").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
+            // `race` is the older category for the same decision. A ruleset that
+            // still uses it must remain selectable, not silently offer nothing.
+            options={entries.filter(entry => ORIGIN_CATEGORIES.has(entry.category)).map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
             selected={build.speciesId ? [build.speciesId] : []}
             recommendations={recommendations}
             onSelect={id => onChange({ speciesId: id })}
@@ -632,8 +786,17 @@ function StartStep({
     if (!typed.current) setName(build.name);
   }, [build.name]);
 
-  const maxLevel = Math.max(plan.maxLevel, build.level);
-  const levels = Array.from({ length: maxLevel }, (_, offset) => offset + 1);
+  /*
+   * The selector offers exactly the levels the content supports.
+   *
+   * It used to offer `max(supported, stored)`, which quietly made the stored
+   * level look supported: choosing a class that stops at 3 left a level 5 build
+   * showing 5 as a perfectly ordinary option. The supported range is the
+   * content's answer, and a stored level outside it is a conflict to resolve
+   * rather than a range to widen.
+   */
+  const supportedLevels = Array.from({ length: plan.maxLevel }, (_, offset) => offset + 1);
+  const levelUnsupported = build.level > plan.maxLevel;
   const active = rulesets.find(ruleset => ruleset.id === activeRulesetId);
 
   return (
@@ -683,6 +846,12 @@ function StartStep({
                         {ruleset.entryCount} entries · levels 1–{ruleset.maxSupportedLevel}
                         {ruleset.usable ? "" : " · cannot create a character on its own"}
                       </small>
+                      {/*
+                       * Whether this profile reaches private or export-restricted
+                       * content. Derived from record metadata, so it says which
+                       * kind of content is in scope without quoting any of it.
+                       */}
+                      <small className="m2-ruleset-privacy">{RULESET_PRIVACY_LABELS[ruleset.privacy]}</small>
                     </span>
                   </button>
                 </li>
@@ -695,7 +864,8 @@ function StartStep({
         {rulesets.length > 1 ? (
           <p className="m2-muted">
             Changing the ruleset clears the class, origin and choices, because they belong to the ruleset that defined
-            them. The name, level and ability scores are kept.
+            them. You are shown exactly what would change, and nothing is written until you confirm. The name, level and
+            base ability scores are kept.
           </p>
         ) : null}
       </fieldset>
@@ -708,10 +878,22 @@ function StartStep({
           </label>
           <select
             id="start-level"
-            value={build.level}
+            value={levelUnsupported ? "" : build.level}
+            aria-invalid={levelUnsupported || undefined}
+            aria-describedby={levelUnsupported ? "start-level-conflict" : undefined}
             onChange={event => onChange({ level: Number(event.target.value) })}
           >
-            {levels.map(level => (
+            {/*
+             * The stored level stays visible so the conflict is legible, and
+             * stays unselectable so it cannot be re-confirmed as if it were
+             * supported. Choosing a supported level is the repair.
+             */}
+            {levelUnsupported ? (
+              <option value="" disabled>
+                {build.level} — not supported
+              </option>
+            ) : null}
+            {supportedLevels.map(level => (
               <option key={level} value={level}>
                 {level}
               </option>
@@ -725,11 +907,29 @@ function StartStep({
           Everything each level grants is resolved here, in one pass — the character is created at this level, not
           created at 1 and advanced afterwards.
         </p>
-        {!plan.levelCovered ? (
+        {levelUnsupported || plan.levelCoverage === "not-covered" ? (
+          <div className="m2-inline-issue" role="alert" id="start-level-conflict">
+            <TriangleAlert aria-hidden="true" />
+            <span>
+              {labelFor("LEVEL_NOT_COVERED_BY_CLASS")}
+              {plan.classProgressionMax === undefined ? "" : ` This class stops at level ${plan.classProgressionMax}.`}{" "}
+              This build is set to level {build.level}.
+              <button
+                type="button"
+                className="m2-button"
+                onClick={() => onChange({ level: plan.maxLevel })}
+              >
+                Set the level to {plan.maxLevel}
+              </button>
+            </span>
+          </div>
+        ) : plan.levelCoverage === "no-class" && build.level > 1 ? (
+          // Not an error: nothing is wrong yet. But the level is unverified
+          // until a class exists, and saying so is better than implying it is fine.
           <p className="m2-inline-issue" role="status">
             <TriangleAlert aria-hidden="true" />
-            {labelFor("LEVEL_NOT_COVERED_BY_CLASS")}
-            {plan.classProgressionMax === undefined ? "" : ` This class stops at level ${plan.classProgressionMax}.`}
+            Level {build.level} cannot be confirmed until a class is chosen, because coverage comes from the class&apos;s
+            own progression.
           </p>
         ) : null}
       </fieldset>
@@ -1373,17 +1573,21 @@ function EquipmentStep({
   return (
     <div className="m2-step">
       {grants.map(grant => (
-        <section key={`${grant.grantedByEntryId}-${grant.bundleId}`} className="m2-fieldset">
+        <section key={grant.bundleId} className="m2-fieldset">
           <h3>{grant.bundleLabel}</h3>
+          {/*
+           * One bundle, every source that grants it. Two entries granting the
+           * same kit is one kit with two reasons, not two kits.
+           */}
           <p className="m2-muted">
-            Granted by {grant.grantedByLabel} ({grant.grantedByCategory})
+            Granted by {grant.grantedBy.map(source => `${source.label} (${source.category})`).join(" and ")}
           </p>
           {grant.automatic.length ? (
             <>
               <h4>Included automatically</h4>
               <ul className="m2-plain-list">
                 {grant.automatic.map(item => (
-                  <li key={item.itemId}>
+                  <li key={`${item.itemId}-${item.status}`}>
                     {item.label}
                     {item.quantity > 1 ? ` ×${item.quantity}` : ""} <small className="m2-muted">({item.status})</small>
                   </li>
@@ -1470,6 +1674,28 @@ function ReviewStep({
   return (
     <div className="m2-step">
       <h3>Review</h3>
+
+      {/*
+       * The coverage conflict is stated here as well as on the first step,
+       * because Review is where a build is committed from and this is the one
+       * issue no mode may commit past. It names the problem and the repair.
+       */}
+      {plan.levelCoverage === "not-covered" ? (
+        <div className="m2-banner m2-banner-error" role="alert">
+          <strong>This level cannot be created</strong>
+          <p>
+            {build.name.trim() || "This character"} is set to level {build.level}, but{" "}
+            {name(build.classId)}
+            {plan.classProgressionMax === undefined
+              ? " does not describe that level"
+              : ` describes levels 1 to ${plan.classProgressionMax}`}
+            . Go back to the first step and either lower the level to {plan.maxLevel} or choose a class whose content
+            reaches level {build.level}. This cannot be saved in either mode, because the resulting sheet would take its
+            hit dice from one level and its maximum hit points from another.
+          </p>
+        </div>
+      ) : null}
+
       <dl className="m2-summary">
         <div>
           <dt>Name</dt>
@@ -1494,8 +1720,13 @@ function ReviewStep({
         </div>
         <div>
           <dt>Abilities</dt>
+          {/*
+           * The planner's finals, which are the base scores plus only the origin
+           * increases the current origin still authorises. Showing the stored
+           * finals here would display a number the commit is not going to write.
+           */}
           <dd>
-            {ABILITIES.map(ability => `${ability.slice(0, 3).toUpperCase()} ${build.abilityScores[ability] ?? "—"}`).join(" · ")}
+            {ABILITIES.map(ability => `${ability.slice(0, 3).toUpperCase()} ${plan.abilities.final[ability] ?? "—"}`).join(" · ")}
           </dd>
         </div>
         {/*

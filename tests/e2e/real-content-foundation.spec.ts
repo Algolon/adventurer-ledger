@@ -40,7 +40,7 @@ async function importAcceptancePack(page: Page) {
   await page.getByRole("button", { name: "Preview import" }).click();
   await expect(page.getByRole("heading", { name: "Ready to import" })).toBeVisible();
   // The offer states what the pack would become before anything is written.
-  await expect(page.getByText(/can become the ruleset ruleset:emberline-acceptance/)).toBeVisible();
+  await expect(page.getByText(/can become the ruleset ruleset:pack:emberline-acceptance/)).toBeVisible();
   await page
     .getByLabel("Create a ruleset profile so this content can be selected in the builder")
     .check();
@@ -208,10 +208,13 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
 
-    // Back to the first step and across to the other installed ruleset.
+    // Back to the first step and across to the other installed ruleset. The
+    // switch is a two-phase decision, so selecting it previews the change and
+    // the write only happens on an explicit confirmation.
     await page.getByRole("button", { name: "All steps" }).click();
     await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
     await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Switch ruleset" }).click();
     await expect(page.getByRole("button", { name: /^Runefolio 2024 synthetic/ })).toHaveAttribute(
       "aria-pressed",
       "true",

@@ -339,7 +339,10 @@ export class CharacterLevelUpService {
     const classEntry = draftAfter.classId ? entries.find(entry => entry.id === draftAfter.classId) : undefined;
     const coverage: LevelCoverage = {
       ...(classEntry ? { classId: classEntry.id, classLabel: classEntry.name } : {}),
-      supported: activationAfter.levelCovered,
+      // Only a class that genuinely stops short blocks a level-up. A character
+      // with no class has no class progression to fall short of, and refusing
+      // one here would block a manual sheet from ever gaining a level.
+      supported: activationAfter.levelCoverage !== "not-covered",
       ...(activationAfter.classProgressionMax === undefined
         ? {}
         : { progressionMax: activationAfter.classProgressionMax }),

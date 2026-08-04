@@ -16,9 +16,13 @@
  *  8. equipment is partly automatic and partly selectable, from two sources;
  *  9. one level grants only automatic features and asks for nothing;
  * 10. one class skill option duplicates the background's automatic grant;
- * 11. a second class stops its progression short of level 5.
+ * 11. a second class stops its progression short of level 5;
+ * 12. a typed `ContentLink` activates an entry, honours its level and survives a cycle;
+ * 13. a lineage replaces one of its parent species' traits;
+ * 14. a legacy `race` origin remains selectable alongside `species`;
+ * 15. two different entries grant the same equipment bundle.
  *
- * Read it as a specification of those eleven facts, not as a game.
+ * Read it as a specification of those fifteen facts, not as a game.
  */
 import { contentPackSchema, type ContentPackDocument } from "@/src/domain/content-pack";
 import type { ContentEntry, Effect } from "@/src/domain/model";
@@ -28,8 +32,13 @@ const VERSION = "1.0.0";
 
 export const ACCEPTANCE_SOURCE_ID = "source:emberline-acceptance";
 export const ACCEPTANCE_PACK_ID = "pack:emberline-acceptance";
-/** The profile ID `rulesetIdForPack` derives from the pack. */
-export const ACCEPTANCE_RULESET_ID = "ruleset:emberline-acceptance";
+/**
+ * The profile ID `rulesetIdForPack` derives from the pack.
+ *
+ * It keeps the pack ID whole, prefix included. Stripping the `pack:` prefix
+ * made `pack:x` and `x` derive the same profile.
+ */
+export const ACCEPTANCE_RULESET_ID = "ruleset:pack:emberline-acceptance";
 
 export const ACCEPTANCE_IDS = {
   class: "class:eb-beaconkeeper",
@@ -40,6 +49,19 @@ export const ACCEPTANCE_IDS = {
   species: "species:eb-cairnfolk",
   traitWithChoice: "trait:eb-cairn-sense",
   traitPlain: "trait:eb-sure-step",
+  /** A lineage of the species, reached through the species' own choice. */
+  lineage: "lineage:eb-deepcairn",
+  /** The lineage's own trait, which stands in for the one it replaces. */
+  lineageTrait: "trait:eb-deep-listening",
+  /** A legacy `race` origin, to prove the older identifier still resolves. */
+  legacyRace: "race:eb-hillfolk",
+  /** Reached only through a required `ContentLink` on the level 5 feature. */
+  linkedEcho: "feature:eb-beacon-echo",
+  /** Linked at a level beyond this pack's range, so it must never activate. */
+  linkedFarBeacon: "feature:eb-far-beacon",
+  /** Two entries that link to each other, so a cycle has to terminate. */
+  linkedCycleA: "feature:eb-mirror-a",
+  linkedCycleB: "feature:eb-mirror-b",
   background: "background:eb-ferry-clerk",
   backgroundFeat: "feat:eb-clerks-eye",
   featWithChoice: "feat:eb-attentive",
@@ -61,6 +83,12 @@ export const ACCEPTANCE_CHOICES = {
   speciesTrait: "choice:eb-cairn-sense",
   /** Declared by one subclass, reachable only once that subclass is chosen. */
   subclassFlare: "choice:eb-kw-flare-shape",
+  /**
+   * Optional (`min: 0`) lineage decision declared by the species itself. It is
+   * optional so a build that ignores lineages stays complete, which is what
+   * lets the same pack prove both paths.
+   */
+  lineage: "choice:eb-cairn-lineage",
 } as const;
 
 export const ACCEPTANCE_BUNDLES = {
@@ -340,14 +368,33 @@ const features: ContentEntry[] = [
       { id: "effect:eb-hook-strike", type: "addAttack", definitionId: ACCEPTANCE_IDS.attack },
     ],
   }),
-  classFeature("feature:eb-steady-hand", "eb-steady-hand", "Steady Hand", 2, "Second-level drill: your grip no longer wavers on a wet deck."),
+  classFeature("feature:eb-steady-hand", "eb-steady-hand", "Steady Hand", 2, "Second-level drill: your grip no longer wavers on a wet deck.", {
+    // A required link with no level of its own is due as soon as its owner is.
+    links: [{ type: "feature", targetId: ACCEPTANCE_IDS.linkedCycleA, required: true }],
+  }),
   classFeature("feature:eb-warden-path", "eb-warden-path", "Warden's Path", 3, "You commit to how you keep your crossing.", {
     mechanics: { classId: ACCEPTANCE_IDS.class, level: 3, featureType: "subclass" },
   }),
   classFeature("feature:eb-refinement", "eb-refinement", "Refinement", 4, "Practice sharpens one habit into a lasting one.", {
     mechanics: { classId: ACCEPTANCE_IDS.class, level: 4, featureType: "improvement" },
   }),
-  classFeature("feature:eb-second-beacon", "eb-second-beacon", "Second Beacon", 5, "You can keep a second light burning."),
+  classFeature("feature:eb-second-beacon", "eb-second-beacon", "Second Beacon", 5, "You can keep a second light burning.", {
+    // Two typed links from one entry: one due at level 5, one at a level this
+    // pack never reaches. Only the first may ever activate.
+    links: [
+      { type: "feature", targetId: ACCEPTANCE_IDS.linkedEcho, required: true, level: 5 },
+      { type: "feature", targetId: ACCEPTANCE_IDS.linkedFarBeacon, required: true, level: 7 },
+    ],
+  }),
+  classFeature("feature:eb-beacon-echo", "eb-beacon-echo", "Beacon Echo", 5, "The second light answers the first."),
+  classFeature("feature:eb-far-beacon", "eb-far-beacon", "Far Beacon", 7, "A light for a crossing this pack does not describe."),
+  // A link cycle. Traversal has to terminate and activate each entry once.
+  classFeature("feature:eb-mirror-a", "eb-mirror-a", "Mirror Signal", 1, "You bounce your light off the far bank.", {
+    links: [{ type: "feature", targetId: ACCEPTANCE_IDS.linkedCycleB, required: true }],
+  }),
+  classFeature("feature:eb-mirror-b", "eb-mirror-b", "Answering Mirror", 1, "The far bank answers.", {
+    links: [{ type: "feature", targetId: ACCEPTANCE_IDS.linkedCycleA, required: true }],
+  }),
   classFeature("feature:eb-kw-flare", "eb-kw-flare", "Signal Flare", 3, "Your light can be seen from the far bank.", {
     mechanics: { classId: ACCEPTANCE_IDS.class, level: 3, featureType: "subclass" },
   }),
@@ -452,12 +499,68 @@ const species = entry({
   name: "Cairnfolk",
   category: "species",
   summary: "Raised among stacked waymarkers on the high crossings.",
+  // The lineage is a decision the species declares. Choosing it is what makes
+  // the lineage active, so nothing is activated by the mere existence of a
+  // `lineageIds` entry.
+  choices: [
+    {
+      id: ACCEPTANCE_CHOICES.lineage,
+      label: "Cairnfolk lineage",
+      min: 0,
+      max: 1,
+      repeatable: false,
+      options: [{ id: "option:eb-deepcairn", label: "Deepcairn", entryId: ACCEPTANCE_IDS.lineage }],
+    },
+  ],
   mechanics: {
     creatureType: "humanoid",
     sizeChoices: ["medium"],
     speed: 30,
     traitIds: [ACCEPTANCE_IDS.traitWithChoice, ACCEPTANCE_IDS.traitPlain],
-    lineageIds: [],
+    lineageIds: [ACCEPTANCE_IDS.lineage],
+  },
+});
+
+/**
+ * A lineage that swaps one inherited trait for its own.
+ *
+ * `replacesTraitIds` names Sure Step, which the parent species grants. A build
+ * that takes this lineage must end up with Deep Listening and not with Sure
+ * Step: holding both would give the character two traits where the content
+ * describes one.
+ */
+const lineage = entry({
+  id: ACCEPTANCE_IDS.lineage,
+  slug: "eb-deepcairn",
+  name: "Deepcairn",
+  category: "lineage",
+  summary: "Cairnfolk raised below the waterline, where footing matters less than hearing.",
+  mechanics: {
+    parentSpeciesIds: [ACCEPTANCE_IDS.species],
+    traitIds: [ACCEPTANCE_IDS.lineageTrait],
+    replacesTraitIds: [ACCEPTANCE_IDS.traitPlain],
+  },
+});
+
+/**
+ * A legacy `race` origin.
+ *
+ * The category predates `species` and is still in the public schema, so an
+ * origin recorded under it has to remain selectable and has to activate its
+ * traits by the same rules. Nothing here is matched by name.
+ */
+const legacyRace = entry({
+  id: ACCEPTANCE_IDS.legacyRace,
+  slug: "eb-hillfolk",
+  name: "Hillfolk",
+  category: "race",
+  summary: "An older way of writing an origin, kept so existing records keep resolving.",
+  mechanics: {
+    creatureType: "humanoid",
+    sizeChoices: ["medium"],
+    speed: 30,
+    traitIds: [ACCEPTANCE_IDS.traitPlain],
+    legacyAbilityScores: { strength: 1 },
   },
 });
 
@@ -491,6 +594,14 @@ const speciesTraits: ContentEntry[] = [
     name: "Sure Step",
     category: "feat",
     summary: "Loose scree does not slow you.",
+    mechanics: { category: "other", repeatable: false },
+  }),
+  entry({
+    id: ACCEPTANCE_IDS.lineageTrait,
+    slug: "eb-deep-listening",
+    name: "Deep Listening",
+    category: "feat",
+    summary: "You hear the river through the stone before you see it.",
     mechanics: { category: "other", repeatable: false },
   }),
 ];
@@ -568,6 +679,17 @@ const feats: ContentEntry[] = [
     name: "Stonewise",
     category: "feat",
     summary: "You know which stones will hold.",
+    // Deliberately grants the same bundle the background already grants. Two
+    // sources, one bundle: Review must state the contents once and still name
+    // both sources.
+    effects: [
+      {
+        id: "effect:eb-stonewise-satchel",
+        type: "grantEquipmentBundle",
+        bundleId: ACCEPTANCE_BUNDLES.backgroundKit,
+        label: "Clerk's satchel",
+      },
+    ],
     mechanics: { category: "general", repeatable: false },
   }),
 ];
@@ -656,6 +778,8 @@ export const ACCEPTANCE_ENTRIES: readonly ContentEntry[] = [
   ...features,
   ...subclasses,
   species,
+  lineage,
+  legacyRace,
   ...speciesTraits,
   background,
   ...feats,
@@ -709,3 +833,60 @@ export function acceptancePack(): ContentPackDocument {
 
 /** The pack as one JSON document, for the import pipeline. */
 export const acceptancePackJson = () => JSON.stringify(acceptancePack());
+
+export const COLLISION_PACK_ID = "pack:emberline-collision";
+export const COLLISION_CLASS_ID = "class:eb-tollkeeper";
+
+/**
+ * An adversarial pack that deliberately reuses an installed source ID.
+ *
+ * It declares no source of its own; every entry sits on the acceptance pack's
+ * source, which the pipeline accepts because that source is already installed.
+ * A profile that decides membership by source would therefore activate this
+ * pack's class inside the *acceptance* ruleset — content the user never added to
+ * that ruleset, appearing in the builder of a character built against it.
+ *
+ * The pack is otherwise ordinary and importable. That is the point: nothing
+ * about it is malformed, so nothing but explicit entry-identity membership stops
+ * it widening the other profile's scope.
+ */
+export function sourceCollisionPack(): ContentPackDocument {
+  const tollkeeper = entry({
+    id: COLLISION_CLASS_ID,
+    slug: "eb-tollkeeper",
+    name: "Tollkeeper",
+    category: "class",
+    summary: "Counts what crosses and takes a cut. Belongs to a different pack entirely.",
+    mechanics: {
+      hitDie: 8,
+      primaryAbilities: ["charisma"],
+      savingThrows: [ACCEPTANCE_PROFICIENCIES.saveDexterity, ACCEPTANCE_PROFICIENCIES.saveWisdom],
+      startingProficiencyIds: [],
+      progression: [{ level: 1, proficiencyBonus: 2, featureIds: [], choiceIds: [], resourceChanges: {} }],
+      subclassLevel: 3,
+      subclassIds: [],
+    },
+  });
+  return contentPackSchema.parse({
+    schemaVersion: 2,
+    pack: {
+      id: COLLISION_PACK_ID,
+      name: "Emberline collision probe",
+      description: "Original synthetic content that reuses an installed source ID on purpose.",
+      version: VERSION,
+      coverage: "partial",
+      rulesEditions: ["homebrew"],
+      visibility: "public",
+      licenseType: "original",
+      exportRestricted: false,
+      includeFullText: false,
+      dependencies: [],
+      optionalDependencies: [],
+    },
+    // No sources of its own: the entries point at the already-installed one.
+    sources: [],
+    entries: [tollkeeper],
+  });
+}
+
+export const sourceCollisionPackJson = () => JSON.stringify(sourceCollisionPack());

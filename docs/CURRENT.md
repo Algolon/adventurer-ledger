@@ -126,6 +126,66 @@ actions and resources the level adds, and says outright when a level adds none.
 Database version 6 is additive: one preference record holding the explicitly
 activated ruleset. No existing record is read or rewritten.
 
+### Corrective pass
+
+A merge-readiness review of the above found eight defects. They are corrected in
+place rather than deferred, because each one is a case where the product was
+confidently wrong rather than merely incomplete.
+
+**Changing the ruleset is previewed before it is written.** Selecting another
+ruleset now produces a non-writing preview — what would be cleared, what stays,
+what is recalculated — and offers Cancel and Switch ruleset. Cancel writes
+nothing. Confirmation sends the revision the preview was computed at, so an
+autosave landing in between makes the confirmation stale instead of reviving a
+value the change had cleared.
+
+**Origin ability increases cannot outlive the origin that authorised them.**
+`reconcileAbilityAllocation` validates the stored allocation against the pattern
+the active origin declares, excludes anything it does not authorise from the
+final scores, and reports `ORIGIN_INCREASE_NOT_AVAILABLE`. Changing the origin or
+the ruleset repairs the allocation in the same write, and the commit writes the
+recomputed finals rather than the draft's stored ones.
+
+**Level coverage is one contract in both modes.** `LEVEL_NOT_COVERED_BY_CLASS`
+now reaches the commit boundary in guided *and* flexible mode and cannot be
+acknowledged away, because a level the class does not define produces a sheet
+whose hit dice and maximum hit points come from different levels. The level
+selector offers only supported levels rather than `max(supported, stored)`, an
+unsupported stored level is a named conflict with a one-click repair, and a build
+with no class reports that its level is unverified rather than fine.
+
+**A profile activates its own pack's entries, not its source's.** Membership is
+now the explicit `allowedEntryIds` set taken from the imported pack; declared
+dependencies join it only through a typed mechanism. Reusing an installed source
+ID can no longer widen an existing profile. Profiles written earlier keep source
+scoping and resolve exactly as they did.
+
+**Profile IDs keep the whole pack ID.** `rulesetIdForPack` stripped a leading
+`pack:`, so `pack:x` and `x` collided on one profile. It no longer strips;
+`legacyRulesetIdsForPack` reports the earlier derivation and the install boundary
+checks every candidate, so a pack installed under the old scheme is recognised
+rather than duplicated or overwritten. Existing IDs are deliberately not migrated.
+
+**Activation follows typed links and lineages.** `ContentLink` activation honours
+`required` and `level`, never activates above the build level, terminates on
+cycles and retains provenance. A lineage activates its own traits and suppresses
+the ones its `replacesTraitIds` names, so a character never holds both the
+replaced and the replacement trait. The legacy `race` origin category activates
+its traits by the same rules and is offered in the builder.
+
+**Equipment reads once.** One view per bundle with every granting entry listed,
+and the resulting item list totalled per item and status — so a bundle two
+entries grant appears once with both sources named, while two different bundles
+holding the same item report the genuine larger quantity.
+
+**A ruleset says what kind of content it reaches.** A classification derived from
+record metadata — public-only, restricted, or mixed — shown in the builder's
+ruleset picker and in Settings, Rulesets. It quotes no content, and nothing
+prefers a private profile.
+
+Planning cost is also now bounded: one activation walk and one proficiency walk
+per planning pass, asserted by an instrumented density test rather than a clock.
+
 ### Deferred, and depended on by later work
 
 These are recorded as follow-up dependencies and are deliberately absent here:
@@ -138,7 +198,15 @@ These are recorded as follow-up dependencies and are deliberately absent here:
 - resource-recovery redesign;
 - the broader character-sheet redesign;
 - spellcasting;
-- any additional official content.
+- any additional official content;
+- rolled ability scores, and origin patterns whose increase amounts repeat (G-5);
+- hydrating an edit draft from the character it edits, which today starts empty;
+- migrating profiles created under the earlier profile-ID derivation, or
+  narrowing an existing source-scoped profile to an explicit entry set.
+
+The reasoning for the last three, and for the inventory-provenance and
+hit-point-finalisation items above, is recorded in
+[`docs/product/M2.1A_DEFERRED_DESIGN_NOTES.md`](./product/M2.1A_DEFERRED_DESIGN_NOTES.md).
 
 ## Device and installation behavior
 
