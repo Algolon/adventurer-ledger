@@ -61,7 +61,6 @@ async function buildBrammel(page: Page) {
   await page.getByRole("button", { name: /^Watchcraft/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
   await next();
-  await next();
   await page.getByRole("button", { name: /^Warden pack/ }).click();
   await next();
   await page.getByLabel("Name", { exact: true }).fill("Brammel Voss");
@@ -79,11 +78,11 @@ test("the empty library has no serious or critical violations", async ({ page })
 test("the builder has no serious or critical violations", async ({ page }) => {
   await page.goto(APP_ROOT);
   await page.getByRole("button", { name: "New character" }).last().click();
-  await expect(page.getByText("Step 1 of 9")).toBeVisible();
+  await expect(page.getByText("Step 1 of 8")).toBeVisible();
   await scan(page, "builder, step 1");
 
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText("Step 2 of 9")).toBeVisible();
+  await expect(page.getByText("Step 2 of 8")).toBeVisible();
   await scan(page, "builder, class step");
 });
 

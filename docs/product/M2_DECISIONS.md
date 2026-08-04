@@ -63,7 +63,7 @@ The slice contains exactly enough declarative content to prove the vertical path
 - derived HP, hit dice, AC, initiative, speed, saves, and checks;
 - no spell definitions or spell runtime state.
 
-The creation step “Spells & resources” remains visible and reads `Not needed · This class has no spells at level 1`. The resource configuration still appears in that step. Tests and screenshots use only this synthetic material.
+**Revised 2026-08-04.** The creation step “Spells & resources” was originally kept visible reading `Not needed · This class has no spells at level 1`. It is now omitted from the sequence when the selected class grants no spell choices, and Review states `Spellcasting — None at this level` instead. Resources are tracked on the play sheet, not configured during creation, so nothing is lost by the omission. Applicability is read from the class's own content, never from a class ID. Tests and screenshots use only this synthetic material.
 
 ## D-03 — Minimum renderable sheet
 

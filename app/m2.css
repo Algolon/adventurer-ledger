@@ -217,6 +217,12 @@
   border-color: var(--brass);
 }
 
+/* Secondary: same footprint as primary, visibly subordinate to it. */
+.m2-button-secondary {
+  color: var(--ink);
+  background: transparent;
+}
+
 .m2-button-small {
   min-height: 44px;
   font-size: 13px;
@@ -875,13 +881,44 @@
 }
 
 .m2-field input,
-.m2-field select {
+.m2-field select,
+.m2-field textarea {
   min-height: 44px;
   width: 100%;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
+  /* Both colours, always. A background without a foreground is what let the
+     user-agent's dark-mode text colour through. */
+  color: var(--ink);
   background: #fffaf0;
+}
+
+.m2-field textarea {
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.m2-field input::placeholder,
+.m2-field textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.m2-field input[readonly],
+.m2-field textarea[readonly] {
+  color: var(--ink);
+  -webkit-text-fill-color: var(--ink);
+  background: #ece3cf;
+}
+
+.m2-field input:disabled,
+.m2-field select:disabled,
+.m2-field textarea:disabled {
+  color: var(--muted);
+  -webkit-text-fill-color: var(--muted);
+  background: #e7dcc4;
+  opacity: 1;
 }
 
 .m2-field-inline {
@@ -895,7 +932,57 @@
 }
 
 .m2-ability-final {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-weight: 700;
+}
+
+.m2-ability-modifier {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* Remaining standard-array slots, one chip per unassigned slot. */
+.m2-remaining {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.m2-remaining-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.m2-remaining-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.m2-remaining-chip {
+  min-width: 36px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--brass);
+  border-radius: 6px;
+  background: var(--surface);
+  font-weight: 700;
+}
+
+.m2-remaining p {
+  margin: 0;
 }
 
 .m2-summary {
@@ -976,27 +1063,110 @@
   font-weight: 700;
 }
 
-/* Task footer replaces the bottom bar during a modal task. */
+/* Builder progress sits with the content, above the step body. */
+.m2-builder-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.m2-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3d7bd;
+}
+
+.m2-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--sage);
+  transition: width 0.2s ease;
+}
+
+.m2-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.m2-progress-steps {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.m2-progress-steps svg {
+  width: 17px;
+}
+
+/*
+ * Task footer replaces the bottom bar during a modal task.
+ *
+ * Exactly two actions share one row. They are laid out as equal columns so Back
+ * and Continue always render at the same height and neither wraps below the
+ * other; a third control here made the row read as three peers.
+ */
 .m2-task-footer {
   position: fixed;
   inset: auto 0 0 0;
   z-index: 26;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: stretch;
+  gap: 10px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
 
-.m2-task-footer .m2-button-primary {
-  margin-left: auto;
+.m2-task-footer > .m2-button {
+  min-height: 48px;
+  margin: 0;
+}
+
+.m2-task-footer > .m2-button-primary {
+  justify-content: center;
 }
 
 .m2-issue-count {
   font-size: 13px;
   font-weight: 700;
+}
+
+/* A fixed value that is stated, not offered for editing. */
+.m2-static-field {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brass);
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.m2-static-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.m2-static-value {
+  color: var(--ink);
+  font:
+    600 20px/1.2 var(--display);
+}
+
+.m2-static-field p {
+  margin: 0;
 }
 
 /* Dialogs. */

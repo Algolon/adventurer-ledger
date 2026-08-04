@@ -38,7 +38,7 @@ Seven application services own every mutation: draft, build/commit, query, deriv
 
 The synthetic slice supplies Vanguard, Riverborn, Caravan Warden, Guarded Hand, Measured Cut, Longblade, Round Guard, Travel Mail, Longblade Strike and Rallying Breath, level-keyed by stable ID so later levels are a data change. Brammel resolves to 10 maximum hit points and 3 Rallying Breath uses at level 1, and 12 and 4 at level 2, which is the preserve-deficit demonstration the acceptance criteria require.
 
-The product surfaces are mobile first: a real empty library, the exact nine-step builder with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
+The product surfaces are mobile first: a real empty library, a builder over the nine-step catalogue that presents only the steps applicable to the build — a step with nothing to decide is omitted and reported on Review instead — with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
 
 Unknown required inputs render as `—` with a recovery action rather than zero. Overrides accept only typed `replace` and `add` against a target the resolver genuinely applies; an unsupported target is refused rather than stored inert, and a moved baseline marks the override for review rather than discarding it.
 
@@ -55,8 +55,15 @@ M2.1 is **not** marked complete. Each claim below is recorded at the level it ha
 | Implemented | Every mandatory M2.1 acceptance criterion has code behind it. |
 | Verified locally | `npm ci`, typecheck, unit and integration tests, both builds, Pages verification, the full browser matrix, audit and privacy scan all pass from a clean worktree. |
 | Verified by GitHub CI | A Verify workflow runs the same clean sequence on the pushed head. Its result is reported on the pull request; do not treat a local run as CI evidence. |
-| Verified in a browser | Chromium, at 360, 390, 412, 768, 1024 and 1440 CSS px, plus offline, reduced motion, forced colours and axe checks. |
-| Requires physical Android validation | Not done. Touch targets are verified in CSS pixels only; real-device performance, install behaviour and storage eviction are unverified. Playwright is not evidence of physical-device behaviour. |
+| Verified in a browser | Chromium, at 320, 360, 390, 412, 768, 1024 and 1440 CSS px, plus offline, reduced motion, forced colours, dark colour preference and axe checks. |
+| Reviewed by the owner in a desktop browser | Done on 2026-08-04 against the production build. It found the dark-preference contrast defect and the builder UX corrections now applied. It was explicitly not a physical-device run. |
+| Requires physical Android validation | Not done. Touch targets are verified in CSS pixels only; real-device performance, install behaviour, PWA installation, offline relaunch and storage eviction are unverified. Playwright is not evidence of physical-device behaviour. |
+
+### Content status
+
+M2.1 validates the technical vertical slice against **public-original synthetic content** — Vanguard, Riverborn, Caravan Warden and the rest of the named fixtures. That content is neither official material nor temporary placeholder: it is the licensed-clean validation set this repository is permitted to carry, and `privacy:scan` enforces that boundary in CI.
+
+Consequently M2.1 can demonstrate that the engine, services and surfaces are correct, but it cannot settle content-density or real-rulebook interaction questions — option counts, name lengths, description volume and cross-reference depth all differ from real material. Final content UX validation depends on the later private PHB pack, imported locally through the M1.3 private-library schema and never committed here.
 
 ## Device and installation behavior
 

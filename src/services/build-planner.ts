@@ -52,14 +52,20 @@ const MANUAL_MINIMUM: readonly [string, BuilderStepId][] = [
   ["initiative", "class-choices"],
 ];
 
-export type StepStatus = "complete" | "incomplete" | "not-needed";
+/**
+ * A step is either resolved or not.
+ *
+ * There is deliberately no "not-needed" state: a step with nothing to decide is
+ * omitted from the sequence instead of being shown as an empty screen the user
+ * must still walk through. What does not apply is reported once, on the review,
+ * via `SystemSummary`.
+ */
+export type StepStatus = "complete" | "incomplete";
 
 export interface PlannedStep {
   id: BuilderStepId;
   label: string;
   status: StepStatus;
-  /** Shown instead of hiding a conditional step once it has been reached. */
-  note?: string;
   issues: readonly ServiceIssue[];
   /** True when this step is optional for a flexible save. */
   optional: boolean;
@@ -98,7 +104,22 @@ export interface RequiredChoice {
   incompatibleOptions: readonly OptionIncompatibility[];
 }
 
+/**
+ * A rules system reported on the review whether or not it applies.
+ *
+ * A system that contributes no choices is omitted from the step sequence, so
+ * the review is where its absence is stated. Saying "None at this level" is
+ * what stops an omitted step from reading as a forgotten one.
+ */
+export interface SystemSummary {
+  id: string;
+  label: string;
+  value: string;
+  applicable: boolean;
+}
+
 export interface BuildPlan {
+  /** Only the steps that apply to this build, in canonical order. */
   steps: readonly PlannedStep[];
   requiredChoices: readonly RequiredChoice[];
   issues: readonly ServiceIssue[];
@@ -107,6 +128,8 @@ export interface BuildPlan {
   nextUnresolvedStepId: BuilderStepId;
   /** Every required ruleset choice resolved with no blocking issue. */
   guidedComplete: boolean;
+  /** Non-applicable systems, stated on the review instead of as empty steps. */
+  systemSummaries: readonly SystemSummary[];
 }
 
 /**
@@ -228,6 +251,30 @@ const sameMultiset = (left: readonly number[], right: readonly number[]) =>
   left.length === right.length && [...left].sort((a, b) => b - a).every((value, index) => value === [...right].sort((a, b) => b - a)[index]);
 
 /**
+ * The array slots still available after the given assignments.
+ *
+ * Slots, not distinct values. An array may legitimately contain the same number
+ * more than once, and each occurrence is its own slot: assigning 13 once must
+ * leave a second 13 assignable, and assigning it twice must exhaust both. A
+ * `Set` of numbers would collapse them and silently allow one value to serve
+ * two abilities.
+ *
+ * The returned order follows the array's own declaration order.
+ */
+export function remainingArraySlots(
+  array: readonly number[],
+  assigned: readonly (number | undefined)[],
+): number[] {
+  const remaining = [...array];
+  for (const value of assigned) {
+    if (typeof value !== "number") continue;
+    const slot = remaining.indexOf(value);
+    if (slot >= 0) remaining.splice(slot, 1);
+  }
+  return remaining;
+}
+
+/**
  * A draft stores final ability scores, so validating the standard array means
  * asking whether *some* assignment of the array plus the origin's increase
  * pattern reproduces them. Brammel's 16/15/14/12/10/8 is the array 15/14/13/12/10/8
@@ -285,7 +332,6 @@ export function planBuild(
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   const requiredChoices = build.manualSheet === true ? [] : requiredChoicesFor(build, entries);
   const hasSpells = classHasSpells(build, entries);
-  const resources = resourceIdsFor(build, entries);
 
   const stepIssues: Record<BuilderStepId, ServiceIssue[]> = {
     start: [],
@@ -300,6 +346,19 @@ export function planBuild(
   };
 
   const manualSheet = build.manualSheet === true;
+
+  /**
+   * Steps that actually apply to this build.
+   *
+   * A step with nothing to decide is omitted from the sequence rather than
+   * shown as an empty "Not needed" screen the user still has to walk through.
+   * Applicability is derived from content — `classHasSpells` inspects the
+   * selected class's own progression — so a future spell-capable class brings
+   * the step back with no change here and no reference to any class ID.
+   */
+  const applicableSteps = new Set<BuilderStepId>(
+    BUILDER_STEPS.filter(step => step.id !== "spells-resources" || hasSpells).map(step => step.id),
+  );
 
   if (manualSheet) {
     // A manual sheet needs its own explicit minimum (D-03) and no class.
@@ -350,21 +409,9 @@ export function planBuild(
   // Identity never blocks the sheet; a missing name falls back safely (D-03).
   if (!build.name.trim()) stepIssues.identity.push({ code: "NAME_NOT_SET", fieldPath: "name", severity: "warning" });
 
-  const steps: PlannedStep[] = BUILDER_STEPS.map(step => {
+  const steps: PlannedStep[] = BUILDER_STEPS.filter(step => applicableSteps.has(step.id)).map(step => {
     const issues = stepIssues[step.id];
     const blocking = issues.some(issue => issue.severity === "error");
-    if (step.id === "spells-resources" && !hasSpells) {
-      return {
-        ...step,
-        // Visibly marked rather than disappearing after the user has seen it.
-        status: "not-needed",
-        note: resources.length
-          ? "Not needed · This class has no spells at level 1"
-          : "Not needed · This class has no spells or resources at level 1",
-        issues,
-        optional: true,
-      };
-    }
     if (step.id === "review") {
       const outstanding = Object.entries(stepIssues).some(([id, list]) => id !== "review" && list.some(issue => issue.severity === "error"));
       return { ...step, status: outstanding ? "incomplete" : "complete", issues, optional: false };
@@ -378,7 +425,9 @@ export function planBuild(
     };
   });
 
-  const allIssues = BUILDER_STEPS.flatMap(step => stepIssues[step.id]);
+  // Only applicable steps can contribute issues; an omitted step has nothing to
+  // resolve, so counting it would report an issue the user cannot reach.
+  const allIssues = steps.flatMap(step => stepIssues[step.id]);
   const nextUnresolved = steps.find(step => step.status === "incomplete" && step.id !== "review");
   return {
     steps,
@@ -387,6 +436,16 @@ export function planBuild(
     issueCount: allIssues.length,
     nextUnresolvedStepId: nextUnresolved?.id ?? "review",
     guidedComplete: !allIssues.some(issue => issue.severity === "error"),
+    systemSummaries: [
+      {
+        id: "spellcasting",
+        label: "Spellcasting",
+        // Stated on the review rather than as a step, so the absence is
+        // recorded without costing the user a screen.
+        value: hasSpells ? "Choices made in Spells & resources" : "None at this level",
+        applicable: hasSpells,
+      },
+    ],
   };
 }
 

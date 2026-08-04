@@ -83,10 +83,12 @@ describe("CharacterDraftService", () => {
     const created = await newDraft();
     expect(created.draft.revision).toBe(1);
     expect(created.draft.status).toBe("in-progress");
-    // The empty draft already plans the exact nine steps.
+    // No class is chosen yet, so no spell choices apply and that step is not in
+    // the sequence. It appears if and when a spell-capable class is selected.
     expect(created.plan.steps.map(step => step.id)).toEqual([
-      "start", "class", "origin", "abilities", "class-choices", "spells-resources", "equipment", "identity", "review",
+      "start", "class", "origin", "abilities", "class-choices", "equipment", "identity", "review",
     ]);
+    expect(created.plan.systemSummaries.find(summary => summary.id === "spellcasting")?.applicable).toBe(false);
     expect(created.plan.nextUnresolvedStepId).toBe("class");
   });
 

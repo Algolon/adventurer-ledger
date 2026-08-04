@@ -24,7 +24,7 @@ const next = (page: Page) => page.getByRole("button", { name: "Continue" }).clic
 async function startNewCharacter(page: Page) {
   await page.goto(APP_ROOT);
   await page.getByRole("button", { name: "New character" }).last().click();
-  await expect(page.getByText("Step 1 of 9")).toBeVisible();
+  await expect(page.getByText("Step 1 of 8")).toBeVisible();
 }
 
 async function buildBrammel(page: Page, name = "Brammel Voss") {
@@ -42,7 +42,6 @@ async function buildBrammel(page: Page, name = "Brammel Voss") {
   await page.getByRole("button", { name: /^Guarded Hand/ }).click();
   await page.getByRole("button", { name: /^Watchcraft/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
-  await next(page);
   await next(page);
   await page.getByRole("button", { name: /^Warden pack/ }).click();
   await next(page);
@@ -134,7 +133,7 @@ test.describe("AC-04 incompatible option", () => {
     await expect(page.getByRole("alert").filter({ hasText: /issue/ })).toContainText(
       "A selected option does not meet its requirement",
     );
-    await expect(page.getByText("Step 5 of 9")).toBeVisible();
+    await expect(page.getByText("Step 5 of 8")).toBeVisible();
 
     // Flexible mode keeps the choice with its issue visible.
     await page.getByRole("button", { name: "Guided mode" }).click();
@@ -166,7 +165,8 @@ test.describe("AC-05 manual-sheet entry", () => {
     await page.getByLabel("Action 1").fill("Improvised swing");
     await next(page);
 
-    await next(page); // Spells and resources
+    // A manual sheet has no class, so no spell choices apply and that step is
+    // not in the sequence: Equipment follows directly.
     await next(page); // Equipment
     await page.getByLabel("Name", { exact: true }).fill("Marek Tal");
     await next(page);
@@ -211,7 +211,7 @@ test.describe("AC-15 named states and recovery", () => {
     await startNewCharacter(page);
     await next(page);
     await page.getByRole("button", { name: /^Vanguard/ }).click();
-    await expect(page.getByText("Step 2 of 9")).toBeVisible();
+    await expect(page.getByText("Step 2 of 8")).toBeVisible();
 
     // Remove the draft underneath the builder so the next autosave cannot land.
     await page.evaluate(

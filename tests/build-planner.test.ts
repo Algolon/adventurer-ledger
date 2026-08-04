@@ -4,12 +4,14 @@ import {
   classHasSpells,
   planBuild,
   recommendationsFor,
+  remainingArraySlots,
   requiredChoicesFor,
   resourceIdsFor,
   standardArrayConsistent,
 } from "@/src/services/build-planner";
 import { SYNTHETIC_CHOICES, SYNTHETIC_EQUIPMENT_CHOICE, SYNTHETIC_ENTRIES, SYNTHETIC_IDS } from "@/src/content/runefolio-synthetic";
 import { EMPTY_DRAFT_BUILD, type CharacterDraftBuild } from "@/src/domain/character-record";
+import type { ContentEntry } from "@/src/domain/model";
 
 const complete: CharacterDraftBuild = {
   ...EMPTY_DRAFT_BUILD,
@@ -30,6 +32,33 @@ const complete: CharacterDraftBuild = {
 const plan = (build: CharacterDraftBuild, presentation: "guided" | "flexible" = "guided") =>
   planBuild(build, SYNTHETIC_ENTRIES, presentation);
 
+const SPELL_CLASS_ID = "class:tidecaller-synthetic";
+
+/**
+ * An original synthetic class that does have a spell effect.
+ *
+ * Applicability is read from content, so proving the Spells step returns needs
+ * content that grants a spell — not a change to the planner. This clones the
+ * existing synthetic class and adds one `addSpell` effect; it introduces no
+ * spellcasting rules and no official material.
+ */
+function spellCapableClassEntries(): ContentEntry[] {
+  const base = SYNTHETIC_ENTRIES.find(entry => entry.id === SYNTHETIC_IDS.class);
+  if (!base) throw new Error("The synthetic class fixture is missing");
+  return [
+    {
+      ...base,
+      id: SPELL_CLASS_ID,
+      slug: "tidecaller-synthetic",
+      name: "Tidecaller",
+      effects: [
+        ...base.effects,
+        { id: "effect:tidecaller-tide-whisper", type: "addSpell", spellId: "spell:tide-whisper-synthetic" },
+      ],
+    },
+  ];
+}
+
 describe("step list", () => {
   it("is exactly the accepted nine steps in order", () => {
     expect(BUILDER_STEPS.map(step => step.id)).toEqual([
@@ -40,15 +69,75 @@ describe("step list", () => {
     ]);
   });
 
-  it("keeps the conditional step visible and marked Not needed rather than removing it", () => {
-    const steps = plan(complete).steps;
-    const conditional = steps.find(step => step.id === "spells-resources");
-    expect(steps).toHaveLength(9);
-    expect(conditional?.status).toBe("not-needed");
-    expect(conditional?.note).toBe("Not needed · This class has no spells at level 1");
+  /**
+   * Supersedes the earlier requirement that a non-applicable step stay in the
+   * sequence marked "Not needed". The owner changed that product decision after
+   * an exploratory review: an empty screen the user must walk through is flow
+   * weight, not information. What does not apply is stated once, on the review.
+   */
+  it("omits a step with nothing to decide instead of showing an empty screen", () => {
+    const result = plan(complete);
+    const ids = result.steps.map(step => step.id);
+
     expect(classHasSpells(complete, SYNTHETIC_ENTRIES)).toBe(false);
-    // The resource still belongs to that step.
+    expect(ids).not.toContain("spells-resources");
+    expect(result.steps).toHaveLength(8);
+    // The remaining steps keep their canonical order.
+    expect(ids).toEqual(["start", "class", "origin", "abilities", "class-choices", "equipment", "identity", "review"]);
+    // The resource itself is unaffected; it is tracked on the sheet.
     expect(resourceIdsFor(complete, SYNTHETIC_ENTRIES)).toEqual([SYNTHETIC_IDS.resource]);
+  });
+
+  it("states the non-applicable system on the review instead of as a step", () => {
+    const spellcasting = plan(complete).systemSummaries.find(summary => summary.id === "spellcasting");
+    expect(spellcasting?.applicable).toBe(false);
+    expect(spellcasting?.label).toBe("Spellcasting");
+    expect(spellcasting?.value).toBe("None at this level");
+  });
+
+  it("includes the step, in order, for a class that does have spell choices", () => {
+    // The applicability comes from the class's own content, so a spell-capable
+    // class brings the step back with no change to the planner.
+    const build = { ...complete, classId: SPELL_CLASS_ID };
+    const entries = [...SYNTHETIC_ENTRIES, ...spellCapableClassEntries()];
+    expect(classHasSpells(build, entries)).toBe(true);
+
+    const result = planBuild(build, entries);
+    const ids = result.steps.map(step => step.id);
+    expect(ids).toContain("spells-resources");
+    expect(ids.indexOf("spells-resources")).toBe(ids.indexOf("class-choices") + 1);
+    expect(ids.indexOf("spells-resources")).toBe(ids.indexOf("equipment") - 1);
+    expect(result.systemSummaries.find(summary => summary.id === "spellcasting")?.applicable).toBe(true);
+  });
+});
+
+describe("standard-array slots", () => {
+  it("removes one slot per assignment, in declaration order", () => {
+    expect(remainingArraySlots([15, 14, 13, 12, 10, 8], [15])).toEqual([14, 13, 12, 10, 8]);
+    expect(remainingArraySlots([15, 14, 13, 12, 10, 8], [15, 12])).toEqual([14, 13, 10, 8]);
+  });
+
+  it("ignores unassigned abilities", () => {
+    expect(remainingArraySlots([15, 14, 13], [undefined, 14, undefined])).toEqual([15, 13]);
+  });
+
+  it("tracks a repeated value as two independent slots", () => {
+    // The defining case: a Set of numbers would let one 13 serve both abilities.
+    const array = [15, 13, 13, 12, 10, 8];
+    expect(remainingArraySlots(array, [13])).toEqual([15, 13, 12, 10, 8]);
+    expect(remainingArraySlots(array, [13, 13])).toEqual([15, 12, 10, 8]);
+    // Exhausted only after both occurrences are taken.
+    expect(remainingArraySlots(array, [13, 13]).includes(13)).toBe(false);
+  });
+
+  it("returns everything when nothing is assigned, and nothing when all are", () => {
+    const array = [15, 14, 13, 12, 10, 8];
+    expect(remainingArraySlots(array, [])).toEqual(array);
+    expect(remainingArraySlots(array, array)).toEqual([]);
+  });
+
+  it("ignores a value that is not part of the array", () => {
+    expect(remainingArraySlots([15, 14], [18])).toEqual([15, 14]);
   });
 });
 

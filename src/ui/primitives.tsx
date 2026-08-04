@@ -109,7 +109,8 @@ export function Dialog({ title, onClose, children, footer, errorSummary }: Dialo
   );
 }
 
-const signed = (value: number) => (value >= 0 ? `+${value}` : String(value));
+/** Renders a modifier with an explicit sign, so `+0` never reads as unknown. */
+export const signed = (value: number) => (value >= 0 ? `+${value}` : String(value));
 
 export function formatDerived(value: DerivedValue, style: "plain" | "signed" = "plain"): string {
   if (value.value === null) return UNKNOWN_DISPLAY;

@@ -12,10 +12,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, CircleHelp, ListChecks, TriangleAlert } from "lucide-react";
-import { BUILDER_STEPS, recommendationsFor, type BuilderStepId, type PlannedStep } from "@/src/services/build-planner";
+import { BUILDER_STEPS, recommendationsFor, remainingArraySlots, type BuilderStepId, type PlannedStep } from "@/src/services/build-planner";
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
 import type { Ability, ContentEntry } from "@/src/domain/model";
 import { standardArrayFor } from "@/src/services/content-scope";
+import { abilityModifier } from "@/src/rules/engine";
+import { signed } from "@/src/ui/primitives";
 import { requiredEquipmentChoices } from "@/src/services/build-planner";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import type { DraftSnapshot } from "@/src/services/character-services";
@@ -257,6 +259,39 @@ export function CharacterBuilder({
         </button>
       </header>
 
+      {/*
+       * Progress lives with the content, not in the action row. Back and
+       * Continue are the only two things in the footer, so neither competes
+       * with a third control for the same visual weight.
+       */}
+      <div className="m2-builder-progress">
+        <div
+          className="m2-progress-track"
+          role="progressbar"
+          aria-label="Creation progress"
+          aria-valuemin={1}
+          aria-valuemax={steps.length}
+          aria-valuenow={index + 1}
+          aria-valuetext={`Step ${index + 1} of ${steps.length}: ${current.label}`}
+        >
+          <span className="m2-progress-fill" style={{ width: `${((index + 1) / steps.length) * 100}%` }} />
+        </div>
+        <div className="m2-progress-meta">
+          <button
+            type="button"
+            className="m2-progress-steps"
+            onClick={() => setShowSteps(value => !value)}
+            aria-expanded={showSteps}
+          >
+            <ListChecks aria-hidden="true" />
+            All steps
+          </button>
+          <span className="m2-issue-count" aria-live="polite">
+            {plan.issueCount} issue{plan.issueCount === 1 ? "" : "s"}
+          </span>
+        </div>
+      </div>
+
       {saveError ? (
         <div className="m2-banner m2-banner-error" role="alert">
           <strong>Save failed</strong>
@@ -294,7 +329,7 @@ export function CharacterBuilder({
                   </span>
                   <span>
                     {step.label}
-                    <small>{step.status === "not-needed" ? step.note : step.status === "complete" ? "Complete" : "Incomplete"}</small>
+                    <small>{step.status === "complete" ? "Complete" : "Incomplete"}</small>
                   </span>
                 </button>
               </li>
@@ -315,18 +350,16 @@ export function CharacterBuilder({
         />
       </div>
 
+      {/* Exactly two actions, one row, equal height: Back secondary, Continue primary. */}
       <footer className="m2-task-footer">
-        <button type="button" className="m2-button" onClick={() => (index > 0 ? goTo(steps[index - 1].id) : onClose())}>
+        <button
+          type="button"
+          className="m2-button m2-button-secondary"
+          onClick={() => (index > 0 ? goTo(steps[index - 1].id) : onClose())}
+        >
           <ArrowLeft aria-hidden="true" />
           Back
         </button>
-        <button type="button" className="m2-button" onClick={() => setShowSteps(value => !value)} aria-expanded={showSteps}>
-          <ListChecks aria-hidden="true" />
-          Steps
-        </button>
-        <span className="m2-issue-count" aria-live="polite">
-          {plan.issueCount} issue{plan.issueCount === 1 ? "" : "s"}
-        </span>
         {current.id === "review" ? (
           <button type="button" className="m2-button m2-button-primary" onClick={() => void finish()}>
             Finish and open sheet
@@ -362,15 +395,6 @@ function StepContent({
 }) {
   const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries) : [];
 
-  if (step.status === "not-needed")
-    return (
-      <div className="m2-step">
-        <p className="m2-not-needed">{step.note}</p>
-        <p className="m2-muted">
-          Resource tracking still appears on the sheet. Nothing on this step is required for this build.
-        </p>
-      </div>
-    );
 
   switch (step.id) {
     case "start":
@@ -380,13 +404,21 @@ function StepContent({
           <p className="m2-muted">
             This build uses <b>{rulesetLabel}</b>. Everything is stored on this device only.
           </p>
-          <label className="m2-field">
-            <span>Starting level</span>
-            <input type="number" min={1} max={2} value={build.level} readOnly aria-describedby="level-note" />
-          </label>
-          <p id="level-note" className="m2-muted">
-            This slice creates a level 1 character and advances it to level 2.
-          </p>
+          {/*
+           * Creation always starts at level 1; level 2 is reached through the
+           * Level up flow. This was a readonly number input, which offered
+           * spinner arrows and a focus stop for a value it would never accept.
+           * A static value is the honest presentation of a fixed fact.
+           */}
+          <div className="m2-static-field">
+            <span className="m2-static-label" id="starting-level-label">
+              Starting level
+            </span>
+            <strong className="m2-static-value" aria-labelledby="starting-level-label">
+              Level {build.level}
+            </strong>
+            <p className="m2-muted">Advance after creation through Level up.</p>
+          </div>
         </div>
       );
 
@@ -718,12 +750,10 @@ function AbilitiesStep({
       return withTotals(current.abilityBaseScores, increases);
     });
 
-  const used = ABILITIES.map(ability => build.abilityBaseScores[ability]).filter((value): value is number => typeof value === "number");
-  const remaining = [...(standardArrayFor(entries) ?? [])];
-  for (const value of used) {
-    const at = remaining.indexOf(value);
-    if (at >= 0) remaining.splice(at, 1);
-  }
+  const remaining = remainingArraySlots(
+    standardArrayFor(entries) ?? [],
+    ABILITIES.map(ability => build.abilityBaseScores[ability]),
+  );
 
   return (
     <div className="m2-step">
@@ -756,9 +786,25 @@ function AbilitiesStep({
 
       {build.abilityMethod === "standard-array" ? (
         <>
-          <p className="m2-muted">
-            Remaining values: {remaining.length ? remaining.join(", ") : "all assigned"}
-          </p>
+          {/*
+           * Remaining values are shown as discrete chips, one per unassigned
+           * slot. Slots, not distinct numbers: an array containing the same
+           * number twice offers it twice and is consumed twice.
+           */}
+          <div className="m2-remaining" aria-live="polite">
+            <span className="m2-remaining-label">Remaining values</span>
+            {remaining.length ? (
+              <ul className="m2-remaining-list">
+                {remaining.map((value, slot) => (
+                  <li key={`${value}-${slot}`} className="m2-remaining-chip">
+                    {value}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="m2-muted">All assigned.</p>
+            )}
+          </div>
           <div className="m2-ability-grid">
             {ABILITIES.map(ability => {
               const name = ability[0].toUpperCase() + ability.slice(1);
@@ -785,8 +831,15 @@ function AbilitiesStep({
                         </option>
                       ))}
                   </select>
+                  {/* Total and the modifier it produces, so the consequence of
+                      an assignment is visible without leaving the step. */}
                   <output className="m2-ability-final" aria-label={`${name} total`}>
                     {typeof total === "number" ? total : "—"}
+                    {typeof total === "number" ? (
+                      <small className="m2-ability-modifier" aria-label={`${name} modifier`}>
+                        {signed(abilityModifier(total))}
+                      </small>
+                    ) : null}
                   </output>
                 </div>
               );
@@ -1040,12 +1093,33 @@ function ReviewStep({
           </dd>
         </div>
         <div>
+          <dt>Level</dt>
+          <dd>Level {build.level}</dd>
+        </div>
+        <div>
           <dt>Abilities</dt>
           <dd>
             {ABILITIES.map(ability => `${ability.slice(0, 3).toUpperCase()} ${build.abilityScores[ability] ?? "—"}`).join(" · ")}
           </dd>
         </div>
+        {/*
+         * Systems that contribute no choices are stated here rather than given
+         * an empty step, so an omitted step reads as inapplicable rather than
+         * forgotten.
+         */}
+        {plan.systemSummaries
+          .filter(summary => !summary.applicable)
+          .map(summary => (
+            <div key={summary.id}>
+              <dt>{summary.label}</dt>
+              <dd className="m2-muted">{summary.value}</dd>
+            </div>
+          ))}
       </dl>
+      <p className="m2-muted">
+        Automatic values come from the active ruleset&apos;s content. Anything you entered yourself is listed as a manual
+        value and is never described as rules-derived.
+      </p>
 
       <h4>Choices by step</h4>
       <ul className="m2-plain-list">
