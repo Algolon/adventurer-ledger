@@ -97,6 +97,7 @@ async function openBuilder(page: Page) {
 /** Walks to Identity so a real text field can be typed into and measured. */
 async function reachIdentity(page: Page) {
   await openBuilder(page);
+  await page.getByLabel("Character name", { exact: true }).fill("Brammel Voss");
   await next(page);
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await next(page);
@@ -117,7 +118,7 @@ async function reachIdentity(page: Page) {
   await page.getByLabel("+1 to").selectOption("constitution");
   await next(page);
   await page.getByRole("button", { name: /^Guarded Hand/ }).click();
-  await page.getByRole("button", { name: /^Watchcraft/ }).click();
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
   const wardenPack = page.getByRole("button", { name: /^Warden pack/ });
   await advanceUntil(page, wardenPack);
@@ -128,14 +129,15 @@ async function reachIdentity(page: Page) {
 
 test.describe("dark browser preference keeps typed text readable", () => {
   test("a character name is visible, not merely present in the DOM", async ({ page }) => {
-    await reachIdentity(page);
-    const name = page.getByLabel("Name", { exact: true });
+    // The name is the first step's first field, so this is where it is typed.
+    await openBuilder(page);
+    const name = page.getByLabel("Character name", { exact: true });
     await name.fill("Brammel Voss");
 
     // The value round-trips...
     await expect(name).toHaveValue("Brammel Voss");
     // ...and, critically, a person can actually see it.
-    await expectReadable(name, "the Name field");
+    await expectReadable(name, "the Character name field");
   });
 
   test("the ability selects and their values are readable", async ({ page }) => {
@@ -156,7 +158,6 @@ test.describe("dark browser preference keeps typed text readable", () => {
 
   test("the play sheet damage amount input is readable", async ({ page }) => {
     await reachIdentity(page);
-    await page.getByLabel("Name", { exact: true }).fill("Brammel Voss");
     await next(page);
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
@@ -183,7 +184,6 @@ test.describe("dark browser preference keeps typed text readable", () => {
 
   test("axe reports no serious or critical violations on the play sheet", async ({ page }) => {
     await reachIdentity(page);
-    await page.getByLabel("Name", { exact: true }).fill("Brammel Voss");
     await next(page);
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();

@@ -19,7 +19,9 @@ import {
 import { CharacterRuntimeService } from "@/src/services/runtime-service";
 import { CharacterLevelUpService } from "@/src/services/levelup-service";
 import { CharacterTransferService } from "@/src/services/transfer-service";
+import { ContentInstallService } from "@/src/services/content-install-service";
 import type { ServiceLogLine } from "@/src/services/contracts";
+import { acceptancePackJson, ACCEPTANCE_PACK_ID, ACCEPTANCE_RULESET_ID } from "@/tests/fixtures/acceptance-ruleset";
 
 const open: LedgerDB[] = [];
 
@@ -34,6 +36,7 @@ export interface Harness {
   transfer: CharacterTransferService;
   overrides: CharacterOverrideService;
   library: CharacterLibraryService;
+  install: ContentInstallService;
   logLines: ServiceLogLine[];
   /** Advances the deterministic clock by one second. */
   tick(): void;
@@ -65,11 +68,29 @@ export async function createHarness(): Promise<Harness> {
     transfer: new CharacterTransferService(context),
     overrides: new CharacterOverrideService(context),
     library: new CharacterLibraryService(context),
+    install: new ContentInstallService(context),
     logLines,
     tick: () => {
       seconds += 1;
     },
   };
+}
+
+/**
+ * Installs the acceptance pack the way a user would: through the import
+ * boundary, with the ruleset profile created in the same confirmation. Tests
+ * that assert imported content is reachable must reach it by the real route.
+ */
+export async function installAcceptanceRuleset(harness: Harness, { createRuleset = true } = {}): Promise<void> {
+  const preview = await harness.install.preview([acceptancePackJson()]);
+  if (!preview.canImport)
+    throw new Error(`The acceptance pack did not validate: ${preview.issues.map(issue => issue.code).join(", ")}`);
+  const outcome = await harness.install.confirm(preview, {
+    ...(createRuleset ? { createRulesetForPackIds: [ACCEPTANCE_PACK_ID] } : {}),
+  });
+  if (outcome.status !== "ok") throw new Error(`The acceptance import failed: ${JSON.stringify(outcome)}`);
+  if (createRuleset && !outcome.result.createdRulesetIds.includes(ACCEPTANCE_RULESET_ID))
+    throw new Error("The acceptance import created no ruleset profile");
 }
 
 export async function closeHarnesses(): Promise<void> {

@@ -138,6 +138,61 @@ export class CharacterDraftService {
   }
 
   /**
+   * Moves a draft to a different installed ruleset.
+   *
+   * Every content-scoped selection is cleared in the same write. A class,
+   * species, background, subclass, choice or equipment package belongs to the
+   * ruleset that defines it, and carrying one across would leave the draft
+   * holding IDs the new ruleset does not activate — a build that looks complete
+   * and resolves to nothing. Name, level, abilities and manual values survive,
+   * because none of them depends on which ruleset is active.
+   */
+  async changeRuleset(
+    draftId: ID,
+    expectedRevision: number,
+    rulesetProfileId: ID,
+  ): Promise<ServiceOutcome<DraftSnapshot>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+    const target = await repositories.content.getRuleset(rulesetProfileId);
+    if (!target) return notFound(rulesetProfileId);
+
+    const outcome = await database.transaction(
+      "rw",
+      database.characterDrafts,
+      async (): Promise<ServiceOutcome<CharacterDraftRecord>> => {
+        const current = await repositories.drafts.get(draftId);
+        if (!current) return notFound(draftId);
+        if (current.revision !== expectedRevision) return stale(draftId, expectedRevision, current.revision);
+        if (current.status !== "in-progress")
+          return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: draftId, severity: "error" }]);
+        if (current.rulesetProfileId === rulesetProfileId) return ok(current);
+
+        const next: CharacterDraftRecord = {
+          ...current,
+          rulesetProfileId,
+          revision: current.revision + 1,
+          build: {
+            ...current.build,
+            classId: undefined,
+            subclassId: undefined,
+            speciesId: undefined,
+            backgroundId: undefined,
+            choiceSelections: {},
+            equipmentSelections: {},
+          },
+          updatedAt: now,
+        };
+        const accepted = await repositories.drafts.replace(next, expectedRevision);
+        return accepted ? ok(next) : stale(draftId, expectedRevision, null);
+      },
+    );
+    if (outcome.status !== "ok") return outcome;
+    this.log({ operation: "draft.ruleset", recordId: draftId, actualRevision: outcome.result.revision });
+    return ok(await this.snapshot(outcome.result));
+  }
+
+  /**
    * Presentation is guidance only. It changes no selection, manual value or
    * override, and it keeps the same draft ID and revision history.
    */
@@ -363,7 +418,11 @@ function characterFromDraft(
     ...(build.nickname ? { nickname: build.nickname } : {}),
     ...(build.pronouns ? { pronouns: build.pronouns } : {}),
     level: build.level,
-    classLevels: build.classId ? [{ classId: build.classId, level: build.level }] : [],
+    // The subclass travels with the class level it belongs to, so the committed
+    // record carries its identity rather than leaving it only in the draft.
+    classLevels: build.classId
+      ? [{ classId: build.classId, level: build.level, ...(build.subclassId ? { subclassId: build.subclassId } : {}) }]
+      : [],
     ...(build.speciesId ? { speciesId: build.speciesId } : {}),
     ...(build.backgroundId ? { backgroundId: build.backgroundId } : {}),
     abilityMethod: build.abilityMethod,

@@ -65,6 +65,81 @@ M2.1 validates the technical vertical slice against **public-original synthetic 
 
 Consequently M2.1 can demonstrate that the engine, services and surfaces are correct, but it cannot settle content-density or real-rulebook interaction questions — option counts, name lengths, description volume and cross-reference depth all differ from real material. Final content UX validation depends on the later private PHB pack, imported locally through the M1.3 private-library schema and never committed here.
 
+## M2.1a implemented, pending certification
+
+M2.1a is the first public real-content creation foundation. It is stacked on the
+M2.1 slice and changes no private content: everything committed here is
+public-original synthetic material.
+
+**Imported content is reachable.** The pilot's blocking defect was that a pack
+could be imported and then be invisible: every builder and resolver read is
+scoped to a ruleset profile, and importing created none. `ContentInstallService`
+now proposes the profile a pack would produce, derives its ID from the pack ID,
+and writes it inside the import's own transaction, so a failed or cancelled
+import leaves neither content nor a partial profile. Installed packs that still
+have no profile are offered one from Settings, Rulesets. Selection is explicit:
+an activated profile, or a single usable profile, is an answer; anything else is
+reported as ambiguous and asked. Nothing is ever chosen from list order.
+
+**Creation is name-first and level-targeted.** The first step holds the name,
+the ruleset and the intended starting level. The maximum level offered is
+derived from content. Creating at level 5 accumulates levels 1 to 5 in one pass,
+exposes every reachable choice, honours subclass and feat timing, blocks the
+commit while any remain, and writes level 5 directly.
+
+**Choice discovery is generic.** `choice-planner` walks activated entries —
+class, subclass, their progression-granted features, species and its traits,
+background and its feat, and anything a selected option activates — and returns
+each choice once, keyed by its own stable ID, with its declaring entry and level
+retained. A choice is discovered only when the entry that owns it is genuinely
+active, so no diagnostic can name a decision the builder never rendered. The
+duplicate unresolved-choice diagnostic is fixed at its source: an empty required
+choice is one fact, and both the planner and the resolver collapse issues on
+identity.
+
+**The subclass is a typed identity.** It is offered at the level the class
+declares, persisted on the class level, activates its own progression and
+choices, appears in Review and on the sheet, and blocks completion when required
+and unresolved.
+
+**Ability entry keeps one model.** Base scores plus origin increases give the
+final scores in both methods; the manual inputs edit base scores, the origin
+interface stays visible, and switching methods preserves the allocation.
+
+**Equipment is legible.** Class and background grants are both shown, each
+package lists its contents before it is chosen, Review shows the resulting
+equipment, and the step is omitted only when a build genuinely grants and offers
+nothing.
+
+**Proficiencies carry provenance.** Every proficiency names its source entry and
+whether it was automatic or chosen, and Review groups them by source. An option
+that only grants something already granted is labelled with the source that
+grants it and is not offered as a live choice; a build that already stores such a
+selection is blocked with a named repair rather than silently producing one
+proficiency fewer.
+
+**Level-up stays one level at a time**, and now refuses a level the class
+progression does not define, naming the highest level the content reaches
+instead of showing an empty confirmation. The preview lists the features,
+actions and resources the level adds, and says outright when a level adds none.
+
+Database version 6 is additive: one preference record holding the explicitly
+activated ruleset. No existing record is read or rewritten.
+
+### Deferred, and depended on by later work
+
+These are recorded as follow-up dependencies and are deliberately absent here:
+
+- the per-level Constitution hit-point correction;
+- current-hit-point finalisation during creation;
+- the armour-context correction;
+- automatic attacks derived from equipped weapons;
+- custom or durable inventory, and removal of granted equipment;
+- resource-recovery redesign;
+- the broader character-sheet redesign;
+- spellcasting;
+- any additional official content.
+
 ## Device and installation behavior
 
 - Every phone, desktop browser, browser profile, and installed PWA has its own IndexedDB.

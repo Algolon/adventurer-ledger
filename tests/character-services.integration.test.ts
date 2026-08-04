@@ -25,7 +25,7 @@ const BRAMMEL_BUILD: Partial<CharacterDraftBuild> = {
   abilityScores: { strength: 16, dexterity: 15, constitution: 14, intelligence: 12, wisdom: 10, charisma: 8 },
   choiceSelections: {
     [SYNTHETIC_CHOICES.fightingStyle]: ["option:guarded-hand"],
-    [SYNTHETIC_CHOICES.classSkills]: ["option:proficiency:skill-watchcraft", "option:proficiency:skill-haulage"],
+    [SYNTHETIC_CHOICES.classSkills]: ["option:proficiency:skill-riverlore", "option:proficiency:skill-haulage"],
     [SYNTHETIC_CHOICES.backgroundLanguage]: ["option:proficiency:language-trade-cant"],
   },
   equipmentSelections: { [SYNTHETIC_EQUIPMENT_CHOICE]: ["equipment-option:warden-pack"] },

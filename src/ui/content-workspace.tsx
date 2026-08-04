@@ -23,11 +23,8 @@ import {
   createContentExport,
   RestrictedExportConfirmationError,
 } from "@/src/export/content-export";
-import {
-  confirmImportSet,
-  previewContentPackSet,
-  type ImportSetPreview,
-} from "@/src/import/content-pipeline";
+import type { InstallPreview } from "@/src/services/content-install-service";
+import { useServices } from "@/src/ui/services-context";
 import { db } from "@/src/storage/db";
 import {
   ContentEntryRepository,
@@ -601,26 +598,45 @@ function PackEditor() {
 }
 
 function ImportExportPanel() {
+  const { install, refresh } = useServices();
   const [text, setText] = useState(""),
-    [preview, setPreview] = useState<ImportSetPreview>(),
+    [preview, setPreview] = useState<InstallPreview>(),
+    [createRuleset, setCreateRuleset] = useState(true),
     [message, setMessage] = useState(""),
     [includeRestricted, setIncludeRestricted] = useState(false),
     [confirmed, setConfirmed] = useState(false);
-  // Always the set boundary, so the preview shows exactly what confirmation revalidates.
+  // Always the set boundary, so the preview shows exactly what confirmation
+  // revalidates, and always through the service, so no component installs
+  // content by writing tables itself.
   const inspect = async () => {
     setMessage("");
-    setPreview(await previewContentPackSet([text], db));
+    setPreview(await install.preview([text]));
   };
+  /**
+   * Importing content that no ruleset activates leaves it installed and
+   * unreachable, so the offer to create one is part of the same confirmation and
+   * lands in the same transaction: a rolled-back import leaves no profile behind.
+   */
   const commit = async () => {
     if (!preview) return;
-    try {
-      await confirmImportSet(preview, db);
-      setMessage("Import completed atomically.");
-      setPreview(undefined);
-      setText("");
-    } catch {
-      setMessage("Import was not applied. No partial records were kept.");
+    const creatable = preview.offers.filter(offer => offer.usable && !offer.alreadyInstalled);
+    const requested = createRuleset ? creatable.map(offer => offer.packId) : [];
+    const outcome = await install.confirm(preview, {
+      createRulesetForPackIds: requested,
+      ...(requested.length === 1 ? { activateRulesetId: creatable[0].rulesetId } : {}),
+    });
+    if (outcome.status !== "ok") {
+      setMessage("Import was not applied. No content and no ruleset profile were kept.");
+      return;
     }
+    setMessage(
+      outcome.result.createdRulesetIds.length
+        ? `Import completed atomically. ${outcome.result.createdRulesetIds.length} ruleset profile(s) created and ready to select.`
+        : "Import completed atomically. No ruleset profile was created, so this content is only reachable through an existing ruleset.",
+    );
+    setPreview(undefined);
+    setText("");
+    refresh();
   };
   const exportData = async () => {
     try {
@@ -682,15 +698,35 @@ function ImportExportPanel() {
           <div className="preview" aria-label="Import preview">
             <h4>{preview.canImport ? "Ready to import" : "Import blocked"}</h4>
             <p>
-              {preview.plan.sources.add.length} sources,{" "}
-              {preview.plan.packs.add.length} packs, and{" "}
-              {preview.plan.entries.add.length} entries will be added.
+              {preview.set.plan.sources.add.length} sources,{" "}
+              {preview.set.plan.packs.add.length} packs, and{" "}
+              {preview.set.plan.entries.add.length} entries will be added.
             </p>
             <p>
-              {preview.plan.sources.update.length} sources,{" "}
-              {preview.plan.packs.update.length} packs, and{" "}
-              {preview.plan.entries.update.length} entries will be updated.
+              {preview.set.plan.sources.update.length} sources,{" "}
+              {preview.set.plan.packs.update.length} packs, and{" "}
+              {preview.set.plan.entries.update.length} entries will be updated.
             </p>
+            {preview.offers.map(offer => (
+              <p className="issue" key={offer.packId}>
+                <b>{offer.name}</b>{" "}
+                {offer.alreadyInstalled
+                  ? `already has the ruleset ${offer.rulesetId}.`
+                  : offer.usable
+                    ? `can become the ruleset ${offer.rulesetId}, covering levels 1 to ${offer.maxSupportedLevel}.`
+                    : `cannot stand as a ruleset on its own: it supplies no ${offer.missingCategories.join(", ")}.`}
+              </p>
+            ))}
+            {preview.offers.some(offer => offer.usable && !offer.alreadyInstalled) && (
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={createRuleset}
+                  onChange={event => setCreateRuleset(event.target.checked)}
+                />
+                Create a ruleset profile so this content can be selected in the builder
+              </label>
+            )}
             {preview.issues.map((issue, index) => (
               <p className="issue" key={`${issue.code}-${index}`}>
                 <b>{issue.code}</b> {issue.message}

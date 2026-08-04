@@ -163,6 +163,11 @@ export interface CharacterRecord extends Audit {
   name: string;
   /** D-02: identity only, never a mechanical input. */
   nickname?: string;
+  /**
+   * Retained so a character stored before M2.1a keeps every field it was saved
+   * with. The creation flow no longer collects it and nothing derives from it;
+   * it is carried through reads and writes untouched.
+   */
   pronouns?: string;
   level: number;
   classLevels: readonly ClassLevelSelection[];
@@ -362,9 +367,17 @@ export interface CharacterDraftBuild {
    */
   manualSheet?: boolean;
   nickname?: string;
+  /** Legacy only. The creation flow no longer offers it; stored values persist. */
   pronouns?: string;
   level: number;
   classId?: ID;
+  /**
+   * The subclass, kept as its own typed identity rather than as one more
+   * arbitrary class option. Its progression, its features and its own choices
+   * all hang off this ID, and the committed record carries it on the class
+   * level so the sheet can name it.
+   */
+  subclassId?: ID;
   speciesId?: ID;
   backgroundId?: ID;
   abilityMethod: AbilityMethod;

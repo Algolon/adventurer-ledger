@@ -136,6 +136,9 @@ export function PlaySheet({
           <h2>{sheet.name}</h2>
           <p className="m2-muted">
             {sheet.classLabel ? `${sheet.classLabel} ${sheet.level}` : `Level ${sheet.level}`}
+            {/* The subclass is part of the character's identity, so it is named
+                on the sheet rather than living only in the build. */}
+            {sheet.subclassLabel ? ` (${sheet.subclassLabel})` : ""}
             {sheet.speciesLabel ? ` · ${sheet.speciesLabel}` : ""}
             {sheet.nickname ? ` · “${sheet.nickname}”` : ""}
           </p>

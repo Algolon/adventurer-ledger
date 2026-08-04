@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The nine-step character builder.
+ * The character builder.
  *
  * One persisted draft backs both presentation modes: switching between guided
  * and flexible changes guidance only and never clears a selection. Every
@@ -9,18 +9,31 @@
  * revision, so a reload, a closed tab or an offline session resumes at the last
  * committed step. Guided recommendations are ranked and explained but never
  * applied automatically.
+ *
+ * The first step is identity and intent: the name, the ruleset the build is
+ * scoped to, and the level the character is being created at. Creating directly
+ * at a higher level is a real target, not a level 1 character that is advanced
+ * afterwards — the planner accumulates every level's progression into one build
+ * and the commit writes that level directly.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, CircleHelp, ListChecks, TriangleAlert } from "lucide-react";
-import { BUILDER_STEPS, recommendationsFor, remainingArraySlots, type BuilderStepId, type PlannedStep } from "@/src/services/build-planner";
+import {
+  BUILDER_STEPS,
+  recommendationsFor,
+  remainingArraySlots,
+  type BuilderStepId,
+  type PlannedStep,
+  type RequiredChoice,
+} from "@/src/services/build-planner";
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
 import type { Ability, ContentEntry } from "@/src/domain/model";
-import { standardArrayFor } from "@/src/services/content-scope";
+import { selectedEquipmentFor, standardArrayFor } from "@/src/services/content-scope";
 import { abilityModifier } from "@/src/rules/engine";
 import { signed } from "@/src/ui/primitives";
-import { requiredEquipmentChoices } from "@/src/services/build-planner";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import type { DraftSnapshot } from "@/src/services/character-services";
+import type { InstalledRulesetView } from "@/src/services/content-install-service";
 
 const ISSUE_LABELS: Record<string, string> = {
   CLASS_NOT_CHOSEN: "Choose a class",
@@ -33,14 +46,22 @@ const ISSUE_LABELS: Record<string, string> = {
   STANDARD_ARRAY_MISMATCH: "These scores do not match the standard array plus the origin increases",
   CHOICE_UNRESOLVED: "Resolve the outstanding choice",
   CHOICE_OPTION_INCOMPATIBLE: "A selected option does not meet its requirement",
-  EQUIPMENT_CHOICE_REQUIRED: "Choose your travelling gear",
+  EQUIPMENT_CHOICE_REQUIRED: "Choose your starting equipment",
   NAME_NOT_SET: "Name the character (optional)",
   MANUAL_MINIMUM_NOT_MET: "A manual sheet needs abilities, hit points, armour class, initiative and one action",
   MANUAL_VALUE_MISSING: "Enter every required manual value",
   MANUAL_ACTION_MISSING: "Add at least one action",
+  SUBCLASS_NOT_CHOSEN: "Choose a subclass",
+  SUBCLASS_INVALID: "The stored subclass does not belong to this class",
+  LEVEL_NOT_COVERED_BY_CLASS: "This class's content does not reach the chosen level. Lower the level or choose another class.",
+  PROGRESSION_CHOICE_MISSING: "The class progression names a choice this content does not define",
+  PROGRESSION_FEATURE_MISSING: "The class progression names a feature this content does not define",
+  PROFICIENCY_DUPLICATE_SELECTION: "A selected option grants a proficiency you already have",
 };
 
 const labelFor = (code: string) => ISSUE_LABELS[code] ?? code;
+
+const titleCase = (value: string) => value[0].toUpperCase() + value.slice(1);
 
 /**
  * Where reopening a draft should land.
@@ -76,7 +97,7 @@ export function CharacterBuilder({
   onFinished(characterId: string): void;
   onClose(): void;
 }) {
-  const { drafts, commit, query, refresh } = useServices();
+  const { drafts, commit, query, install, refresh } = useServices();
   const [snapshot, setSnapshot] = useState<DraftSnapshot | null>(null);
   const [stepId, setStepId] = useState<BuilderStepId>("start");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -88,6 +109,9 @@ export function CharacterBuilder({
   const snapshotRef = useRef<DraftSnapshot | null>(null);
   /** Focus moves here when a submit produces issues, so it is announced. */
   const errorSummaryRef = useRef<HTMLDivElement>(null);
+  /** Debounced free-text edits that have not reached the draft service yet. */
+  const pendingRef = useRef<Partial<CharacterDraftBuild>>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const rulesetId = snapshot?.draft.rulesetProfileId;
   const entriesState = useAsync(
@@ -95,6 +119,11 @@ export function CharacterBuilder({
     [rulesetId],
   );
   const entries = useMemo<ContentEntry[]>(() => (entriesState.status === "ready" ? entriesState.value : []), [entriesState]);
+  const rulesetsState = useAsync(() => install.installedRulesets(), []);
+  const rulesets = useMemo<InstalledRulesetView[]>(
+    () => (rulesetsState.status === "ready" ? rulesetsState.value : []),
+    [rulesetsState],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +139,10 @@ export function CharacterBuilder({
     };
   }, [draftId, drafts]);
 
+  useEffect(() => {
+    if (commitErrors.length) errorSummaryRef.current?.focus();
+  }, [commitErrors]);
+
   /**
    * Autosaves are serialised through one queue and read the revision from a ref
    * rather than from rendered state. Two changes in quick succession — typing a
@@ -117,10 +150,6 @@ export function CharacterBuilder({
    * that was current at the last render, and the second would be rejected as
    * stale even though nothing else touched the draft.
    */
-  useEffect(() => {
-    if (commitErrors.length) errorSummaryRef.current?.focus();
-  }, [commitErrors]);
-
   const save = useCallback(
     (patch: DraftPatch, nextStep?: BuilderStepId) => {
       const run = async () => {
@@ -155,6 +184,38 @@ export function CharacterBuilder({
     [draftId, drafts],
   );
 
+  /**
+   * Sends any debounced edit now.
+   *
+   * Every navigation, mode switch and commit goes through this first, so a name
+   * typed a moment before pressing Continue is persisted rather than lost with
+   * the unmounting step.
+   */
+  const flushPending = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    const pending = pendingRef.current;
+    pendingRef.current = {};
+    if (Object.keys(pending).length) return save(pending);
+    return queueRef.current;
+  }, [save]);
+
+  /** Buffers a free-text edit and writes it shortly after typing stops. */
+  const scheduleSave = useCallback(
+    (patch: Partial<CharacterDraftBuild>) => {
+      pendingRef.current = { ...pendingRef.current, ...patch };
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => void flushPending(), 400);
+    },
+    [flushPending],
+  );
+
+  // A pending edit must not die with the component; the unmount flush is what
+  // makes "type a name, close the tab" survive.
+  useEffect(() => () => void flushPending(), [flushPending]);
+
   if (!snapshot)
     return (
       <div className="m2-builder" aria-busy="true">
@@ -163,13 +224,13 @@ export function CharacterBuilder({
     );
 
   const { draft, plan } = snapshot;
-  const rulesetLabel = draft.rulesetProfileId.replace(/^ruleset:/, "");
   const build = draft.build;
   const steps = plan.steps;
   const index = steps.findIndex(step => step.id === stepId);
   const current = steps[index] ?? steps[0];
 
   const goTo = (id: BuilderStepId) => {
+    void flushPending();
     setStepId(id);
     setShowSteps(false);
     void save({}, id);
@@ -181,6 +242,7 @@ export function CharacterBuilder({
    * choice they had just made but whose save had not yet landed.
    */
   const advance = async () => {
+    await flushPending();
     await queueRef.current;
     const latest = snapshotRef.current ?? snapshot;
     const latestSteps = latest.plan.steps;
@@ -199,6 +261,7 @@ export function CharacterBuilder({
 
   const finish = async () => {
     // Let any in-flight autosave land so the commit sends the current revision.
+    await flushPending();
     await queueRef.current;
     const fingerprint = await query.contentFingerprint(draft.rulesetProfileId);
     const characterId = draft.editingCharacterId ?? `character:${draftId.replace(/^draft:/, "")}`;
@@ -227,6 +290,7 @@ export function CharacterBuilder({
   };
 
   const togglePresentation = async () => {
+    await flushPending();
     await queueRef.current;
     const outcome = await drafts.changePresentation(
       draftId,
@@ -238,6 +302,23 @@ export function CharacterBuilder({
       snapshotRef.current = outcome.result;
       setSnapshot(outcome.result);
     }
+  };
+
+  /** Moving a draft to another ruleset clears the selections that belonged to the old one. */
+  const changeRuleset = async (nextRulesetId: string) => {
+    await flushPending();
+    await queueRef.current;
+    const outcome = await drafts.changeRuleset(draftId, revisionRef.current ?? snapshot.revision, nextRulesetId);
+    if (outcome.status !== "ok") {
+      setSaveError("That ruleset could not be selected on this device.");
+      return;
+    }
+    revisionRef.current = outcome.result.revision;
+    snapshotRef.current = outcome.result;
+    setSnapshot(outcome.result);
+    // The activation is an explicit decision, so it is remembered for next time.
+    await install.activate(nextRulesetId);
+    refresh();
   };
 
   return (
@@ -343,10 +424,13 @@ export function CharacterBuilder({
           step={current}
           build={build}
           entries={entries}
-          rulesetLabel={rulesetLabel}
+          rulesets={rulesets}
+          activeRulesetId={draft.rulesetProfileId}
           presentation={draft.presentation}
           plan={snapshot.plan}
           onChange={save}
+          onType={scheduleSave}
+          onSelectRuleset={id => void changeRuleset(id)}
         />
       </div>
 
@@ -355,7 +439,11 @@ export function CharacterBuilder({
         <button
           type="button"
           className="m2-button m2-button-secondary"
-          onClick={() => (index > 0 ? goTo(steps[index - 1].id) : onClose())}
+          onClick={() => {
+            void flushPending();
+            if (index > 0) goTo(steps[index - 1].id);
+            else onClose();
+          }}
         >
           <ArrowLeft aria-hidden="true" />
           Back
@@ -376,50 +464,46 @@ export function CharacterBuilder({
   );
 }
 
+interface StepProps {
+  build: CharacterDraftBuild;
+  entries: readonly ContentEntry[];
+  plan: DraftSnapshot["plan"];
+  onChange(patch: DraftPatch): void;
+}
+
 function StepContent({
   step,
   build,
   entries,
-  rulesetLabel,
+  rulesets,
+  activeRulesetId,
   presentation,
   plan,
   onChange,
-}: {
+  onType,
+  onSelectRuleset,
+}: StepProps & {
   step: PlannedStep;
-  build: CharacterDraftBuild;
-  entries: readonly ContentEntry[];
-  rulesetLabel: string;
+  rulesets: readonly InstalledRulesetView[];
+  activeRulesetId: string;
   presentation: "guided" | "flexible";
-  plan: DraftSnapshot["plan"];
-  onChange(patch: DraftPatch): void;
+  onType(patch: Partial<CharacterDraftBuild>): void;
+  onSelectRuleset(id: string): void;
 }) {
   const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries) : [];
-
 
   switch (step.id) {
     case "start":
       return (
-        <div className="m2-step">
-          <h3>Ruleset</h3>
-          <p className="m2-muted">
-            This build uses <b>{rulesetLabel}</b>. Everything is stored on this device only.
-          </p>
-          {/*
-           * Creation always starts at level 1; level 2 is reached through the
-           * Level up flow. This was a readonly number input, which offered
-           * spinner arrows and a focus stop for a value it would never accept.
-           * A static value is the honest presentation of a fixed fact.
-           */}
-          <div className="m2-static-field">
-            <span className="m2-static-label" id="starting-level-label">
-              Starting level
-            </span>
-            <strong className="m2-static-value" aria-labelledby="starting-level-label">
-              Level {build.level}
-            </strong>
-            <p className="m2-muted">Advance after creation through Level up.</p>
-          </div>
-        </div>
+        <StartStep
+          build={build}
+          plan={plan}
+          rulesets={rulesets}
+          activeRulesetId={activeRulesetId}
+          onChange={onChange}
+          onType={onType}
+          onSelectRuleset={onSelectRuleset}
+        />
       );
 
     case "class":
@@ -430,7 +514,9 @@ function StepContent({
             options={entries.filter(entry => entry.category === "class").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
             selected={build.manualSheet ? [] : build.classId ? [build.classId] : []}
             recommendations={recommendations}
-            onSelect={id => onChange({ classId: id, manualSheet: false })}
+            // A different class has a different subclass list, so the stored
+            // subclass identity is dropped rather than left pointing elsewhere.
+            onSelect={id => onChange({ classId: id, subclassId: undefined, manualSheet: false })}
           />
           <fieldset className="m2-fieldset">
             <legend>Or build a manual sheet</legend>
@@ -440,7 +526,7 @@ function StepContent({
                   type="button"
                   className={build.manualSheet ? "m2-option m2-option-selected" : "m2-option"}
                   aria-pressed={build.manualSheet === true}
-                  onClick={() => onChange({ manualSheet: !build.manualSheet, classId: undefined })}
+                  onClick={() => onChange({ manualSheet: !build.manualSheet, classId: undefined, subclassId: undefined })}
                 >
                   <span className="m2-option-mark" aria-hidden="true">
                     {build.manualSheet ? <Check /> : "○"}
@@ -487,14 +573,17 @@ function StepContent({
       return build.manualSheet ? (
         <ManualSheetStep build={build} onChange={onChange} />
       ) : (
-        <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />
+        <div className="m2-step">
+          <SubclassStep plan={plan} build={build} onChange={onChange} />
+          <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />
+        </div>
       );
 
     case "equipment":
-      return <EquipmentStep build={build} entries={entries} onChange={onChange} />;
+      return <EquipmentStep build={build} entries={entries} plan={plan} onChange={onChange} />;
 
     case "identity":
-      return <IdentityStep build={build} onChange={onChange} />;
+      return <IdentityStep build={build} onType={onType} />;
 
     case "review":
       return <ReviewStep build={build} entries={entries} plan={plan} presentation={presentation} />;
@@ -505,52 +594,251 @@ function StepContent({
 }
 
 /**
- * Free-text identity fields.
+ * Name, ruleset and target level.
  *
- * Keystrokes stay in component state and are submitted to the draft service on
- * blur, so a per-character write never reaches the transaction boundary. None of
- * these fields feeds a calculation: the nickname is identity only.
+ * These three decide what everything after them means: the name is the record's
+ * identity, the ruleset fixes which content is even visible, and the level fixes
+ * how much of each progression the build has to resolve. They belong together,
+ * before any of it.
  */
-function IdentityStep({
+function StartStep({
+  build,
+  plan,
+  rulesets,
+  activeRulesetId,
+  onChange,
+  onType,
+  onSelectRuleset,
+}: {
+  build: CharacterDraftBuild;
+  plan: DraftSnapshot["plan"];
+  rulesets: readonly InstalledRulesetView[];
+  activeRulesetId: string;
+  onChange(patch: DraftPatch): void;
+  onType(patch: Partial<CharacterDraftBuild>): void;
+  onSelectRuleset(id: string): void;
+}) {
+  const [name, setName] = useState(build.name);
+  /**
+   * Once the user types, the field owns its own value.
+   *
+   * Autosave is debounced, so the persisted name always trails what is on
+   * screen. Re-syncing the input from the draft while typing would rewind the
+   * last few keystrokes; the value is re-read from the draft on the next mount,
+   * which is exactly when the draft is authoritative again.
+   */
+  const typed = useRef(false);
+  useEffect(() => {
+    if (!typed.current) setName(build.name);
+  }, [build.name]);
+
+  const maxLevel = Math.max(plan.maxLevel, build.level);
+  const levels = Array.from({ length: maxLevel }, (_, offset) => offset + 1);
+  const active = rulesets.find(ruleset => ruleset.id === activeRulesetId);
+
+  return (
+    <div className="m2-step">
+      <div className="m2-field">
+        <label htmlFor="start-name">
+          <span>Character name</span>
+        </label>
+        <input
+          id="start-name"
+          value={name}
+          autoComplete="off"
+          onChange={event => {
+            typed.current = true;
+            setName(event.target.value);
+            onType({ name: event.target.value });
+          }}
+          onBlur={() => onChange({ name })}
+        />
+        <p className="m2-muted">Saved as you type. You can change it at any point before or after creation.</p>
+      </div>
+
+      <fieldset className="m2-fieldset">
+        <legend>Ruleset</legend>
+        <p className="m2-muted">
+          The ruleset decides which classes, origins and equipment this build can use. Everything is stored on this
+          device only.
+        </p>
+        {rulesets.length ? (
+          <ul className="m2-options">
+            {rulesets.map(ruleset => {
+              const isSelected = ruleset.id === activeRulesetId;
+              return (
+                <li key={ruleset.id}>
+                  <button
+                    type="button"
+                    className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectRuleset(ruleset.id)}
+                  >
+                    <span className="m2-option-mark" aria-hidden="true">
+                      {isSelected ? <Check /> : "○"}
+                    </span>
+                    <span>
+                      <b>{ruleset.name}</b>
+                      <small>
+                        {ruleset.entryCount} entries · levels 1–{ruleset.maxSupportedLevel}
+                        {ruleset.usable ? "" : " · cannot create a character on its own"}
+                      </small>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="m2-muted">No ruleset is installed. Import a content pack and create its ruleset first.</p>
+        )}
+        {rulesets.length > 1 ? (
+          <p className="m2-muted">
+            Changing the ruleset clears the class, origin and choices, because they belong to the ruleset that defined
+            them. The name, level and ability scores are kept.
+          </p>
+        ) : null}
+      </fieldset>
+
+      <fieldset className="m2-fieldset">
+        <legend>Starting level</legend>
+        <div className="m2-field">
+          <label htmlFor="start-level">
+            <span>Create this character at level</span>
+          </label>
+          <select
+            id="start-level"
+            value={build.level}
+            onChange={event => onChange({ level: Number(event.target.value) })}
+          >
+            {levels.map(level => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="m2-muted">
+          {active
+            ? `This ruleset's content covers levels 1 to ${active.maxSupportedLevel}.`
+            : `The installed content covers levels 1 to ${plan.maxLevel}.`}{" "}
+          Everything each level grants is resolved here, in one pass — the character is created at this level, not
+          created at 1 and advanced afterwards.
+        </p>
+        {!plan.levelCovered ? (
+          <p className="m2-inline-issue" role="status">
+            <TriangleAlert aria-hidden="true" />
+            {labelFor("LEVEL_NOT_COVERED_BY_CLASS")}
+            {plan.classProgressionMax === undefined ? "" : ` This class stops at level ${plan.classProgressionMax}.`}
+          </p>
+        ) : null}
+      </fieldset>
+    </div>
+  );
+}
+
+/**
+ * The explicit subclass decision.
+ *
+ * It is offered at the level the class itself declares, persists as its own
+ * identity, and activates that subclass's progression and choices. Modelling it
+ * as one more anonymous option would lose all four of those.
+ */
+function SubclassStep({
+  plan,
   build,
   onChange,
 }: {
+  plan: DraftSnapshot["plan"];
   build: CharacterDraftBuild;
   onChange(patch: DraftPatch): void;
 }) {
-  const [buffer, setBuffer] = useState({
-    name: build.name,
-    nickname: build.nickname ?? "",
-    pronouns: build.pronouns ?? "",
-  });
+  const subclass = plan.subclass;
+  if (!subclass || !subclass.options.length) return null;
+  if (!subclass.reached)
+    return (
+      <p className="m2-muted">
+        {subclass.classLabel} chooses a subclass at level {subclass.atLevel}. This build is level {build.level}.
+      </p>
+    );
 
-  const commitField = (field: keyof typeof buffer) => {
-    const value = buffer[field];
-    const persisted = field === "name" ? build.name : (build[field] ?? "");
-    if (value !== persisted) onChange({ [field]: value } as Partial<CharacterDraftBuild>);
-  };
-
-  const field = (id: keyof typeof buffer, label: string) => (
-    <div className="m2-field">
-      <label htmlFor={`identity-${id}`}>
-        <span>{label}</span>
-      </label>
-      <input
-        id={`identity-${id}`}
-        value={buffer[id]}
-        onChange={event => setBuffer(current => ({ ...current, [id]: event.target.value }))}
-        onBlur={() => commitField(id)}
-      />
-    </div>
+  return (
+    <fieldset className="m2-fieldset">
+      <legend>
+        Subclass
+        <small className="m2-muted"> chosen at level {subclass.atLevel}</small>
+      </legend>
+      {subclass.unresolved ? (
+        <p className="m2-inline-issue" role="status">
+          <TriangleAlert aria-hidden="true" /> {labelFor("SUBCLASS_NOT_CHOSEN")}
+        </p>
+      ) : null}
+      <ul className="m2-options">
+        {subclass.options.map(option => {
+          const isSelected = subclass.selectedId === option.id && subclass.valid;
+          return (
+            <li key={option.id}>
+              <button
+                type="button"
+                className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
+                aria-pressed={isSelected}
+                onClick={() => onChange({ subclassId: option.id })}
+              >
+                <span className="m2-option-mark" aria-hidden="true">
+                  {isSelected ? <Check /> : "○"}
+                </span>
+                <span>
+                  <b>{option.label}</b>
+                  {option.summary ? <small>{option.summary}</small> : null}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </fieldset>
   );
+}
+
+/**
+ * Free-text identity.
+ *
+ * A nickname is identity only and feeds no calculation. Pronouns are no longer
+ * collected here: the creation flow asks for what it needs, and a stored value
+ * on an older character is preserved untouched rather than migrated away.
+ */
+function IdentityStep({
+  build,
+  onType,
+}: {
+  build: CharacterDraftBuild;
+  onType(patch: Partial<CharacterDraftBuild>): void;
+}) {
+  const [nickname, setNickname] = useState(build.nickname ?? "");
+  const typed = useRef(false);
+  useEffect(() => {
+    if (!typed.current) setNickname(build.nickname ?? "");
+  }, [build.nickname]);
 
   return (
     <div className="m2-step">
       <h3>Identity</h3>
       <p className="m2-muted">Nothing here changes a calculation. A nickname is identity only.</p>
-      {field("name", "Name")}
-      {field("nickname", "Nickname")}
-      {field("pronouns", "Pronouns")}
+      <div className="m2-field">
+        <label htmlFor="identity-nickname">
+          <span>Nickname</span>
+        </label>
+        <input
+          id="identity-nickname"
+          value={nickname}
+          onChange={event => {
+            typed.current = true;
+            setNickname(event.target.value);
+            onType({ nickname: event.target.value });
+          }}
+        />
+      </div>
+      <p className="m2-muted">The character&apos;s name is set on the first step.</p>
     </div>
   );
 }
@@ -646,57 +934,97 @@ function ChoiceGroups({
   return (
     <div className="m2-step">
       {groups.map(choice => (
-        <fieldset key={choice.choiceId} className="m2-fieldset">
-          <legend>
-            {choice.label}
-            <small className="m2-muted">
-              {" "}
-              choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
-            </small>
-          </legend>
-          {!choice.resolved ? (
-            <p className="m2-inline-issue" role="status">
-              <TriangleAlert aria-hidden="true" /> {choice.selected.length} of {choice.min} chosen
-            </p>
-          ) : null}
-          <ul className="m2-options">
-            {choice.options.map(option => {
-              const isSelected = choice.selected.includes(option.id);
-              const incompatible = choice.incompatibleOptions.find(item => item.optionId === option.id);
-              return (
-                <li key={option.id}>
-                  <button
-                    type="button"
-                    className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
-                    aria-pressed={isSelected}
-                    onClick={() => toggle(choice.choiceId, option.id, choice.max)}
-                  >
-                    <span className="m2-option-mark" aria-hidden="true">
-                      {isSelected ? <Check /> : "○"}
-                    </span>
-                    <span>
-                      <b>{option.label}</b>
-                      {incompatible ? <small>Requires {incompatible.requirement}</small> : null}
-                    </span>
-                    {incompatible ? <span className="m2-badge m2-badge-incomplete">Incompatible</span> : null}
-                  </button>
-                  {incompatible && isSelected ? (
-                    <p className="m2-inline-issue" role="status">
-                      <TriangleAlert aria-hidden="true" />
-                      {option.label} does not meet {incompatible.requirement}. {incompatible.repair} Nothing has been
-                      changed for you; switch to flexible mode to keep this choice with its issue recorded.
-                    </p>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        </fieldset>
+        <ChoiceGroup key={choice.choiceId} choice={choice} onToggle={toggle} />
       ))}
     </div>
   );
 }
 
+function ChoiceGroup({
+  choice,
+  onToggle,
+}: {
+  choice: RequiredChoice;
+  onToggle(choiceId: string, optionId: string, max: number): void;
+}) {
+  return (
+    <fieldset className="m2-fieldset">
+      <legend>
+        {choice.label}
+        <small className="m2-muted">
+          {" "}
+          choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
+        </small>
+      </legend>
+      {/* Provenance stays visible: which entry asks for this, and from when. */}
+      <p className="m2-muted">
+        From {choice.sourceLabel}
+        {choice.level === undefined ? "" : ` · level ${choice.level}`}
+      </p>
+      {!choice.resolved ? (
+        <p className="m2-inline-issue" role="status">
+          <TriangleAlert aria-hidden="true" /> {choice.selected.length} of {choice.min} chosen
+        </p>
+      ) : null}
+      <ul className="m2-options">
+        {choice.options.map(option => {
+          const isSelected = choice.selected.includes(option.id);
+          const incompatible = choice.incompatibleOptions.find(item => item.optionId === option.id);
+          const redundant = option.alreadyGrantedBy;
+          return (
+            <li key={option.id}>
+              <button
+                type="button"
+                className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
+                aria-pressed={isSelected}
+                // An option that would grant nothing new is not a live choice.
+                // It stays visible and explained, so the list still reads as the
+                // rules wrote it, and the remaining options are the alternatives.
+                disabled={Boolean(redundant) && !isSelected}
+                onClick={() => onToggle(choice.choiceId, option.id, choice.max)}
+              >
+                <span className="m2-option-mark" aria-hidden="true">
+                  {isSelected ? <Check /> : "○"}
+                </span>
+                <span>
+                  <b>{option.label}</b>
+                  {incompatible ? <small>Requires {incompatible.requirement}</small> : null}
+                  {redundant ? <small>Already granted by {redundant.entryLabel}</small> : null}
+                </span>
+                {incompatible ? <span className="m2-badge m2-badge-incomplete">Incompatible</span> : null}
+                {redundant ? <span className="m2-badge m2-badge-incomplete">Already granted</span> : null}
+              </button>
+              {incompatible && isSelected ? (
+                <p className="m2-inline-issue" role="status">
+                  <TriangleAlert aria-hidden="true" />
+                  {option.label} does not meet {incompatible.requirement}. {incompatible.repair} Nothing has been
+                  changed for you; switch to flexible mode to keep this choice with its issue recorded.
+                </p>
+              ) : null}
+              {redundant && isSelected ? (
+                <p className="m2-inline-issue" role="status">
+                  <TriangleAlert aria-hidden="true" />
+                  {option.label} is already granted by {redundant.entryLabel}, so choosing it here would leave you one
+                  proficiency short. Pick a different option for {choice.label}.
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </fieldset>
+  );
+}
+
+/**
+ * Ability entry.
+ *
+ * The model is the same in both methods: base scores plus origin increases give
+ * the final scores. The numeric inputs of the manual method therefore edit the
+ * base scores, not the finals — editing the finals would silently absorb the
+ * origin increase into a number the user typed, and the origin's contribution
+ * would stop being visible or removable.
+ */
 function AbilitiesStep({
   build,
   entries,
@@ -755,19 +1083,75 @@ function AbilitiesStep({
     ABILITIES.map(ability => build.abilityBaseScores[ability]),
   );
 
+  const originIncreases =
+    pattern.length ? (
+      <fieldset className="m2-fieldset">
+        <legend>Origin increases</legend>
+        <p className="m2-muted">
+          These are added on top of the base scores, whichever method produced them. Base + origin = final.
+        </p>
+        <div className="m2-ability-grid">
+          {pattern.map(amount => (
+            <label key={amount} className="m2-field" htmlFor={`increase-${amount}`}>
+              <span>+{amount} to</span>
+              <select
+                id={`increase-${amount}`}
+                value={increaseFor(amount) ?? ""}
+                onChange={event => setIncrease(amount, event.target.value ? (event.target.value as Ability) : undefined)}
+              >
+                <option value="">—</option>
+                {allowed.map(ability => (
+                  <option key={ability} value={ability}>
+                    {titleCase(ability)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    ) : null;
+
+  const finalScores = (
+    <div className="m2-ability-grid">
+      {ABILITIES.map(ability => {
+        const total = build.abilityScores[ability];
+        const name = titleCase(ability);
+        return (
+          <div key={ability} className="m2-field">
+            <span className="m2-static-label" id={`final-${ability}-label`}>
+              {name} final
+            </span>
+            <output className="m2-ability-final" aria-labelledby={`final-${ability}-label`}>
+              {typeof total === "number" ? total : "—"}
+              {typeof total === "number" ? (
+                <small className="m2-ability-modifier" aria-label={`${name} modifier`}>
+                  {signed(abilityModifier(total))}
+                </small>
+              ) : null}
+            </output>
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="m2-step">
       <fieldset className="m2-fieldset">
         <legend>Method</legend>
         <ul className="m2-options">
           {(["standard-array", "manual"] as const).map(method => {
-            const recommendation = recommendations.find(item => item.optionId === (method === "standard-array" ? "standard-array" : "manual"));
+            const recommendation = recommendations.find(item => item.optionId === method);
             return (
               <li key={method}>
                 <button
                   type="button"
                   className={build.abilityMethod === method ? "m2-option m2-option-selected" : "m2-option"}
                   aria-pressed={build.abilityMethod === method}
+                  // Only the method changes. Base scores and the origin
+                  // allocation are left exactly as they are, so switching to
+                  // compare the two does not cost the user their placement.
                   onClick={() => onChange({ abilityMethod: method })}
                 >
                   <span className="m2-option-mark" aria-hidden="true">
@@ -807,8 +1191,7 @@ function AbilitiesStep({
           </div>
           <div className="m2-ability-grid">
             {ABILITIES.map(ability => {
-              const name = ability[0].toUpperCase() + ability.slice(1);
-              const total = build.abilityScores[ability];
+              const name = titleCase(ability);
               return (
                 // The select and the computed total are associated explicitly:
                 // wrapping both in one label would fold the total into the
@@ -831,68 +1214,39 @@ function AbilitiesStep({
                         </option>
                       ))}
                   </select>
-                  {/* Total and the modifier it produces, so the consequence of
-                      an assignment is visible without leaving the step. */}
-                  <output className="m2-ability-final" aria-label={`${name} total`}>
-                    {typeof total === "number" ? total : "—"}
-                    {typeof total === "number" ? (
-                      <small className="m2-ability-modifier" aria-label={`${name} modifier`}>
-                        {signed(abilityModifier(total))}
-                      </small>
-                    ) : null}
-                  </output>
                 </div>
               );
             })}
           </div>
-          {pattern.length ? (
-            <fieldset className="m2-fieldset">
-              <legend>Origin increases</legend>
-              <div className="m2-ability-grid">
-                {pattern.map(amount => (
-                  <label key={amount} className="m2-field" htmlFor={`increase-${amount}`}>
-                    <span>+{amount} to</span>
-                    <select
-                      id={`increase-${amount}`}
-                      value={increaseFor(amount) ?? ""}
-                      onChange={event => setIncrease(amount, event.target.value ? (event.target.value as Ability) : undefined)}
-                    >
-                      <option value="">—</option>
-                      {allowed.map(ability => (
-                        <option key={ability} value={ability}>
-                          {ability[0].toUpperCase() + ability.slice(1)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          ) : null}
         </>
       ) : (
         <div className="m2-ability-grid">
-          {ABILITIES.map(ability => (
-            <label key={ability} className="m2-field">
-              <span>{ability[0].toUpperCase() + ability.slice(1)}</span>
-              <input
-                type="number"
-                min={1}
-                max={30}
-                value={build.abilityScores[ability] ?? ""}
-                onChange={event =>
-                  onChange(current => ({
-                    abilityScores: {
-                      ...current.abilityScores,
-                      [ability]: event.target.value ? Number(event.target.value) : undefined,
-                    },
-                  }))
-                }
-              />
-            </label>
-          ))}
+          {ABILITIES.map(ability => {
+            const name = titleCase(ability);
+            return (
+              <div key={ability} className="m2-field">
+                <label htmlFor={`ability-${ability}`}>
+                  <span>{name} base</span>
+                </label>
+                <input
+                  id={`ability-${ability}`}
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={build.abilityBaseScores[ability] ?? ""}
+                  onChange={event => assign(ability, event.target.value ? Number(event.target.value) : undefined)}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
+
+      {originIncreases}
+
+      <h4>Final scores</h4>
+      <p className="m2-muted">Base score plus the origin increase. This is what the sheet uses.</p>
+      {finalScores}
     </div>
   );
 }
@@ -993,68 +1347,98 @@ function ManualSheetStep({
   );
 }
 
+/**
+ * Starting equipment.
+ *
+ * Every granting source is shown, not just the class: what is given
+ * automatically, and what each selectable package actually contains before it is
+ * chosen. A package presented only by its name asks the user to choose between
+ * two labels they cannot read the contents of.
+ */
 function EquipmentStep({
   build,
   entries,
+  plan,
   onChange,
 }: {
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
+  plan: DraftSnapshot["plan"];
   onChange(patch: DraftPatch): void;
 }) {
-  const choices = requiredEquipmentChoices(build, entries);
-  const classEntry = build.classId ? entries.find(entry => entry.id === build.classId) : undefined;
-  const bundles = classEntry?.equipmentBundles ?? [];
-
-  if (!classEntry) return <p className="m2-muted">Choose a class first to see its starting equipment.</p>;
+  const grants = plan.equipmentGrants;
+  if (!grants.length)
+    return <p className="m2-muted">Nothing in this build grants starting equipment.</p>;
 
   return (
     <div className="m2-step">
-      {bundles.map(bundle => (
-        <div key={bundle.id}>
-          <h3>{bundle.label}</h3>
-          <ul className="m2-plain-list">
-            {bundle.entries
-              .filter(node => node.type === "item")
-              .map(node => (
-                <li key={node.type === "item" ? node.itemId : ""}>
-                  {node.type === "item" ? entries.find(entry => entry.id === node.itemId)?.name ?? node.itemId : null}
-                </li>
-              ))}
-          </ul>
-        </div>
+      {grants.map(grant => (
+        <section key={`${grant.grantedByEntryId}-${grant.bundleId}`} className="m2-fieldset">
+          <h3>{grant.bundleLabel}</h3>
+          <p className="m2-muted">
+            Granted by {grant.grantedByLabel} ({grant.grantedByCategory})
+          </p>
+          {grant.automatic.length ? (
+            <>
+              <h4>Included automatically</h4>
+              <ul className="m2-plain-list">
+                {grant.automatic.map(item => (
+                  <li key={item.itemId}>
+                    {item.label}
+                    {item.quantity > 1 ? ` ×${item.quantity}` : ""} <small className="m2-muted">({item.status})</small>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {grant.choices.map(choice => {
+            const selected = build.equipmentSelections[choice.choiceId] ?? [];
+            return (
+              <fieldset className="m2-fieldset" key={choice.choiceId}>
+                <legend>
+                  {choice.label}
+                  <small className="m2-muted">
+                    {" "}
+                    choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
+                  </small>
+                </legend>
+                <ul className="m2-options">
+                  {choice.options.map(option => (
+                    <li key={option.id}>
+                      <button
+                        type="button"
+                        className={selected.includes(option.id) ? "m2-option m2-option-selected" : "m2-option"}
+                        aria-pressed={selected.includes(option.id)}
+                        onClick={() =>
+                          onChange(current => ({
+                            equipmentSelections: { ...current.equipmentSelections, [choice.choiceId]: [option.id] },
+                          }))
+                        }
+                      >
+                        <span className="m2-option-mark" aria-hidden="true">
+                          {selected.includes(option.id) ? <Check /> : "○"}
+                        </span>
+                        <span>
+                          <b>{option.label}</b>
+                          {/* The contents, before the decision, not after it. */}
+                          <small>
+                            {option.contents.length
+                              ? option.contents
+                                  .map(item => `${item.label}${item.quantity > 1 ? ` ×${item.quantity}` : ""}`)
+                                  .join(", ")
+                              : "Nothing"}
+                          </small>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </fieldset>
+            );
+          })}
+        </section>
       ))}
-      {choices.map(choice => {
-        const selected = build.equipmentSelections[choice.choiceId] ?? [];
-        return (
-          <fieldset className="m2-fieldset" key={choice.choiceId}>
-            <legend>{choice.label}</legend>
-            <ul className="m2-options">
-              {choice.options.map(option => (
-                <li key={option.id}>
-                  <button
-                    type="button"
-                    className={selected.includes(option.id) ? "m2-option m2-option-selected" : "m2-option"}
-                    aria-pressed={selected.includes(option.id)}
-                    onClick={() =>
-                      onChange(current => ({
-                        equipmentSelections: { ...current.equipmentSelections, [choice.choiceId]: [option.id] },
-                      }))
-                    }
-                  >
-                    <span className="m2-option-mark" aria-hidden="true">
-                      {selected.includes(option.id) ? <Check /> : "○"}
-                    </span>
-                    <span>
-                      <b>{option.label}</b>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </fieldset>
-        );
-      })}
+      {entries.length ? null : <p className="m2-muted">This ruleset activates no content.</p>}
     </div>
   );
 }
@@ -1073,6 +1457,15 @@ function ReviewStep({
   const name = (id: string | undefined) => (id ? entries.find(entry => entry.id === id)?.name ?? id : "Not chosen");
   const errors = plan.issues.filter(issue => issue.severity === "error");
   const warnings = plan.issues.filter(issue => issue.severity !== "error");
+  const equipment = selectedEquipmentFor(plan.equipmentGrants, build.equipmentSelections);
+
+  /** Proficiencies grouped by the entry that grants them. */
+  const bySource = new Map<string, { label: string; grants: typeof plan.proficiencies.grants }>();
+  for (const grant of plan.proficiencies.grants) {
+    const existing = bySource.get(grant.source.entryId);
+    if (existing) bySource.set(grant.source.entryId, { label: existing.label, grants: [...existing.grants, grant] });
+    else bySource.set(grant.source.entryId, { label: grant.source.entryLabel, grants: [grant] });
+  }
 
   return (
     <div className="m2-step">
@@ -1084,7 +1477,10 @@ function ReviewStep({
         </div>
         <div>
           <dt>Class</dt>
-          <dd>{name(build.classId)}</dd>
+          <dd>
+            {name(build.classId)}
+            {plan.subclass?.valid && build.subclassId ? ` · ${name(build.subclassId)}` : ""}
+          </dd>
         </div>
         <div>
           <dt>Origin</dt>
@@ -1121,17 +1517,52 @@ function ReviewStep({
         value and is never described as rules-derived.
       </p>
 
-      <h4>Choices by step</h4>
+      <h4>Choices by source</h4>
       <ul className="m2-plain-list">
         {plan.requiredChoices.map(choice => (
           <li key={choice.choiceId}>
-            <b>{choice.label}</b>:{" "}
+            <b>{choice.label}</b> <small className="m2-muted">({choice.sourceLabel})</small>:{" "}
             {choice.selected.length
               ? choice.selected.map(id => choice.options.find(option => option.id === id)?.label ?? id).join(", ")
               : "Not chosen"}
           </li>
         ))}
       </ul>
+
+      <h4>Proficiencies by source</h4>
+      {bySource.size ? (
+        <ul className="m2-plain-list">
+          {[...bySource.entries()].map(([entryId, group]) => (
+            <li key={entryId}>
+              <b>{group.label}</b>
+              <ul className="m2-plain-list">
+                {group.grants.map(grant => (
+                  <li key={`${grant.proficiencyId}-${grant.choiceId ?? "auto"}`}>
+                    {grant.label} —{" "}
+                    {grant.kind === "automatic" ? "automatic" : `chosen in ${grant.choiceLabel ?? grant.choiceId}`}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m2-muted">No proficiencies are granted yet.</p>
+      )}
+
+      <h4>Equipment</h4>
+      {equipment.length ? (
+        <ul className="m2-plain-list">
+          {equipment.map(item => (
+            <li key={`${item.itemId}-${item.status}`}>
+              {item.label}
+              {item.quantity > 1 ? ` ×${item.quantity}` : ""} <small className="m2-muted">({item.status})</small>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m2-muted">Nothing in this build grants starting equipment.</p>
+      )}
 
       <h4>Issues by severity</h4>
       {errors.length ? (

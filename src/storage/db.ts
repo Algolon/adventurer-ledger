@@ -1,5 +1,5 @@
 import Dexie,{type EntityTable,type Transaction}from"dexie";
-import type{Character,CharacterSnapshot,CharacterVersion,ContentEntry,ContentEntryVersion,ContentPack,ContentPackVersion,MigrationRecord,OverrideDecision,RulesetProfile,Source,ValidationIssue}from"@/src/domain/model";
+import type{AppPreference,Character,CharacterSnapshot,CharacterVersion,ContentEntry,ContentEntryVersion,ContentPack,ContentPackVersion,MigrationRecord,OverrideDecision,RulesetProfile,Source,ValidationIssue}from"@/src/domain/model";
 import type{CharacterActionRecord,CharacterDerivedSnapshotRecord,CharacterDraftRecord,CharacterOverrideRecord,CharacterRecord,CharacterRuntimeStateRecord,CharacterSnapshotRecord,CharacterVersionRecord}from"@/src/domain/character-record";
 import {inferPackCoverage,migrateContentEntryToV2}from"@/src/migrations/content-pack-v2";
 import {upgradeCharactersToM21}from"@/src/migrations/character-m2-1";
@@ -23,6 +23,8 @@ export class LedgerDB extends Dexie{
   validationIssues!:EntityTable<ValidationIssue,"id">;
   overrideDecisions!:EntityTable<OverrideDecision,"id">;
   migrationRecords!:EntityTable<MigrationRecord,"id">;
+  /** Explicit local decisions, such as which ruleset is active. */
+  appPreferences!:EntityTable<AppPreference,"key">;
 
   constructor(name="adventurer-ledger"){
     super(name);
@@ -49,6 +51,10 @@ export class LedgerDB extends Dexie{
       characterOverrides:"id,characterId,targetPath,status,[characterId+targetPath]",
       characterDerivedSnapshots:"characterId,characterRevision,updatedAt",
     }).upgrade(transaction=>upgradeCharactersToM21(transaction as Transaction));
+    // M2.1a: an explicitly recorded active ruleset. Additive only — no existing
+    // record is read or rewritten, and an absent preference simply means the
+    // user has not chosen yet, which the builder asks about rather than guesses.
+    this.version(6).stores({appPreferences:"key,updatedAt"});
   }
 }
 

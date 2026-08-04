@@ -19,7 +19,7 @@ import type {
   CharacterSnapshotRecord,
   CharacterVersionRecord,
 } from "@/src/domain/character-record";
-import type { ContentEntry, ID, RulesetProfile } from "@/src/domain/model";
+import type { ContentEntry, ContentPack, ID, ISODate, RulesetProfile } from "@/src/domain/model";
 import type { LedgerDB } from "@/src/storage/db";
 
 export interface CharacterRepository {
@@ -94,6 +94,21 @@ export interface ContentQueryPort {
   listEntries(): Promise<ContentEntry[]>;
   getRuleset(id: ID): Promise<RulesetProfile | undefined>;
   listRulesets(): Promise<RulesetProfile[]>;
+  listPacks(): Promise<ContentPack[]>;
+}
+
+/**
+ * Ruleset profile writes and the explicit active-ruleset decision.
+ *
+ * Separate from the read port because installing a ruleset is a mutation the
+ * content services own, while every planner and the resolver only ever read.
+ */
+export interface RulesetWritePort {
+  put(profile: RulesetProfile): Promise<void>;
+  /** The explicitly chosen ruleset, or undefined when the user has not chosen. */
+  getActiveRulesetId(): Promise<ID | undefined>;
+  setActiveRulesetId(id: ID, now: ISODate): Promise<void>;
+  clearActiveRulesetId(): Promise<void>;
 }
 
 export class DexieCharacterRepository implements CharacterRepository {
@@ -255,6 +270,34 @@ export class DexieContentQueryPort implements ContentQueryPort {
   listRulesets() {
     return this.database.rulesetProfiles.toArray();
   }
+  listPacks() {
+    return this.database.contentPacks.toArray();
+  }
+}
+
+const ACTIVE_RULESET_KEY = "activeRulesetId" as const;
+
+export class DexieRulesetWritePort implements RulesetWritePort {
+  constructor(private readonly database: LedgerDB) {}
+  async put(profile: RulesetProfile) {
+    await this.database.rulesetProfiles.put(profile);
+  }
+  async getActiveRulesetId() {
+    const stored = await this.database.appPreferences.get(ACTIVE_RULESET_KEY);
+    return stored?.value;
+  }
+  async setActiveRulesetId(id: ID, now: ISODate) {
+    const existing = await this.database.appPreferences.get(ACTIVE_RULESET_KEY);
+    await this.database.appPreferences.put({
+      key: ACTIVE_RULESET_KEY,
+      value: id,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+  }
+  async clearActiveRulesetId() {
+    await this.database.appPreferences.delete(ACTIVE_RULESET_KEY);
+  }
 }
 
 /** Every repository a character service may need, wired to one database instance. */
@@ -268,6 +311,7 @@ export interface CharacterRepositories {
   overrides: CharacterOverrideRepository;
   derivedSnapshots: CharacterDerivedSnapshotRepository;
   content: ContentQueryPort;
+  rulesets: RulesetWritePort;
 }
 
 export function createCharacterRepositories(database: LedgerDB): CharacterRepositories {
@@ -281,5 +325,6 @@ export function createCharacterRepositories(database: LedgerDB): CharacterReposi
     overrides: new DexieCharacterOverrideRepository(database),
     derivedSnapshots: new DexieCharacterDerivedSnapshotRepository(database),
     content: new DexieContentQueryPort(database),
+    rulesets: new DexieRulesetWritePort(database),
   };
 }

@@ -216,6 +216,149 @@ export function equipmentChoicesFor(
   return choices;
 }
 
+export interface EquipmentItemView {
+  itemId: ID;
+  label: string;
+  quantity: number;
+  status: "granted" | "carried" | "equipped";
+}
+
+export interface EquipmentOptionView {
+  id: ID;
+  label: string;
+  /** What the package actually contains, so it is legible before selection. */
+  contents: readonly EquipmentItemView[];
+}
+
+export interface EquipmentChoiceDetailView {
+  choiceId: ID;
+  label: string;
+  min: number;
+  max: number;
+  options: readonly EquipmentOptionView[];
+}
+
+export interface EquipmentGrantView {
+  bundleId: ID;
+  bundleLabel: string;
+  /** The entry that grants the bundle, so class and origin kit are told apart. */
+  grantedByEntryId: ID;
+  grantedByLabel: string;
+  grantedByCategory: ContentEntry["category"];
+  /** Items the bundle grants with no decision attached. */
+  automatic: readonly EquipmentItemView[];
+  choices: readonly EquipmentChoiceDetailView[];
+}
+
+/** Bundle IDs one entry requests, whether by effect or by background mechanics. */
+function requestedBundleIds(entry: ContentEntry): ID[] {
+  const requested: ID[] = [];
+  for (const effect of entry.effects) if (effect.type === "grantEquipmentBundle") requested.push(effect.bundleId);
+  const declared = (entry.mechanics as { equipmentBundleIds?: unknown }).equipmentBundleIds;
+  if (Array.isArray(declared)) for (const id of declared) if (typeof id === "string") requested.push(id);
+  return requested;
+}
+
+/**
+ * Everything the build's granted equipment bundles contain, attributed to the
+ * entry that grants each one.
+ *
+ * The builder needs more than the list of decisions: it has to show what is
+ * given automatically and what each selectable package holds, from every
+ * granting source rather than the class alone. Walking the bundle tree here
+ * keeps that presentation and the resolver reading the same declarations.
+ */
+export function equipmentGrantsFor(
+  grantingEntries: readonly ContentEntry[],
+  allEntries: readonly ContentEntry[],
+): EquipmentGrantView[] {
+  const byId = new Map(allEntries.map(entry => [entry.id, entry]));
+  const definitions = new Map(
+    allEntries.flatMap(entry => (entry.equipmentBundles ?? []).map(bundle => [bundle.id, bundle] as const)),
+  );
+  const itemView = (node: { itemId: ID; quantity: number; status: EquipmentItemView["status"] }): EquipmentItemView => ({
+    itemId: node.itemId,
+    label: byId.get(node.itemId)?.name ?? node.itemId,
+    quantity: node.quantity,
+    status: node.status,
+  });
+
+  const collectItems = (nodes: readonly import("@/src/domain/model").EquipmentBundleNode[]): EquipmentItemView[] => {
+    const items: EquipmentItemView[] = [];
+    for (const node of nodes) {
+      if (node.type === "item") items.push(itemView(node));
+      else if (node.type === "bundle") items.push(...collectItems(node.entries));
+    }
+    return items;
+  };
+
+  const views: EquipmentGrantView[] = [];
+  const seen = new Set<string>();
+  for (const entry of grantingEntries) {
+    for (const bundleId of requestedBundleIds(entry)) {
+      const key = `${entry.id} ${bundleId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const bundle = definitions.get(bundleId);
+      if (!bundle) continue;
+      const choices: EquipmentChoiceDetailView[] = [];
+      const walk = (nodes: readonly import("@/src/domain/model").EquipmentBundleNode[]) => {
+        for (const node of nodes) {
+          if (node.type === "bundle") walk(node.entries);
+          else if (node.type === "choice") {
+            choices.push({
+              choiceId: node.id,
+              label: node.label,
+              min: node.min,
+              max: node.max,
+              options: node.options.map(option => ({
+                id: option.id,
+                label: option.label,
+                contents: collectItems(option.entries),
+              })),
+            });
+            // A package may itself contain a further decision.
+            for (const option of node.options) walk(option.entries);
+          }
+        }
+      };
+      walk(bundle.entries);
+      views.push({
+        bundleId: bundle.id,
+        bundleLabel: bundle.label,
+        grantedByEntryId: entry.id,
+        grantedByLabel: entry.name,
+        grantedByCategory: entry.category,
+        automatic: collectItems(bundle.entries),
+        choices,
+      });
+    }
+  }
+  return views;
+}
+
+/**
+ * The equipment a build would actually end up with: every automatic grant plus
+ * the contents of each selected package. Review shows this, so what is
+ * committed is what was read.
+ */
+export function selectedEquipmentFor(
+  grants: readonly EquipmentGrantView[],
+  selections: Readonly<Record<ID, readonly ID[]>>,
+): EquipmentItemView[] {
+  const items: EquipmentItemView[] = [];
+  for (const grant of grants) {
+    // `automatic` already excludes anything an option supplies, because
+    // `collectItems` does not descend into choice nodes.
+    items.push(...grant.automatic);
+    const chosenIds = new Set(grant.choices.flatMap(choice => selections[choice.choiceId] ?? []));
+    for (const choice of grant.choices)
+      for (const option of choice.options)
+        if (chosenIds.has(option.id)) items.push(...option.contents);
+  }
+  return items;
+}
+
 /** The entries whose effects and bundles a build activates, for planning. */
 export function grantingEntriesFor(
   ids: readonly (ID | undefined)[],

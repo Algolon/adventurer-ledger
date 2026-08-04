@@ -23,6 +23,7 @@ import { PlaySheet } from "@/src/ui/play-sheet";
 import { LevelUpDialog } from "@/src/ui/level-up-dialog";
 import { SettingsView } from "@/src/ui/settings-view";
 import { TransferPanel } from "@/src/ui/transfer-panel";
+import type { RulesetSelection } from "@/src/services/content-install-service";
 import "./m2.css";
 
 type View = "characters" | "sheet" | "compendium" | "settings" | "transfer";
@@ -42,28 +43,43 @@ export default function Home() {
 }
 
 function Shell() {
-  const { drafts, query, library, refresh } = useServices();
+  const { drafts, query, library, install, refresh } = useServices();
   const [view, setView] = useState<View>("characters");
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
   const [levelUpFor, setLevelUpFor] = useState<string | null>(null);
+  /** Set when more than one usable ruleset exists and none has been activated. */
+  const [rulesetChoice, setRulesetChoice] = useState<RulesetSelection | null>(null);
 
-  /** The ruleset a new build starts in: whichever profile is installed. */
-  const defaultRulesetId = useCallback(async () => {
-    const installed = await query.rulesets();
-    return installed[0]?.id;
-  }, [query]);
+  const createDraft = useCallback(
+    async (rulesetProfileId: string) => {
+      const draftId = `draft:${Date.now().toString(36)}`;
+      const outcome = await drafts.create({ draftId, rulesetProfileId, level: 1, presentation: "guided" });
+      if (outcome.status === "ok") {
+        setRulesetChoice(null);
+        setBuilderDraftId(draftId);
+        refresh();
+      }
+    },
+    [drafts, refresh],
+  );
 
+  /**
+   * Starting a build needs a ruleset, and there is no honest way to guess one.
+   *
+   * The service answers with an activated profile, the single usable profile, or
+   * an explicit ambiguity. Taking the first row of a list instead would let
+   * alphabetical order decide which content a character is built against — the
+   * exact failure that left imported content unreachable.
+   */
   const startNewCharacter = useCallback(async () => {
-    const rulesetProfileId = await defaultRulesetId();
-    if (!rulesetProfileId) return;
-    const draftId = `draft:${Date.now().toString(36)}`;
-    const outcome = await drafts.create({ draftId, rulesetProfileId, level: 1, presentation: "guided" });
-    if (outcome.status === "ok") {
-      setBuilderDraftId(draftId);
-      refresh();
+    const selection = await install.resolveStartingRuleset();
+    if (selection.kind === "resolved") {
+      await createDraft(selection.rulesetId);
+      return;
     }
-  }, [defaultRulesetId, drafts, refresh]);
+    setRulesetChoice(selection);
+  }, [createDraft, install]);
 
   const navigate = useCallback(
     (destination: LibraryDestination) => {
@@ -80,15 +96,15 @@ function Shell() {
           return;
         case "edit": {
           // Editing a committed character opens a draft bound to it, in that
-          // character's own ruleset.
+          // character's own ruleset — never in whichever ruleset happens to be
+          // active now, which would rescope the build it is editing.
           const draftId = `draft:edit:${destination.characterId}`;
           void query.sheet(destination.characterId).then(async sheet => {
-            const rulesetProfileId = sheet?.activeRulesetId ?? (await defaultRulesetId());
-            if (!rulesetProfileId) return;
+            if (!sheet) return;
             await drafts.create({
               draftId,
-              rulesetProfileId,
-              level: 1,
+              rulesetProfileId: sheet.activeRulesetId,
+              level: sheet.level,
               presentation: "guided",
               editingCharacterId: destination.characterId,
             });
@@ -119,7 +135,7 @@ function Shell() {
           return;
       }
     },
-    [defaultRulesetId, drafts, library, query, refresh, startNewCharacter],
+    [drafts, library, query, refresh, startNewCharacter],
   );
 
   // A modal task owns the whole surface and supplies its own task footer.
@@ -175,7 +191,19 @@ function Shell() {
       </nav>
 
       <main className="m2-main" id="main">
-        {modalTask && builderDraftId ? (
+        {rulesetChoice ? (
+          <RulesetChoice
+            selection={rulesetChoice}
+            onChoose={id => {
+              void install.activate(id).then(() => createDraft(id));
+            }}
+            onCancel={() => setRulesetChoice(null)}
+            onOpenCompendium={() => {
+              setRulesetChoice(null);
+              setView("compendium");
+            }}
+          />
+        ) : modalTask && builderDraftId ? (
           <CharacterBuilder
             draftId={builderDraftId}
             onClose={() => {
@@ -230,7 +258,7 @@ function Shell() {
         )}
       </main>
 
-      {levelUpFor ? (
+      {levelUpFor && !rulesetChoice ? (
         <LevelUpDialog
           characterId={levelUpFor}
           onClose={() => setLevelUpFor(null)}
@@ -242,5 +270,76 @@ function Shell() {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The explicit ruleset question.
+ *
+ * It appears only when the app genuinely cannot answer it: nothing installed, or
+ * more than one usable ruleset with none activated. The chosen profile is
+ * activated, so the question is asked once rather than at every new character.
+ */
+function RulesetChoice({
+  selection,
+  onChoose,
+  onCancel,
+  onOpenCompendium,
+}: {
+  selection: RulesetSelection;
+  onChoose(rulesetId: string): void;
+  onCancel(): void;
+  onOpenCompendium(): void;
+}) {
+  if (selection.kind === "none")
+    return (
+      <section className="m2-page">
+        <h2 className="m2-page-title">Choose a ruleset</h2>
+        <div className="m2-empty">
+          <BookOpen aria-hidden="true" className="m2-empty-icon" />
+          <h3>No ruleset is installed</h3>
+          <p>
+            A character is built against a ruleset, which decides which classes, origins and equipment exist. Import a
+            content pack and create its ruleset to start.
+          </p>
+          <button type="button" className="m2-button m2-button-primary" onClick={onOpenCompendium}>
+            Go to Compendium
+          </button>
+          <button type="button" className="m2-button m2-button-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </section>
+    );
+
+  const options = selection.kind === "ambiguous" ? selection.options : [];
+  return (
+    <section className="m2-page">
+      <h2 className="m2-page-title">Choose a ruleset</h2>
+      <p className="m2-muted">
+        More than one ruleset is installed. Pick the one this character is built against; it stays selected for the
+        next character too, and you can change it on the first step of any build.
+      </p>
+      <ul className="m2-options">
+        {options.map(option => (
+          <li key={option.id}>
+            <button type="button" className="m2-option" onClick={() => onChoose(option.id)}>
+              <span className="m2-option-mark" aria-hidden="true">
+                ○
+              </span>
+              <span>
+                <b>{option.name}</b>
+                <small>
+                  {option.entryCount} entries · levels 1–{option.maxSupportedLevel}
+                </small>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="m2-button m2-button-secondary" onClick={onCancel}>
+        Cancel
+      </button>
+    </section>
   );
 }

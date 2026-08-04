@@ -102,7 +102,7 @@ describe("character fingerprint", () => {
     const swapped = fingerprint({
       choiceSelections: {
         ...base.choiceSelections,
-        [SYNTHETIC_CHOICES.classSkills]: ["option:proficiency:skill-haulage", "option:proficiency:skill-watchcraft"],
+        [SYNTHETIC_CHOICES.classSkills]: ["option:proficiency:skill-haulage", "option:proficiency:skill-riverlore"],
       },
       tags: [],
     });
