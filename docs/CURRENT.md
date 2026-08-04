@@ -132,12 +132,28 @@ A merge-readiness review of the above found eight defects. They are corrected in
 place rather than deferred, because each one is a case where the product was
 confidently wrong rather than merely incomplete.
 
-**Changing the ruleset is previewed before it is written.** Selecting another
-ruleset now produces a non-writing preview — what would be cleared, what stays,
-what is recalculated — and offers Cancel and Switch ruleset. Cancel writes
-nothing. Confirmation sends the revision the preview was computed at, so an
-autosave landing in between makes the confirmation stale instead of reviving a
-value the change had cleared.
+**Changing the ruleset is previewed before it is written, and decided per
+value.** Selecting another ruleset produces a non-writing preview — what would be
+cleared, what stays, what is recalculated, and what would be left needing repair
+— and offers `Keep current ruleset` and `Switch ruleset`. Keeping writes nothing.
+Confirmation sends the revision the preview was computed at, so an autosave
+landing in between makes the confirmation stale instead of reviving a value the
+change had cleared.
+
+A ruleset ID changing is not by itself a reason to discard a selection. Two
+profiles can scope the same entries, so `resolveRulesetChange` checks each value
+against the content the *target* ruleset actually resolves: the entry has to be
+present, under a category its field can mean, and a stored choice's options have
+to still be offered by a choice the target build reaches. A class the incoming
+ruleset still defines survives; one it does not is cleared and named. The preview
+and the write are one pass over the same inputs, so what was read and what is
+written cannot differ. A target level the incoming content cannot reach is
+reported as a conflict to repair rather than silently lowered.
+
+Switching *this* build's ruleset no longer repoints the device-wide default for
+future characters. That default is changed only from Settings, with
+`Use this ruleset for new characters`, where it is the subject of the action
+rather than an unannounced side effect of an unrelated one.
 
 **Origin ability increases cannot outlive the origin that authorised them.**
 `reconcileAbilityAllocation` validates the stored allocation against the pattern

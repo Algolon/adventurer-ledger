@@ -35,7 +35,7 @@ import {
 } from "@/tests/fixtures/acceptance-ruleset";
 import { SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
 import type { CharacterDraftBuild } from "@/src/domain/character-record";
-import type { ContentEntry } from "@/src/domain/model";
+import type { ContentEntry, ID, RulesetProfile } from "@/src/domain/model";
 import type { CommitResult, DraftSnapshot } from "@/src/services/character-services";
 import type { RulesetChangePreview } from "@/src/services/ruleset-change";
 import { reconcileAbilityAllocation } from "@/src/services/ability-allocation";
@@ -837,5 +837,197 @@ describe("a delayed or out-of-order save cannot resurrect an older value", () =>
     );
     const sheet = await harness.query.sheet(result.characterId);
     expect(sheet?.name).toBe("Wren Halloway of the Low Crossing");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 10 — a ruleset change is evaluated per value, not per ruleset ID      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A second profile over the same installed content.
+ *
+ * Two profiles scoping the same entries is the case that separates "the ruleset
+ * ID changed" from "this value is no longer valid". Excluding entries from the
+ * sibling makes exactly those values incompatible and leaves the rest resolvable,
+ * which is what lets a test assert that only the incompatible ones are cleared.
+ */
+async function installSiblingRuleset(
+  id: ID,
+  { without = [] as readonly ID[], name = "Acceptance sibling" } = {},
+): Promise<RulesetProfile> {
+  const source = await harness.context.repositories.content.getRuleset(ACCEPTANCE_RULESET_ID);
+  if (!source) throw new Error("The acceptance ruleset was not installed");
+  const excluded = new Set(without);
+  const profile: RulesetProfile = {
+    ...source,
+    id,
+    name,
+    ...(source.allowedEntryIds
+      ? { allowedEntryIds: source.allowedEntryIds.filter(entryId => !excluded.has(entryId)) }
+      : {}),
+    disallowedEntryIds: [...(source.disallowedEntryIds ?? []), ...excluded],
+  };
+  await harness.context.repositories.rulesets.put(profile);
+  return profile;
+}
+
+const pathsOf = (fields: readonly { fieldPath: string }[]) => fields.map(field => field.fieldPath);
+
+describe("a ruleset change is evaluated per value, not per ruleset ID", () => {
+  it("clears nothing when the target ruleset resolves the same content", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:acceptance-sibling");
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:acceptance-sibling"),
+    );
+
+    expect(preview.noop).toBe(false);
+    // The ID changed; not one value became invalid because of it.
+    expect(preview.cleared).toEqual([]);
+    expect(pathsOf(preview.retained)).toEqual(
+      expect.arrayContaining(["classId", "subclassId", "speciesId", "backgroundId"]),
+    );
+  });
+
+  it("keeps the compatible selections through the confirmed write", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:acceptance-sibling");
+
+    const switched = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:acceptance-sibling"),
+    );
+
+    expect(switched.draft.rulesetProfileId).toBe("ruleset:acceptance-sibling");
+    expect(switched.draft.build.classId).toBe(ACCEPTANCE_IDS.class);
+    expect(switched.draft.build.subclassId).toBe(ACCEPTANCE_IDS.subclassWatch);
+    expect(switched.draft.build.speciesId).toBe(ACCEPTANCE_IDS.species);
+    expect(switched.draft.build.backgroundId).toBe(ACCEPTANCE_IDS.background);
+    expect(switched.draft.build.choiceSelections).toEqual(seeded.draft.build.choiceSelections);
+    expect(switched.draft.build.equipmentSelections).toEqual(seeded.draft.build.equipmentSelections);
+    // The origin survived, so the increases it authorised survive with it.
+    expect(switched.draft.build.abilityIncreases).toEqual({ strength: 2, wisdom: 1 });
+    expect(switched.draft.build.abilityScores.strength).toBe(17);
+  });
+
+  it("clears only the value the target ruleset drops", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:no-background", { without: [ACCEPTANCE_IDS.background] });
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:no-background"),
+    );
+
+    expect(pathsOf(preview.cleared)).toContain("backgroundId");
+    expect(pathsOf(preview.cleared)).not.toContain("classId");
+    expect(pathsOf(preview.retained)).toEqual(expect.arrayContaining(["classId", "speciesId"]));
+    // The background authorised the increases, so they are recomputed, not kept.
+    expect(pathsOf(preview.recomputed)).toContain("abilityIncreases");
+
+    const switched = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:no-background"),
+    );
+    expect(switched.draft.build.backgroundId).toBeUndefined();
+    expect(switched.draft.build.classId).toBe(ACCEPTANCE_IDS.class);
+    expect(switched.draft.build.abilityIncreases).toEqual({});
+    // Finals fall back to the base scores rather than keeping the increase.
+    expect(switched.draft.build.abilityScores.strength).toBe(15);
+    expect(switched.draft.build.abilityScores.wisdom).toBe(10);
+  });
+
+  it("clears a subclass whose class the target ruleset drops", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:no-class", { without: [ACCEPTANCE_IDS.class] });
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:no-class"),
+    );
+
+    expect(pathsOf(preview.cleared)).toEqual(expect.arrayContaining(["classId", "subclassId"]));
+    expect(pathsOf(preview.retained)).toContain("speciesId");
+  });
+
+  it("reports a target level the incoming content cannot reach, and does not lower it", async () => {
+    const seeded = await seedDraft(completeBuild());
+    // Only the deliberately short class remains, so level 5 is unreachable.
+    await installSiblingRuleset("ruleset:short-only", { without: [ACCEPTANCE_IDS.class] });
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:short-only"),
+    );
+    expect(pathsOf(preview.conflicts)).toContain("level");
+
+    const switched = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:short-only"),
+    );
+    // The level the user chose is theirs to change; it is reported, not rewritten.
+    expect(switched.draft.build.level).toBe(5);
+  });
+
+  it("writes nothing when the preview is only read", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:no-background", { without: [ACCEPTANCE_IDS.background] });
+
+    expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:no-background"),
+    );
+
+    const after = await harness.context.repositories.drafts.get(seeded.draft.id);
+    expect(after?.revision).toBe(seeded.revision);
+    expect(after?.rulesetProfileId).toBe(ACCEPTANCE_RULESET_ID);
+    expect(after?.build.backgroundId).toBe(ACCEPTANCE_IDS.background);
+  });
+
+  it("does not repoint the device-wide default ruleset", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:acceptance-sibling");
+    const before = await harness.install.activeRulesetId();
+
+    expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:acceptance-sibling"),
+    );
+
+    // Which ruleset one build is in is not a decision about future builds.
+    expect(await harness.install.activeRulesetId()).toBe(before);
+    expect(await harness.install.activeRulesetId()).not.toBe("ruleset:acceptance-sibling");
+  });
+});
+
+describe("an origin increase the active pattern does not offer is never effective", () => {
+  /** The acceptance entries with the background offering only other abilities. */
+  function backgroundOffering(abilities: readonly string[]): ContentEntry[] {
+    return ACCEPTANCE_ENTRIES.map(entry => {
+      if (entry.id !== ACCEPTANCE_IDS.background) return entry;
+      const mechanics = entry.mechanics as { abilityScoreChoices: { increasePattern: number[] } };
+      return {
+        ...entry,
+        mechanics: {
+          ...mechanics,
+          abilityScoreChoices: { abilities: [...abilities], increasePattern: [...mechanics.abilityScoreChoices.increasePattern] },
+        },
+      } as ContentEntry;
+    });
+  }
+
+  it("drops a stale Wisdom increase into a background that permits only other abilities", () => {
+    // The draft was built where Wisdom was offered; the active background is not.
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityIncreases: { wisdom: 2 },
+      abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+      abilityScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 12, charisma: 8 },
+    };
+    const entries = backgroundOffering(["intelligence", "charisma", "dexterity"]);
+
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    expect(allocation.invalid.map(item => item.ability)).toEqual(["wisdom"]);
+    expect(allocation.increases.wisdom).toBeUndefined();
+    // The stale increase is gone from the score the sheet actually reads.
+    expect(allocation.final.wisdom).toBe(10);
+
+    const plan = planBuild(build, entries, "guided");
+    expect(plan.issues.map(issue => issue.code)).toContain("ORIGIN_INCREASE_NOT_AVAILABLE");
   });
 });

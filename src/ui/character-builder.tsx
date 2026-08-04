@@ -362,8 +362,12 @@ export function CharacterBuilder({
     setSnapshot(outcome.result);
     setRulesetChange(null);
     setSaveError(null);
-    // The activation is an explicit decision, so it is remembered for next time.
-    await install.activate(preview.proposedRulesetId);
+    // Deliberately no `install.activate` here. Which ruleset *this* build is in
+    // is a property of this build; the device-wide default decides what future
+    // characters start in. Repointing that from inside one builder made an
+    // unrelated, unasked-for and unannounced change on every later New character,
+    // so the default is now only changed from Settings, where it is the subject
+    // of the action rather than a side effect of it.
     refresh();
   };
 
@@ -589,6 +593,17 @@ function RulesetChangeConfirmation({
             </>
           ) : null}
 
+          {preview.conflicts.length ? (
+            <>
+              <h4>This will need repairing</h4>
+              <ul className="m2-plain-list m2-issue-errors">
+                {preview.conflicts.map(field => (
+                  <li key={field.fieldPath}>{field.label}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+
           {preview.retained.length ? (
             <>
               <h4>This is kept</h4>
@@ -599,11 +614,13 @@ function RulesetChangeConfirmation({
               </ul>
             </>
           ) : null}
+
+          <p className="m2-muted">Your device&rsquo;s default ruleset for new characters is not changed.</p>
         </div>
 
         <div className="m2-confirm-actions">
           <button type="button" className="m2-button m2-button-secondary" ref={cancelRef} onClick={onCancel}>
-            Cancel
+            Keep current ruleset
           </button>
           <button type="button" className="m2-button m2-button-primary" onClick={onConfirm}>
             Switch ruleset

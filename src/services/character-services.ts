@@ -175,7 +175,10 @@ export class CharacterDraftService {
       return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: draftId, severity: "error" }]);
     const proposed = await repositories.content.getRuleset(rulesetProfileId);
     if (!proposed) return notFound(rulesetProfileId);
-    const scope = await loadRulesetScope(repositories, current.rulesetProfileId);
+    const [scope, proposedScope] = await Promise.all([
+      loadRulesetScope(repositories, current.rulesetProfileId),
+      loadRulesetScope(repositories, rulesetProfileId),
+    ]);
     return ok(
       planRulesetChange({
         draftId,
@@ -185,6 +188,7 @@ export class CharacterDraftService {
         currentRulesetId: current.rulesetProfileId,
         currentEntries: scope.entries,
         proposedRuleset: proposed,
+        proposedEntries: proposedScope.entries,
       }),
     );
   }
@@ -193,14 +197,17 @@ export class CharacterDraftService {
    * Moves a draft to a different installed ruleset.
    *
    * This is the write half of the two-phase change `previewRulesetChange`
-   * describes. Every content-scoped selection is cleared in the same write: a
-   * class, species, background, subclass, choice or equipment package belongs to
-   * the ruleset that defines it, and carrying one across would leave the draft
-   * holding IDs the new ruleset does not activate — a build that looks complete
-   * and resolves to nothing. Name, level, base scores and manual values survive,
-   * because none of them depends on which ruleset is active. Origin increases do
-   * not survive: the origin that authorised them is one of the things cleared,
-   * so the allocation is recomputed against the incoming ruleset instead.
+   * describes, and it applies exactly that preview: both are one call into
+   * `resolveRulesetChange`, so what was shown and what is written cannot differ.
+   *
+   * A content-scoped selection is cleared only when the incoming ruleset does
+   * not resolve it. Carrying an ID the new ruleset never activates would leave a
+   * build that looks complete and resolves to nothing; dropping one the new
+   * ruleset does still define would destroy work for no reason. Name, level,
+   * base scores and manual values survive unconditionally, because none of them
+   * depends on which ruleset is active. Origin increases are revalidated against
+   * whichever pattern is in force afterwards, so an increase the incoming origin
+   * does not authorise is excluded from the finals rather than left baked in.
    *
    * The expected revision is validated inside the write transaction, so an
    * autosave that lands between preview and confirmation makes the confirmation
@@ -215,7 +222,16 @@ export class CharacterDraftService {
     const now = this.clock();
     const target = await repositories.content.getRuleset(rulesetProfileId);
     if (!target) return notFound(rulesetProfileId);
-    const nextScope = await loadRulesetScope(repositories, rulesetProfileId);
+    const existing = await repositories.drafts.get(draftId);
+    if (!existing) return notFound(draftId);
+    // Both scopes are read outside the write, because the resolution the user
+    // confirmed is a function of both. The revision is revalidated inside the
+    // transaction, so a draft that moved on since makes this confirmation stale
+    // rather than letting it apply against content it was not computed from.
+    const [currentScope, nextScope] = await Promise.all([
+      loadRulesetScope(repositories, existing.rulesetProfileId),
+      loadRulesetScope(repositories, rulesetProfileId),
+    ]);
 
     const outcome = await database.transaction(
       "rw",
@@ -232,7 +248,16 @@ export class CharacterDraftService {
           ...current,
           rulesetProfileId,
           revision: current.revision + 1,
-          build: applyRulesetChange(current.build, nextScope.entries),
+          build: applyRulesetChange({
+            draftId,
+            expectedRevision,
+            build: current.build,
+            currentRuleset: currentScope.ruleset,
+            currentRulesetId: current.rulesetProfileId,
+            currentEntries: currentScope.entries,
+            proposedRuleset: target,
+            proposedEntries: nextScope.entries,
+          }),
           updatedAt: now,
         };
         const accepted = await repositories.drafts.replace(next, expectedRevision);

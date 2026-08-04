@@ -133,8 +133,8 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await expect(dialog.getByText(/Class: Beaconkeeper/)).toBeVisible();
     await expect(dialog.getByText(/Background: Ferry Clerk/)).toBeVisible();
     // Cancel is the focused default, so Enter cannot commit the destructive path.
-    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
-    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.getByRole("button", { name: "Keep current ruleset" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Keep current ruleset" }).click();
     await expect(dialog).toHaveCount(0);
 
     // The draft survives the cancel, and survives a reload of it.
@@ -182,7 +182,9 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
     const dialog = page.getByRole("alertdialog");
     // The origin increase is named as recalculated, not silently retained.
-    await expect(dialog.getByText(/final scores fall back to the base scores/)).toBeVisible();
+    await expect(dialog.getByText(/Final ability scores are recalculated/)).toBeVisible();
+    // The switch is about this build, and says so.
+    await expect(dialog.getByText(/default ruleset for new characters is not changed/)).toBeVisible();
     await dialog.getByRole("button", { name: "Switch ruleset" }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -222,7 +224,7 @@ test.describe("switching ruleset is previewed before it is written", () => {
 
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Keep current ruleset" })).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Switch ruleset" })).toBeVisible();
 
     // The document itself never scrolls sideways.
@@ -232,7 +234,7 @@ test.describe("switching ruleset is previewed before it is written", () => {
     expect(overflow).toBeLessThanOrEqual(1);
 
     // Both actions clear the 44 px target floor.
-    for (const label of ["Cancel", "Switch ruleset"]) {
+    for (const label of ["Keep current ruleset", "Switch ruleset"]) {
       const box = await dialog.getByRole("button", { name: label }).boundingBox();
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
@@ -597,5 +599,133 @@ test.describe("a ruleset says what kind of content it reaches", () => {
     await expect(
       page.getByRole("button", { name: /^Emberline acceptance slice/ }).getByText("Public content only"),
     ).toBeVisible();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+test.describe("a build's ruleset is not the device's default", () => {
+  test("switching one draft leaves the default for new characters alone", async ({ page }) => {
+    await importAcceptancePack(page);
+    await startBuild(page, "Local Switch");
+
+    // Move this one build to the other installed ruleset.
+    await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("button", { name: "Switch ruleset" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Runefolio 2024 synthetic/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Settings still names the imported pack as the device default, and the
+    // other ruleset still offers the explicit action that would change it.
+    await page.goto(APP_ROOT);
+    await openSettings(page);
+    await page.getByRole("button", { name: "Rulesets" }).click();
+    const acceptanceCard = page.locator(".m2-card").filter({ hasText: "Emberline acceptance slice" });
+    await expect(acceptanceCard.getByText("Active", { exact: true })).toBeVisible();
+    const syntheticCard = page.locator(".m2-card").filter({ hasText: "Runefolio 2024 synthetic" });
+    await expect(syntheticCard.getByText("Installed", { exact: true })).toBeVisible();
+    await expect(
+      syntheticCard.getByRole("button", { name: "Use this ruleset for new characters" }),
+    ).toBeVisible();
+
+    // And a genuinely new build still starts in the default, not in the one the
+    // previous draft was moved to.
+    await page.goto(APP_ROOT);
+    await startBuild(page, "Unaffected");
+    await expect(page.getByRole("button", { name: /^Emberline acceptance slice/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+test.describe("a pack is imported from a real file", () => {
+  test("installs through the file input, not only the pasted textarea", async ({ page }) => {
+    await page.goto(APP_ROOT);
+    await openSettings(page);
+    await page.getByRole("button", { name: "Imports and exports" }).click();
+
+    // The real control a user reaches for: a file chosen from the device.
+    await page.getByLabel("Choose JSON file").setInputFiles({
+      name: "emberline-acceptance.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(acceptancePackJson(), "utf8"),
+    });
+
+    await page.getByRole("button", { name: "Preview import" }).click();
+    await expect(page.getByRole("heading", { name: "Ready to import" })).toBeVisible();
+    await page
+      .getByLabel("Create a ruleset profile so this content can be selected in the builder")
+      .check();
+    await page.getByRole("button", { name: "Confirm atomic import" }).click();
+    await expect(page.getByText(/Import completed atomically/)).toBeVisible();
+
+    // The file's content is genuinely installed and reachable in the builder.
+    await startBuild(page, "From File");
+    await expect(page.getByRole("button", { name: /^Emberline acceptance slice/ })).toBeVisible();
+    await next(page);
+    await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toBeVisible();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+test.describe("the first step is accessible in either colour preference", () => {
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`axe reports no serious or critical violation under a ${colorScheme} preference`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme });
+      await importAcceptancePack(page);
+      await startBuild(page, `Scheme ${colorScheme}`);
+
+      const results = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+        .analyze();
+      const blocking = results.violations.filter(violation =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      );
+      expect(blocking.map(violation => violation.id)).toEqual([]);
+    });
+  }
+
+  test("reaches name, ruleset and level in that order with the keyboard alone", async ({ page }) => {
+    await importAcceptancePack(page);
+    await startBuild(page, "Tab Order");
+
+    await page.getByLabel("Character name", { exact: true }).focus();
+    // Walk forward and record what each stop actually is, rather than assuming
+    // a fixed control count that a layout change would silently invalidate.
+    const stops: string[] = [];
+    for (let step = 0; step < 20; step += 1) {
+      const identity = await page.evaluate(() => {
+        const element = document.activeElement as HTMLElement | null;
+        if (!element) return "";
+        // The accessible name, however this control happens to carry it: a form
+        // field labelled by a <label> element exposes nothing on the node itself.
+        const labelled = (element as HTMLInputElement).labels?.[0]?.textContent;
+        return (
+          element.getAttribute("aria-label") ||
+          labelled ||
+          element.textContent?.trim().slice(0, 60) ||
+          element.tagName
+        ).trim();
+      });
+      stops.push(identity);
+      await page.keyboard.press("Tab");
+    }
+
+    const at = (pattern: RegExp) => stops.findIndex(stop => pattern.test(stop));
+    const name = at(/Character name/);
+    const ruleset = at(/Emberline acceptance slice/);
+    const level = at(/Create this character at level/);
+
+    expect(name).toBeGreaterThanOrEqual(0);
+    expect(ruleset).toBeGreaterThan(name);
+    expect(level).toBeGreaterThan(ruleset);
   });
 });
