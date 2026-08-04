@@ -29,16 +29,35 @@ async function reachAbilities(page: Page) {
   await expect(page.getByText("Step 4 of 8")).toBeVisible();
 }
 
-test.describe("starting level is stated, not offered for editing", () => {
-  test("shows the level without a focusable or spinnable control", async ({ page }) => {
+/**
+ * Supersedes "starting level is stated, not offered for editing".
+ *
+ * That was correct while creation could only ever produce a level-1 character.
+ * Now that a target level is a real creation input, a fixed value would be the
+ * dishonest presentation, so the readonly-input assertion is replaced by one
+ * that the control is genuinely operable and bounded by content.
+ */
+test.describe("starting level is a real, bounded selector", () => {
+  test("offers the levels the content supports and no spinner input", async ({ page }) => {
     await openBuilder(page);
     await expect(page.getByText("Starting level")).toBeVisible();
-    await expect(page.getByText("Level 1", { exact: true })).toBeVisible();
 
-    // No number input to spin, and nothing focusable that refuses input.
-    const numberInputs = page.locator(".m2-step input[type=number]");
-    await expect(numberInputs).toHaveCount(0);
+    const level = page.getByLabel("Create at level");
+    await expect(level).toBeEnabled();
+    // Still no number spinner, and nothing focusable that refuses input.
+    await expect(page.locator(".m2-step input[type=number]")).toHaveCount(0);
     await expect(page.locator(".m2-step input[readonly]")).toHaveCount(0);
+
+    // Before a class is chosen the range cannot be derived, so the bounded span
+    // the slice supports is offered.
+    expect(await level.locator("option").allTextContents()).toEqual(["1", "2", "3", "4", "5"]);
+
+    // Once a class is chosen the range comes from that class's own progression:
+    // the synthetic Vanguard describes levels 1 and 2 and nothing beyond.
+    await next(page);
+    await page.getByRole("button", { name: /^Vanguard/ }).click();
+    await page.getByRole("button", { name: "Back" }).click();
+    expect(await page.getByLabel("Create at level").locator("option").allTextContents()).toEqual(["1", "2"]);
   });
 
   test("the review still reports the level", async ({ page }) => {

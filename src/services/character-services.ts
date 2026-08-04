@@ -163,6 +163,86 @@ export class CharacterDraftService {
     return ok(await this.snapshot(outcome.result));
   }
 
+  /**
+   * Moves a draft to another ruleset profile.
+   *
+   * Selections are content IDs, so a profile that does not supply an entry
+   * cannot honour the selection that names it. Those are reported rather than
+   * dropped: the caller shows what would be lost and calls again with
+   * `clearIncompatible` once the user has agreed. Nothing is written on the
+   * reporting pass, so cancelling leaves the draft exactly as it was.
+   */
+  async changeRuleset(
+    draftId: ID,
+    expectedRevision: number,
+    rulesetProfileId: ID,
+    options: { clearIncompatible?: boolean } = {},
+  ): Promise<ServiceOutcome<DraftSnapshot>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+    const outcome = await database.transaction(
+      "rw",
+      [database.characterDrafts, database.contentEntries, database.rulesetProfiles],
+      async (): Promise<ServiceOutcome<CharacterDraftRecord>> => {
+        const current = await repositories.drafts.get(draftId);
+        if (!current) return notFound(draftId);
+        if (current.revision !== expectedRevision) return stale(draftId, expectedRevision, current.revision);
+        if (current.rulesetProfileId === rulesetProfileId) return ok(current);
+
+        const scope = await loadRulesetScope(repositories, rulesetProfileId);
+        if (!scope.ruleset) return notFound(rulesetProfileId);
+        const available = new Set(scope.entries.map(entry => entry.id));
+
+        const build = current.build;
+        const lost: ServiceIssue[] = [];
+        const keeps = (id: ID | undefined) => !id || available.has(id);
+        if (!keeps(build.classId)) lost.push({ code: "CLASS_NOT_IN_RULESET", recordId: build.classId, severity: "error" });
+        if (!keeps(build.subclassId)) lost.push({ code: "SUBCLASS_NOT_IN_RULESET", recordId: build.subclassId, severity: "error" });
+        if (!keeps(build.speciesId)) lost.push({ code: "SPECIES_NOT_IN_RULESET", recordId: build.speciesId, severity: "error" });
+        if (!keeps(build.backgroundId)) lost.push({ code: "BACKGROUND_NOT_IN_RULESET", recordId: build.backgroundId, severity: "error" });
+        // A choice belongs to the entry that declares it; if that entry is gone
+        // the selection has nothing to attach to.
+        const choiceOwners = new Set(scope.entries.flatMap(entry => entry.choices.map(choice => choice.id)));
+        const strandedChoices = Object.keys(build.choiceSelections).filter(id => !choiceOwners.has(id));
+        for (const id of strandedChoices) lost.push({ code: "CHOICE_NOT_IN_RULESET", recordId: id, severity: "warning" });
+
+        if (lost.length && !options.clearIncompatible)
+          // Reporting pass: nothing is written, so cancelling costs nothing. The
+          // leading code marks this as "confirm to proceed", not "you are wrong".
+          return invalid([
+            { code: "RULESET_CHANGE_WOULD_DISCARD", recordId: draftId, severity: "warning" },
+            ...lost,
+          ]);
+
+        const cleared: Partial<CharacterDraftBuild> = {};
+        if (lost.length) {
+          if (!keeps(build.classId)) cleared.classId = undefined;
+          if (!keeps(build.subclassId)) cleared.subclassId = undefined;
+          if (!keeps(build.speciesId)) cleared.speciesId = undefined;
+          if (!keeps(build.backgroundId)) cleared.backgroundId = undefined;
+          if (strandedChoices.length) {
+            const selections = { ...build.choiceSelections };
+            for (const id of strandedChoices) delete selections[id];
+            cleared.choiceSelections = selections;
+          }
+        }
+
+        const next: CharacterDraftRecord = {
+          ...current,
+          rulesetProfileId,
+          revision: current.revision + 1,
+          build: { ...build, ...cleared },
+          updatedAt: now,
+        };
+        const accepted = await repositories.drafts.replace(next, expectedRevision);
+        return accepted ? ok(next) : stale(draftId, expectedRevision, null);
+      },
+    );
+    if (outcome.status !== "ok") return outcome;
+    this.log({ operation: "draft.changeRuleset", recordId: draftId, actualRevision: outcome.result.revision });
+    return ok(await this.snapshot(outcome.result));
+  }
+
   async abandon(draftId: ID, expectedRevision: number): Promise<ServiceOutcome<{ draftId: ID }>> {
     const { database, repositories } = this.context;
     const now = this.clock();

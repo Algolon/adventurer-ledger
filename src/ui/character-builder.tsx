@@ -16,6 +16,8 @@ import { BUILDER_STEPS, recommendationsFor, remainingArraySlots, type BuilderSte
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
 import type { Ability, ContentEntry } from "@/src/domain/model";
 import { standardArrayFor } from "@/src/services/content-scope";
+import { maximumLevelFor, subclassLevelFor, subclassOptionsFor } from "@/src/services/activation";
+import type { SelectableRuleset } from "@/src/services/ruleset-service";
 import { abilityModifier } from "@/src/rules/engine";
 import { signed } from "@/src/ui/primitives";
 import { requiredEquipmentChoices } from "@/src/services/build-planner";
@@ -95,6 +97,13 @@ export function CharacterBuilder({
     [rulesetId],
   );
   const entries = useMemo<ContentEntry[]>(() => (entriesState.status === "ready" ? entriesState.value : []), [entriesState]);
+  const rulesetsState = useAsync(() => query.selectableRulesets(), []);
+  const rulesets = useMemo<SelectableRuleset[]>(
+    () => (rulesetsState.status === "ready" ? rulesetsState.value : []),
+    [rulesetsState],
+  );
+  /** Pending ruleset change awaiting confirmation, with what it would discard. */
+  const [rulesetPrompt, setRulesetPrompt] = useState<{ rulesetId: string; issues: { code: string; recordId?: string }[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +162,39 @@ export function CharacterBuilder({
       return queueRef.current;
     },
     [draftId, drafts],
+  );
+
+  /**
+   * Changing ruleset asks first when it would discard work.
+   *
+   * The service reports what a change would strand without writing anything, so
+   * the confirmation is genuine: cancelling leaves the draft untouched, and
+   * only an explicit second call clears the incompatible selections.
+   */
+  const applyRulesetChange = useCallback(
+    async (rulesetId: string, clearIncompatible: boolean) => {
+      await queueRef.current;
+      if (revisionRef.current === null) return;
+      const outcome = await drafts.changeRuleset(draftId, revisionRef.current, rulesetId, { clearIncompatible });
+      if (outcome.status === "ok") {
+        revisionRef.current = outcome.result.revision;
+        snapshotRef.current = outcome.result;
+        setSnapshot(outcome.result);
+        setRulesetPrompt(null);
+        return;
+      }
+      if (outcome.status === "invalid" && outcome.issues[0]?.code === "RULESET_CHANGE_WOULD_DISCARD") {
+        setRulesetPrompt({ rulesetId, issues: outcome.issues.slice(1).map(issue => ({ code: issue.code, ...(issue.recordId ? { recordId: issue.recordId } : {}) })) });
+        return;
+      }
+      setSaveError("That ruleset could not be selected.");
+    },
+    [draftId, drafts],
+  );
+
+  const requestRulesetChange = useCallback(
+    (rulesetId: string) => void applyRulesetChange(rulesetId, false),
+    [applyRulesetChange],
   );
 
   if (!snapshot)
@@ -248,6 +290,11 @@ export function CharacterBuilder({
             Step {index + 1} of {steps.length}
           </p>
           <h2>{current.label}</h2>
+          {/* The name stays visible after the first step, so a long build never
+              loses track of who is being made. */}
+          {build.name.trim() && current.id !== "start" ? (
+            <p className="m2-builder-subject">{build.name.trim()}</p>
+          ) : null}
         </div>
         <button
           type="button"
@@ -291,6 +338,31 @@ export function CharacterBuilder({
           </span>
         </div>
       </div>
+
+      {rulesetPrompt ? (
+        <div className="m2-banner m2-banner-error" role="alert">
+          <strong>Changing ruleset will discard some choices</strong>
+          <p>These selections do not exist in the ruleset you picked:</p>
+          <ul className="m2-plain-list">
+            {rulesetPrompt.issues.map((issue, position) => (
+              <li key={`${issue.code}-${position}`}>
+                {labelFor(issue.code)}
+                {issue.recordId ? ` (${issue.recordId})` : ""}
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="m2-button m2-button-primary"
+            onClick={() => void applyRulesetChange(rulesetPrompt.rulesetId, true)}
+          >
+            Change ruleset and clear them
+          </button>
+          <button type="button" className="m2-button" onClick={() => setRulesetPrompt(null)}>
+            Keep the current ruleset
+          </button>
+        </div>
+      ) : null}
 
       {saveError ? (
         <div className="m2-banner m2-banner-error" role="alert">
@@ -344,9 +416,12 @@ export function CharacterBuilder({
           build={build}
           entries={entries}
           rulesetLabel={rulesetLabel}
+          rulesets={rulesets}
+          activeRulesetId={draft.rulesetProfileId}
           presentation={draft.presentation}
           plan={snapshot.plan}
           onChange={save}
+          onChangeRuleset={requestRulesetChange}
         />
       </div>
 
@@ -376,22 +451,164 @@ export function CharacterBuilder({
   );
 }
 
+/**
+ * The first creation step: who this is, which rules, and how far in.
+ *
+ * Name comes first and autosaves as it is typed, because a draft with no name
+ * is hard to recognise in the library and the old flow only asked for one at
+ * step 8. Ruleset is an explicit choice — the app never picks one by sort order
+ * — and starting level is a real selector bounded by the class's own
+ * progression, so a level-5 character is created as a level-5 character rather
+ * than a level 1 that is silently advanced.
+ */
+function StartStep({
+  build,
+  entries,
+  rulesetLabel,
+  rulesets,
+  activeRulesetId,
+  onChange,
+  onChangeRuleset,
+}: {
+  build: CharacterDraftBuild;
+  entries: readonly ContentEntry[];
+  rulesetLabel: string;
+  rulesets: readonly SelectableRuleset[];
+  activeRulesetId: string;
+  onChange(patch: DraftPatch): void;
+  onChangeRuleset(rulesetId: string): void;
+}) {
+  /**
+   * While this step is open the field owns the name; the draft is where it is
+   * sent, never where it is read back from.
+   *
+   * Re-syncing from the draft dropped characters. Saves are queued, so each
+   * round-trip returns the value as it was when that save started; a fast
+   * typist's later keystrokes were then overwritten by an older persisted
+   * string, turning "Wren Halloway" into "Wroway". The initial value is taken
+   * on mount, which is also what happens on returning to this step or
+   * reopening the draft.
+   */
+  const [name, setName] = useState(build.name);
+
+  const usable = rulesets.filter(item => item.usable);
+  const unusable = rulesets.filter(item => !item.usable);
+  // The class's own progression bounds the range; without a class the slice's
+  // supported span applies until one is chosen.
+  const maximum = maximumLevelFor(build, entries) ?? 5;
+  const levels = Array.from({ length: Math.max(1, maximum) }, (_, index) => index + 1);
+
+  return (
+    <div className="m2-step">
+      <div className="m2-field">
+        <label htmlFor="start-name">
+          <span>Character name</span>
+        </label>
+        <input
+          id="start-name"
+          value={name}
+          autoComplete="off"
+          onChange={event => {
+            const value = event.target.value;
+            setName(value);
+            onChange({ name: value });
+          }}
+        />
+        <p className="m2-muted">Saved as you type. You can change it at any point before or after creation.</p>
+      </div>
+
+      <fieldset className="m2-fieldset">
+        <legend>Ruleset</legend>
+        {usable.length === 0 ? (
+          <p className="m2-inline-issue" role="status">
+            <TriangleAlert aria-hidden="true" /> No installed ruleset can build a character yet. Import a content pack
+            in Settings, then activate its ruleset profile.
+          </p>
+        ) : (
+          <>
+            <div className="m2-field">
+              <label htmlFor="start-ruleset">
+                <span>Build against</span>
+              </label>
+              <select
+                id="start-ruleset"
+                value={activeRulesetId}
+                onChange={event => onChangeRuleset(event.target.value)}
+              >
+                {usable.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                    {item.publicOnly ? "" : " (includes private sources)"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="m2-muted">
+              {usable.length === 1
+                ? `Only ${rulesetLabel} is installed. Everything is stored on this device.`
+                : "Choose deliberately: the ruleset decides which classes, origins and options exist."}
+            </p>
+          </>
+        )}
+        {unusable.length ? (
+          <p className="m2-muted">
+            {unusable.length} installed profile{unusable.length === 1 ? "" : "s"} cannot start a character because
+            {unusable.length === 1 ? " it supplies" : " they supply"} no class. A newly imported pack needs its ruleset
+            profile activated before it appears here.
+          </p>
+        ) : null}
+      </fieldset>
+
+      <fieldset className="m2-fieldset">
+        <legend>Starting level</legend>
+        <div className="m2-field m2-field-inline">
+          <label htmlFor="start-level">
+            <span>Create at level</span>
+          </label>
+          <select
+            id="start-level"
+            value={build.level}
+            onChange={event => onChange({ level: Number(event.target.value) })}
+          >
+            {levels.map(level => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="m2-muted">
+          {build.level > 1
+            ? `Every choice from level 1 to ${build.level} is presented before this character is created.`
+            : "Start at level 1, or pick a higher level to create an experienced character."}
+        </p>
+      </fieldset>
+    </div>
+  );
+}
+
 function StepContent({
   step,
   build,
   entries,
   rulesetLabel,
+  rulesets,
+  activeRulesetId,
   presentation,
   plan,
   onChange,
+  onChangeRuleset,
 }: {
   step: PlannedStep;
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
   rulesetLabel: string;
+  rulesets: readonly SelectableRuleset[];
+  activeRulesetId: string;
   presentation: "guided" | "flexible";
   plan: DraftSnapshot["plan"];
   onChange(patch: DraftPatch): void;
+  onChangeRuleset(rulesetId: string): void;
 }) {
   const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries) : [];
 
@@ -399,27 +616,15 @@ function StepContent({
   switch (step.id) {
     case "start":
       return (
-        <div className="m2-step">
-          <h3>Ruleset</h3>
-          <p className="m2-muted">
-            This build uses <b>{rulesetLabel}</b>. Everything is stored on this device only.
-          </p>
-          {/*
-           * Creation always starts at level 1; level 2 is reached through the
-           * Level up flow. This was a readonly number input, which offered
-           * spinner arrows and a focus stop for a value it would never accept.
-           * A static value is the honest presentation of a fixed fact.
-           */}
-          <div className="m2-static-field">
-            <span className="m2-static-label" id="starting-level-label">
-              Starting level
-            </span>
-            <strong className="m2-static-value" aria-labelledby="starting-level-label">
-              Level {build.level}
-            </strong>
-            <p className="m2-muted">Advance after creation through Level up.</p>
-          </div>
-        </div>
+        <StartStep
+          build={build}
+          entries={entries}
+          rulesetLabel={rulesetLabel}
+          rulesets={rulesets}
+          activeRulesetId={activeRulesetId}
+          onChange={onChange}
+          onChangeRuleset={onChangeRuleset}
+        />
       );
 
     case "class":
@@ -487,7 +692,10 @@ function StepContent({
       return build.manualSheet ? (
         <ManualSheetStep build={build} onChange={onChange} />
       ) : (
-        <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />
+        <div className="m2-step">
+          <SubclassSection build={build} entries={entries} onChange={onChange} />
+          <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />
+        </div>
       );
 
     case "equipment":
@@ -518,10 +726,11 @@ function IdentityStep({
   build: CharacterDraftBuild;
   onChange(patch: DraftPatch): void;
 }) {
+  // Pronouns are no longer a creation field. The durable column stays for
+  // compatibility with characters made before this change; nothing reads it.
   const [buffer, setBuffer] = useState({
     name: build.name,
     nickname: build.nickname ?? "",
-    pronouns: build.pronouns ?? "",
   });
 
   const commitField = (field: keyof typeof buffer) => {
@@ -547,10 +756,11 @@ function IdentityStep({
   return (
     <div className="m2-step">
       <h3>Identity</h3>
-      <p className="m2-muted">Nothing here changes a calculation. A nickname is identity only.</p>
+      <p className="m2-muted">
+        Nothing here changes a calculation. The name was set on the first step; you can refine it or add a nickname.
+      </p>
       {field("name", "Name")}
       {field("nickname", "Nickname")}
-      {field("pronouns", "Pronouns")}
     </div>
   );
 }
@@ -618,6 +828,72 @@ function OptionStep({
   );
 }
 
+/**
+ * Subclass selection, driven by the class's own declared subclass level.
+ *
+ * It is a first-class identity written to `subclassId`, not an arbitrary choice
+ * selection, so subclass progression and its own choices activate generically.
+ * The section is absent entirely below the class's subclass level.
+ */
+function SubclassSection({
+  build,
+  entries,
+  onChange,
+}: {
+  build: CharacterDraftBuild;
+  entries: readonly ContentEntry[];
+  onChange(patch: DraftPatch): void;
+}) {
+  const level = subclassLevelFor(build, entries);
+  if (level === undefined || build.level < level) return null;
+  const options = subclassOptionsFor(build, entries);
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+
+  return (
+    <fieldset className="m2-fieldset">
+      <legend>
+        Subclass <small className="m2-muted"> gained at level {level}</small>
+      </legend>
+      {options.length === 0 ? (
+        <p className="m2-inline-issue" role="status">
+          <TriangleAlert aria-hidden="true" /> This class declares no subclass in the active ruleset.
+        </p>
+      ) : (
+        <>
+          {!build.subclassId ? (
+            <p className="m2-inline-issue" role="status">
+              <TriangleAlert aria-hidden="true" /> Choose a subclass to continue.
+            </p>
+          ) : null}
+          <ul className="m2-options">
+            {options.map(option => {
+              const selected = build.subclassId === option.id;
+              return (
+                <li key={option.id}>
+                  <button
+                    type="button"
+                    className={selected ? "m2-option m2-option-selected" : "m2-option"}
+                    aria-pressed={selected}
+                    onClick={() => onChange({ subclassId: selected ? undefined : option.id })}
+                  >
+                    <span className="m2-option-mark" aria-hidden="true">
+                      {selected ? <Check /> : "○"}
+                    </span>
+                    <span>
+                      <b>{option.label}</b>
+                      {byId.get(option.id)?.summary ? <small>{byId.get(option.id)?.summary}</small> : null}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 function ChoiceGroups({
   build,
   plan,
@@ -643,9 +919,24 @@ function ChoiceGroups({
       return { choiceSelections: { ...current.choiceSelections, [choiceId]: next } };
     });
 
+  /**
+   * Choices are banded by the level they are gained at, so a level-5 build can
+   * see that a decision belongs to level 3 rather than meeting every choice as
+   * one undifferentiated wall.
+   */
+  const levels = [...new Set(groups.map(choice => choice.level))].sort((a, b) => a - b);
+  const multiLevel = levels.length > 1;
+
   return (
     <div className="m2-step">
-      {groups.map(choice => (
+      {levels.map(level => (
+        <section key={level} className="m2-choice-band">
+          {multiLevel ? (
+            <h4 className="m2-choice-band-title">
+              {level === 1 ? "From level 1" : `Gained at level ${level}`}
+            </h4>
+          ) : null}
+          {groups.filter(choice => choice.level === level).map(choice => (
         <fieldset key={choice.choiceId} className="m2-fieldset">
           <legend>
             {choice.label}
@@ -654,6 +945,10 @@ function ChoiceGroups({
               choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
             </small>
           </legend>
+          {/* Where the choice comes from, so a build with many sources stays legible. */}
+          <p className="m2-choice-source">
+            From {choice.source.entryName} · {choice.source.category.replace(/-/g, " ")}
+          </p>
           {!choice.resolved ? (
             <p className="m2-inline-issue" role="status">
               <TriangleAlert aria-hidden="true" /> {choice.selected.length} of {choice.min} chosen
@@ -663,12 +958,16 @@ function ChoiceGroups({
             {choice.options.map(option => {
               const isSelected = choice.selected.includes(option.id);
               const incompatible = choice.incompatibleOptions.find(item => item.optionId === option.id);
+              // Already granted elsewhere: still listed, visibly marked, and not
+              // selectable, so a pick is never silently wasted on it.
+              const granted = Boolean(option.alreadyGranted) && !isSelected;
               return (
                 <li key={option.id}>
                   <button
                     type="button"
                     className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
                     aria-pressed={isSelected}
+                    disabled={granted}
                     onClick={() => toggle(choice.choiceId, option.id, choice.max)}
                   >
                     <span className="m2-option-mark" aria-hidden="true">
@@ -676,8 +975,10 @@ function ChoiceGroups({
                     </span>
                     <span>
                       <b>{option.label}</b>
+                      {granted ? <small>Already granted by {option.grantedBy ?? "another source"}</small> : null}
                       {incompatible ? <small>Requires {incompatible.requirement}</small> : null}
                     </span>
+                    {granted ? <span className="m2-badge">Already granted</span> : null}
                     {incompatible ? <span className="m2-badge m2-badge-incomplete">Incompatible</span> : null}
                   </button>
                   {incompatible && isSelected ? (
@@ -692,6 +993,8 @@ function ChoiceGroups({
             })}
           </ul>
         </fieldset>
+          ))}
+        </section>
       ))}
     </div>
   );

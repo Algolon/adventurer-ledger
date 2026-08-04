@@ -13,7 +13,6 @@ import { ABILITIES } from "@/src/domain/character-record";
 import type { Ability, Category, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
 import {
   activatedEntriesFor,
-  automaticallyGrantedProficiencyIds,
   dueChoicesFor,
   maximumLevelFor,
   proficiencyProvenance,
@@ -239,7 +238,13 @@ function stepForActivation(activated: ActivatedEntry): BuilderStepId {
  * is presented twice.
  */
 export function requiredChoicesFor(build: CharacterDraftBuild, entries: readonly ContentEntry[]): RequiredChoice[] {
-  const granted = automaticallyGrantedProficiencyIds(build, entries);
+  // Provenance is computed once. Deriving it per option ran the whole
+  // activation traversal for every option of every choice, which is quadratic
+  // in content size and is re-run on every render.
+  const provenance = proficiencyProvenance(build, entries);
+  const grantedBySource = new Map(
+    provenance.filter(item => item.grant === "automatic").map(item => [item.proficiencyId, item.sourceEntryName]),
+  );
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   const required: RequiredChoice[] = [];
   const seen = new Set<ID>();
@@ -266,12 +271,8 @@ export function requiredChoicesFor(build: CharacterDraftBuild, entries: readonly
         options: choice.options.map(option => {
           // An option the build already holds automatically is still listed, but
           // marked, so the user can see why it is not worth a pick.
-          const alreadyGranted = Boolean(option.entryId && granted.has(option.entryId));
-          const grantedBy = alreadyGranted
-            ? proficiencyProvenance(build, entries).find(
-                item => item.proficiencyId === option.entryId && item.grant === "automatic",
-              )?.sourceEntryName
-            : undefined;
+          const grantedBy = option.entryId ? grantedBySource.get(option.entryId) : undefined;
+          const alreadyGranted = Boolean(grantedBy);
           return {
             id: option.id,
             label: option.label,

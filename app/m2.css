@@ -1379,3 +1379,32 @@
   max-width: 100%;
   overflow-x: auto;
 }
+
+/* Builder subject line: who is being made, kept visible after step 1. */
+.m2-builder-subject {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* Choices banded by the level they are gained at. */
+.m2-choice-band {
+  display: grid;
+  gap: 12px;
+}
+
+.m2-choice-band-title {
+  margin: 4px 0 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font:
+    600 15px/1.2 var(--display);
+}
+
+/* Where a choice came from, under its legend. */
+.m2-choice-source {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
