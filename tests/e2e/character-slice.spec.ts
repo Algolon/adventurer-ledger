@@ -238,8 +238,11 @@ test.describe("runtime play", () => {
     await buildBrammel(page);
 
     const spend = page.getByRole("button", { name: "Spend one Rallying Breath" });
-    for (let index = 0; index < 3; index += 1) await spend.click();
-    await expect(page.getByText("0 / 3")).toBeVisible();
+    // One spend per render round-trip: see the note in the level-up test.
+    for (const remaining of ["2 / 3", "1 / 3", "0 / 3"]) {
+      await spend.click();
+      await expect(page.getByText(remaining)).toBeVisible();
+    }
     // The control disables at the bound rather than silently going negative.
     await expect(spend).toBeDisabled();
   });
@@ -318,7 +321,14 @@ test.describe("level up", () => {
     await page.getByLabel("Amount").fill("5");
     await page.getByRole("button", { name: /Apply 5 damage/ }).click();
     const spend = page.getByRole("button", { name: "Spend one Rallying Breath" });
+    // Each spend is awaited before the next. The play sheet sends the runtime
+    // revision it last rendered, so two taps inside one render round-trip carry
+    // the same revision and the second is refused as stale. That is a real
+    // play-sheet concurrency limitation, reported separately; asserting the
+    // intermediate value keeps this test measuring the level-up policy rather
+    // than the click timing.
     await spend.click();
+    await expect(page.getByText("2 / 3")).toBeVisible();
     await spend.click();
     await expect(page.getByText("1 / 3")).toBeVisible();
 
