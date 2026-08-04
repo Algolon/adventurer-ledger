@@ -10,7 +10,18 @@
 import { classMechanicsSchema } from "@/src/domain/content-pack";
 import type { CharacterDraftBuild, CharacterPresentationMode } from "@/src/domain/character-record";
 import { ABILITIES } from "@/src/domain/character-record";
-import type { Ability, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
+import type { Ability, Category, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
+import {
+  activatedEntriesFor,
+  automaticallyGrantedProficiencyIds,
+  dueChoicesFor,
+  maximumLevelFor,
+  proficiencyProvenance,
+  subclassLevelFor,
+  subclassOptionsFor,
+  type ActivatedEntry,
+  type ActivationVia,
+} from "@/src/services/activation";
 import {
   abilityGenerationMethods,
   equipmentChoicesFor,
@@ -91,13 +102,32 @@ export interface OptionIncompatibility {
   repair: string;
 }
 
+/** Where a required choice came from, so the UI can group and explain it. */
+export interface ChoiceSource {
+  entryId: ID;
+  entryName: string;
+  category: Category;
+  via: ActivationVia;
+}
+
 export interface RequiredChoice {
   choiceId: ID;
   label: string;
   min: number;
   max: number;
   stepId: BuilderStepId;
-  options: readonly { id: ID; label: string }[];
+  /** The character level at which this choice becomes due. */
+  level: number;
+  source: ChoiceSource;
+  options: readonly {
+    id: ID;
+    label: string;
+    entryId?: ID;
+    /** True when the build already holds this automatically from another source. */
+    alreadyGranted?: boolean;
+    /** The entry that already granted it, for the explanation. */
+    grantedBy?: string;
+  }[];
   selected: readonly ID[];
   resolved: boolean;
   /** Options whose prerequisites the current build does not satisfy. */
@@ -180,36 +210,84 @@ export function incompatibleOptionsFor(
 }
 
 /** Collects the choice definitions the ruleset requires at the draft's level. */
+/** Which builder step presents a choice, decided by where it came from. */
+function stepForActivation(activated: ActivatedEntry): BuilderStepId {
+  switch (activated.via) {
+    case "species":
+    case "species-trait":
+    case "lineage":
+    case "lineage-trait":
+    case "background":
+    case "background-feat":
+    case "background-proficiency":
+      return "origin";
+    default:
+      return "class-choices";
+  }
+}
+
+/**
+ * Every required choice the build activates, from every activated entry.
+ *
+ * This replaces a two-source lookup — the class's progression and the
+ * background's own choices — that could not see a species trait's choice, a
+ * subclass feature's choice, or a feat's nested choice, so those decisions were
+ * silently skipped and a build could commit while incomplete.
+ *
+ * Deduplicated by choice ID: an entry reachable through two activation paths
+ * contributes its choice once, keeping the first path's provenance, so nothing
+ * is presented twice.
+ */
 export function requiredChoicesFor(build: CharacterDraftBuild, entries: readonly ContentEntry[]): RequiredChoice[] {
+  const granted = automaticallyGrantedProficiencyIds(build, entries);
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   const required: RequiredChoice[] = [];
-  const push = (choice: ChoiceDefinition, stepId: BuilderStepId) => {
-    const selected = build.choiceSelections[choice.id] ?? [];
-    required.push({
-      choiceId: choice.id,
-      label: choice.label,
-      min: choice.min,
-      max: choice.max,
-      stepId,
-      options: choice.options.map(option => ({ id: option.id, label: option.label })),
-      selected,
-      resolved: selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length,
-      incompatibleOptions: incompatibleOptionsFor(choice, build, entries),
-    });
-  };
+  const seen = new Set<ID>();
 
-  const classEntry = build.classId ? byId.get(build.classId) : undefined;
-  if (classEntry?.category === "class") {
-    const mechanics = classMechanicsSchema.safeParse(classEntry.mechanics);
-    if (mechanics.success) {
-      const activeChoiceIds = new Set(
-        mechanics.data.progression.filter(row => row.level <= build.level).flatMap(row => row.choiceIds),
-      );
-      for (const choice of classEntry.choices) if (activeChoiceIds.has(choice.id)) push(choice, "class-choices");
+  for (const activated of activatedEntriesFor(build, entries)) {
+    const stepId = stepForActivation(activated);
+    for (const { choice, level } of dueChoicesFor(activated, build)) {
+      if (seen.has(choice.id)) continue;
+      seen.add(choice.id);
+      const selected = build.choiceSelections[choice.id] ?? [];
+      required.push({
+        choiceId: choice.id,
+        label: choice.label,
+        min: choice.min,
+        max: choice.max,
+        stepId,
+        level,
+        source: {
+          entryId: activated.entry.id,
+          entryName: activated.entry.name,
+          category: activated.entry.category,
+          via: activated.via,
+        },
+        options: choice.options.map(option => {
+          // An option the build already holds automatically is still listed, but
+          // marked, so the user can see why it is not worth a pick.
+          const alreadyGranted = Boolean(option.entryId && granted.has(option.entryId));
+          const grantedBy = alreadyGranted
+            ? proficiencyProvenance(build, entries).find(
+                item => item.proficiencyId === option.entryId && item.grant === "automatic",
+              )?.sourceEntryName
+            : undefined;
+          return {
+            id: option.id,
+            label: option.label,
+            ...(option.entryId ? { entryId: option.entryId } : {}),
+            alreadyGranted,
+            ...(grantedBy ? { grantedBy } : {}),
+          };
+        }),
+        selected,
+        resolved:
+          selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length,
+        incompatibleOptions: incompatibleOptionsFor(choice, build, entries),
+      });
     }
   }
-  const backgroundEntry = build.backgroundId ? byId.get(build.backgroundId) : undefined;
-  if (backgroundEntry) for (const choice of backgroundEntry.choices) push(choice, "origin");
+  void byId;
   return required;
 }
 
@@ -356,8 +434,35 @@ export function planBuild(
    * selected class's own progression — so a future spell-capable class brings
    * the step back with no change here and no reference to any class ID.
    */
+  const choicesInStep = (stepId: BuilderStepId) => requiredChoices.some(choice => choice.stepId === stepId);
+  // Equipment applies when the build's granted bundles actually offer a choice.
+  const equipmentChoices = manualSheet ? [] : requiredEquipmentChoices(build, entries);
+  /**
+   * Whether the build has chosen enough for "this step is empty" to be a fact
+   * rather than a not-yet.
+   *
+   * Omitting a step the moment it is empty makes the progress denominator grow
+   * as the user selects a class and background — step 1 of 6 becoming 1 of 8 —
+   * which is more disorienting than the empty screen it avoids. A step is only
+   * dropped once the build is determinate enough to know it will stay empty.
+   */
+  const originDecided = Boolean(build.classId && build.backgroundId);
   const applicableSteps = new Set<BuilderStepId>(
-    BUILDER_STEPS.filter(step => step.id !== "spells-resources" || hasSpells).map(step => step.id),
+    BUILDER_STEPS.filter(step => {
+      switch (step.id) {
+        // Spellcasting is determinate from the class alone, and a class with no
+        // spells never gains any, so this is safe to drop immediately.
+        case "spells-resources":
+          return hasSpells;
+        case "equipment":
+          return !originDecided || equipmentChoices.length > 0;
+        case "class-choices":
+          // Manual sheets use this step for their explicit minimum, so it stays.
+          return manualSheet || !originDecided || choicesInStep("class-choices");
+        default:
+          return true;
+      }
+    }).map(step => step.id),
   );
 
   if (manualSheet) {
@@ -368,6 +473,28 @@ export function planBuild(
     if (!build.manualActions.length)
       stepIssues["class-choices"].push({ code: "MANUAL_ACTION_MISSING", fieldPath: "manualActions", severity: "error" });
   } else {
+    // The target level must be one the class's own progression describes.
+    const maximumLevel = maximumLevelFor(build, entries);
+    if (build.level < 1)
+      stepIssues.start.push({ code: "TARGET_LEVEL_INVALID", fieldPath: "level", severity: "error" });
+    else if (maximumLevel !== undefined && build.level > maximumLevel)
+      stepIssues.start.push({ code: "TARGET_LEVEL_UNSUPPORTED", fieldPath: "level", severity: "error" });
+
+    // A subclass is required once the target level has reached the class's own
+    // subclass level. Below it, a stored subclass is simply not yet active.
+    const subclassLevel = subclassLevelFor(build, entries);
+    if (subclassLevel !== undefined && build.level >= subclassLevel) {
+      const options = subclassOptionsFor(build, entries);
+      if (!build.subclassId)
+        stepIssues["class-choices"].push({ code: "SUBCLASS_NOT_CHOSEN", fieldPath: "subclassId", severity: "error" });
+      else if (!options.some(option => option.id === build.subclassId))
+        stepIssues["class-choices"].push({
+          code: "SUBCLASS_INVALID_FOR_CLASS",
+          recordId: build.subclassId,
+          severity: "error",
+        });
+    }
+
     if (!build.classId) stepIssues.class.push({ code: "CLASS_NOT_CHOSEN", fieldPath: "classId", severity: "error" });
     else if (!byId.has(build.classId))
       stepIssues.class.push({ code: "CLASS_SOURCE_MISSING", recordId: build.classId, severity: "error" });
@@ -398,7 +525,7 @@ export function planBuild(
   }
 
   // Equipment choices come from whatever bundles the build's entries grant.
-  for (const choice of manualSheet ? [] : requiredEquipmentChoices(build, entries)) {
+  for (const choice of equipmentChoices) {
     const selected = build.equipmentSelections[choice.choiceId] ?? [];
     const resolved =
       selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length;

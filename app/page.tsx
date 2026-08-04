@@ -11,7 +11,8 @@
  * which falls back to the bottom bar under zoom or width pressure because the
  * query is expressed in CSS pixels.
  */
-import { useCallback, useState } from "react";
+import { defaultRulesetFor } from "@/src/services/ruleset-service";
+import { useCallback, useRef, useState } from "react";
 import { BookOpen, Settings, Swords, UserRound } from "lucide-react";
 import { BrandMark } from "@/src/ui/brand-mark";
 import { PwaIndicator } from "@/src/ui/pwa-status";
@@ -49,15 +50,23 @@ function Shell() {
   const [levelUpFor, setLevelUpFor] = useState<string | null>(null);
 
   /** The ruleset a new build starts in: whichever profile is installed. */
+  /**
+   * Never `installed[0]`: that let whichever profile sorted first decide which
+   * rules a new character used, so importing a pack could silently change the
+   * default. `defaultRulesetFor` returns undefined when the choice is genuinely
+   * ambiguous, and the builder's first step asks instead of guessing.
+   */
+  const lastUsedRulesetId = useRef<string | undefined>(undefined);
   const defaultRulesetId = useCallback(async () => {
-    const installed = await query.rulesets();
-    return installed[0]?.id;
+    const selectable = await query.selectableRulesets();
+    return defaultRulesetFor(selectable, lastUsedRulesetId.current);
   }, [query]);
 
   const startNewCharacter = useCallback(async () => {
     const rulesetProfileId = await defaultRulesetId();
     if (!rulesetProfileId) return;
     const draftId = `draft:${Date.now().toString(36)}`;
+    lastUsedRulesetId.current = rulesetProfileId;
     const outcome = await drafts.create({ draftId, rulesetProfileId, level: 1, presentation: "guided" });
     if (outcome.status === "ok") {
       setBuilderDraftId(draftId);

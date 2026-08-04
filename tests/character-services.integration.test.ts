@@ -83,8 +83,9 @@ describe("CharacterDraftService", () => {
     const created = await newDraft();
     expect(created.draft.revision).toBe(1);
     expect(created.draft.status).toBe("in-progress");
-    // No class is chosen yet, so no spell choices apply and that step is not in
-    // the sequence. It appears if and when a spell-capable class is selected.
+    // No class is chosen, so spellcasting is already known not to apply. Class
+    // choices and equipment stay until the build is determinate enough to know
+    // they are empty, so the step count does not grow as the user selects.
     expect(created.plan.steps.map(step => step.id)).toEqual([
       "start", "class", "origin", "abilities", "class-choices", "equipment", "identity", "review",
     ]);

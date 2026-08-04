@@ -362,9 +362,27 @@ export interface CharacterDraftBuild {
    */
   manualSheet?: boolean;
   nickname?: string;
+  /**
+   * Retained for compatibility with drafts and characters created before the
+   * identity step was reduced. It is no longer part of the creation path and
+   * nothing derives from it.
+   */
   pronouns?: string;
+  /**
+   * The level this draft is being built *to*.
+   *
+   * Distinct from a committed character's current level: a draft targeting 5
+   * accumulates every level from 1 to 5 and only commits once each level's
+   * required choices are resolved. A committed character advances one level at
+   * a time through the level-up service.
+   */
   level: number;
   classId?: ID;
+  /**
+   * The subclass identity, when the class's progression has reached its subclass
+   * level. Stored explicitly rather than inferred from a class choice selection.
+   */
+  subclassId?: ID;
   speciesId?: ID;
   backgroundId?: ID;
   abilityMethod: AbilityMethod;

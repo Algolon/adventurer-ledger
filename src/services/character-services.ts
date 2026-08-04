@@ -28,6 +28,7 @@ import {
   resolveDerivedCharacter,
   type DerivedCharacterSheet,
 } from "@/src/services/derived-resolver";
+import { selectableRulesets, type SelectableRuleset } from "@/src/services/ruleset-service";
 import { loadRulesetScope } from "@/src/services/content-scope";
 import {
   invalid,
@@ -982,6 +983,21 @@ export class CharacterQueryService {
   /** Ruleset profiles installed on this device. */
   async rulesets() {
     return this.context.repositories.content.listRulesets();
+  }
+
+  /**
+   * Installed profiles described well enough to choose between, ordered by
+   * usefulness rather than by ID. Callers offer these; they never take the
+   * first one because it sorted first.
+   */
+  async selectableRulesets(): Promise<SelectableRuleset[]> {
+    const { repositories, database } = this.context;
+    const [profiles, entries, sources] = await Promise.all([
+      repositories.content.listRulesets(),
+      repositories.content.listEntries(),
+      database.sources.toArray(),
+    ]);
+    return selectableRulesets(profiles, entries, sources);
   }
 
   async contentFingerprint(rulesetId: ID): Promise<string> {

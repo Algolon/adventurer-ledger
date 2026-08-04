@@ -155,15 +155,25 @@ export function planLevelUp(
 }
 
 /** Projects the durable record onto the next level with the newly made choices. */
+/**
+ * The character one level higher. Exactly one level: there is no path that
+ * advances further in a single operation, so every level's choices are
+ * discovered and presented at the level they belong to.
+ */
 export function characterAtNextLevel(
   character: CharacterRecord,
   choiceSelections: Readonly<Record<ID, readonly ID[]>>,
+  subclassId?: ID,
 ): CharacterRecord {
   const nextLevel = character.level + 1;
   return {
     ...character,
     level: nextLevel,
-    classLevels: character.classLevels.map((item, index) => (index === 0 ? { ...item, level: nextLevel } : item)),
+    classLevels: character.classLevels.map((item, index) =>
+      index === 0
+        ? { ...item, level: nextLevel, ...(subclassId ?? item.subclassId ? { subclassId: subclassId ?? item.subclassId } : {}) }
+        : item,
+    ),
     choiceSelections: { ...character.choiceSelections, ...choiceSelections },
   };
 }
@@ -176,6 +186,8 @@ export interface LevelUpConfirmCommand {
   readonly targetLevel: number;
   readonly expectedContentFingerprint: string;
   readonly choiceSelections: Readonly<Record<ID, readonly ID[]>>;
+  /** Set when this level is the one that grants the subclass. */
+  readonly subclassId?: ID;
   /** Optional user adjustment to the proposed current values. */
   readonly currentValueOverrides?: Readonly<Record<string, number>>;
 }
@@ -202,6 +214,8 @@ export class CharacterLevelUpService {
   async preview(
     characterId: ID,
     choiceSelections: Readonly<Record<ID, readonly ID[]>> = {},
+    /** The subclass the user is picking, when this level grants one. */
+    subclassId?: ID,
   ): Promise<ServiceOutcome<LevelUpPreview>> {
     const { repositories } = this.context;
     const character = await repositories.characters.get(characterId);
@@ -212,7 +226,7 @@ export class CharacterLevelUpService {
       loadRulesetScope(repositories, character.rulesetProfileId),
       repositories.overrides.listByCharacter(characterId),
     ]);
-    return ok(this.buildPreview(character, runtime, scope.entries, overrides, choiceSelections));
+    return ok(this.buildPreview(character, runtime, scope.entries, overrides, choiceSelections, subclassId));
   }
 
   private buildPreview(
@@ -221,8 +235,9 @@ export class CharacterLevelUpService {
     entries: readonly ContentEntry[],
     overrides: Awaited<ReturnType<ServiceContext["repositories"]["overrides"]["listByCharacter"]>>,
     choiceSelections: Readonly<Record<ID, readonly ID[]>>,
+    subclassId?: ID,
   ): LevelUpPreview {
-    const next = characterAtNextLevel(character, choiceSelections);
+    const next = characterAtNextLevel(character, choiceSelections, subclassId);
     const before = resolveDerivedCharacter({ character, runtime, overrides, entries });
     const after = resolveDerivedCharacter({ character: next, runtime, overrides, entries });
     const draftBefore = { ...toBuild(character), level: character.level };
@@ -274,7 +289,7 @@ export class CharacterLevelUpService {
           return { status: "conflict", code: "STALE_PREVIEW", recordId: command.characterId };
 
         const overrides = await repositories.overrides.listByCharacter(command.characterId);
-        const preview = this.buildPreview(character, runtime, entries, overrides, command.choiceSelections);
+        const preview = this.buildPreview(character, runtime, entries, overrides, command.choiceSelections, command.subclassId);
         const unresolved = preview.newChoices.filter(choice => !choice.resolved);
         if (unresolved.length)
           return invalid(unresolved.map(choice => ({ code: "CHOICE_UNRESOLVED", recordId: choice.choiceId, severity: "error" as const })));
@@ -306,7 +321,7 @@ export class CharacterLevelUpService {
         await repositories.snapshots.add(restorePoint);
 
         const nextCharacter: CharacterRecord = {
-          ...characterAtNextLevel(character, command.choiceSelections),
+          ...characterAtNextLevel(character, command.choiceSelections, command.subclassId),
           revision: character.revision + 1,
           contentFingerprint: fingerprint,
           updatedAt: now,
@@ -476,6 +491,9 @@ function toBuild(character: CharacterRecord) {
     name: character.name,
     level: character.level,
     ...(character.classLevels[0] ? { classId: character.classLevels[0].classId } : {}),
+    // Subclass identity drives subclass-feature activation, so a level-up that
+    // crosses the subclass level discovers the subclass's own choices.
+    ...(character.classLevels[0]?.subclassId ? { subclassId: character.classLevels[0].subclassId } : {}),
     ...(character.speciesId ? { speciesId: character.speciesId } : {}),
     ...(character.backgroundId ? { backgroundId: character.backgroundId } : {}),
     abilityMethod: character.abilityMethod,
