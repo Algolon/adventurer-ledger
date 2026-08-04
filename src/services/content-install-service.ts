@@ -28,7 +28,9 @@ import {
 import {
   describeInstalledRulesets,
   proposeRulesetForPack,
+  legacyRulesetIdsForPack,
   rulesetIdCandidatesForPack,
+  rulesetIdForPack,
   rulesetProfileFrom,
   type InstalledRulesetView,
   type ResolvedDependency,
@@ -56,6 +58,18 @@ export interface RulesetOffer extends RulesetProposal {
   alreadyInstalled: boolean;
   /** The ID it is installed under, when it already is. */
   installedRulesetId?: ID;
+  /**
+   * Which candidate matched.
+   *
+   * `current` means the profile is this pack's own derived ID, so the pack is
+   * genuinely already installed. `legacy` means the match came only from the ID
+   * an earlier derivation would have produced — which that derivation shared
+   * with a differently-named pack. It may be this pack installed under the old
+   * scheme, or it may be an unrelated pack whose current ID collides with it,
+   * and the two are indistinguishable from the ID alone. Either way the install
+   * refuses; the distinction exists so the refusal can say which it is.
+   */
+  installedMatch?: "current" | "legacy";
 }
 
 export interface InstallPreview {
@@ -147,7 +161,12 @@ export class ContentInstallService {
       if (offer.alreadyInstalled)
         return [
           {
-            code: "RULESET_ALREADY_INSTALLED",
+            // A legacy match cannot honestly claim this pack is installed: the
+            // profile it found may belong to a different pack entirely.
+            code:
+              offer.installedMatch === "legacy"
+                ? "RULESET_LEGACY_ID_AMBIGUOUS"
+                : "RULESET_ALREADY_INSTALLED",
             recordId: offer.installedRulesetId ?? offer.rulesetId,
             severity: "error" as const,
           },
@@ -304,9 +323,14 @@ export class ContentInstallService {
 function describeInstallation(
   packId: ID,
   installed: ReadonlySet<ID>,
-): { alreadyInstalled: boolean; installedRulesetId?: ID } {
-  const found = rulesetIdCandidatesForPack(packId).find(candidate => installed.has(candidate));
-  return found ? { alreadyInstalled: true, installedRulesetId: found } : { alreadyInstalled: false };
+): { alreadyInstalled: boolean; installedRulesetId?: ID; installedMatch?: "current" | "legacy" } {
+  const current = rulesetIdForPack(packId);
+  if (installed.has(current))
+    return { alreadyInstalled: true, installedRulesetId: current, installedMatch: "current" };
+  const legacy = legacyRulesetIdsForPack(packId).find(candidate => installed.has(candidate));
+  return legacy
+    ? { alreadyInstalled: true, installedRulesetId: legacy, installedMatch: "legacy" }
+    : { alreadyInstalled: false };
 }
 
 /**

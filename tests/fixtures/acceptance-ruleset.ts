@@ -987,3 +987,89 @@ export function overlapPack(): ContentPackDocument {
 }
 
 export const overlapPackJson = () => JSON.stringify(overlapPack());
+
+/* -------------------------------------------------------------------------- */
+/* A self-contained second pack, for import-integrity tests                    */
+/* -------------------------------------------------------------------------- */
+
+export const STANDALONE_PACK_ID = "pack:emberline-almanac";
+export const STANDALONE_SOURCE_ID = "source:emberline-almanac";
+export const STANDALONE_PACK_NAME = "Emberline almanac";
+
+/**
+ * A pack that depends on nothing and references nothing outside itself.
+ *
+ * Import-integrity tests need a second pack that is valid *on its own*, because
+ * the question under test is which input a preview describes — not whether a
+ * dependency happens to be installed. The acceptance slice and its add-on both
+ * fail standalone (a missing dependency and missing references respectively),
+ * which would confuse a failure to invalidate a preview with a failure to
+ * resolve content. These entries carry no references at all.
+ */
+export function standalonePack(): ContentPackDocument {
+  return contentPackSchema.parse({
+    schemaVersion: 2,
+    pack: {
+      id: STANDALONE_PACK_ID,
+      name: STANDALONE_PACK_NAME,
+      description: "Original synthetic reference notes that stand entirely on their own.",
+      version: VERSION,
+      coverage: "complete",
+      rulesEditions: ["homebrew"],
+      visibility: "public",
+      licenseType: "original",
+      exportRestricted: false,
+      includeFullText: false,
+      dependencies: [],
+      optionalDependencies: [],
+    },
+    sources: [
+      {
+        id: STANDALONE_SOURCE_ID,
+        name: "Emberline almanac",
+        abbreviation: "EAL",
+        edition: "homebrew",
+        type: "homebrew",
+        licenseType: "original",
+        visibility: "public",
+        priority: 32,
+        enabledByDefault: true,
+        campaignIds: [],
+        version: VERSION,
+      },
+    ],
+    entries: ["tide-tables", "lamp-oil-grades"].map((slug, index) => ({
+      id: `rule:eal-${slug}`,
+      slug: `eal-${slug}`,
+      name: slug === "tide-tables" ? "Tide tables" : "Lamp oil grades",
+      aliases: [],
+      category: "rule",
+      rulesEdition: "homebrew",
+      sourceId: STANDALONE_SOURCE_ID,
+      sourceLocator: { sourceId: STANDALONE_SOURCE_ID, page: String(index + 1) },
+      reviewStatus: "engine-verified",
+      licenseType: "original",
+      visibility: "public-original",
+      summary: "A reference note that grants nothing and requires nothing.",
+      prerequisites: [],
+      choices: [],
+      equipmentBundles: [],
+      effects: [],
+      links: [],
+      mechanics: { kind: "reference-note", data: {} },
+      conflict: { sourcePriority: 32, conflictKey: `rule:eal-${slug}`, resolution: "source-priority" },
+      tags: ["synthetic", "emberline-almanac"],
+      version: VERSION,
+      revision: 1,
+      editionRelations: [],
+      legacy: false,
+      optional: false,
+      private: false,
+      exportRestricted: false,
+      createdAt: AT,
+      updatedAt: AT,
+    })),
+  });
+}
+
+export const standalonePackJson = () => JSON.stringify(standalonePack());

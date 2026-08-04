@@ -46,6 +46,7 @@ import {
   type ProficiencyPlan,
   type ProficiencySource,
 } from "@/src/services/proficiency-planner";
+import { createPlanningIndex, type PlanningIndex } from "@/src/services/planning-context";
 import { BUILDER_STEPS, type BuilderStepId } from "@/src/services/builder-steps";
 import type { ServiceIssue } from "@/src/services/contracts";
 
@@ -207,7 +208,7 @@ export function incompatibleOptionsFor(
   choice: ChoiceDefinition,
   build: CharacterDraftBuild,
   entries: readonly ContentEntry[],
-  index?: { byId: ReadonlyMap<ID, ContentEntry>; context: RuleContext },
+  index?: PlanningIndex,
 ): OptionIncompatibility[] {
   const byId = index?.byId ?? new Map(entries.map(entry => [entry.id, entry]));
   const context = index?.context ?? draftContext(build);
@@ -244,7 +245,7 @@ export function requiredChoicesFor(
   proficiencies: ProficiencyPlan = planProficiencies(activation, entries, build.choiceSelections),
 ): RequiredChoice[] {
   // Built once for the whole pass, not once per choice.
-  const index = { byId: new Map(entries.map(entry => [entry.id, entry])), context: draftContext(build) };
+  const index = createPlanningIndex(build, entries);
   return activation.choices.map(activated => {
     const choice = activated.choice;
     const selected = build.choiceSelections[choice.id] ?? [];

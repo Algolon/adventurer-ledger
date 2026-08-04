@@ -31,7 +31,9 @@ import {
   ACCEPTANCE_SOURCE_ID,
   COLLISION_CLASS_ID,
   acceptancePack,
+  acceptancePackJson,
   sourceCollisionPackJson,
+  standalonePack,
 } from "@/tests/fixtures/acceptance-ruleset";
 import { SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
 import type { CharacterDraftBuild } from "@/src/domain/character-record";
@@ -1367,5 +1369,77 @@ describe("loading several ruleset scopes at once", () => {
     await loadRulesetScopes(counted, [ACCEPTANCE_RULESET_ID, SYNTHETIC_RULESET_ID]);
 
     expect(reads).toBe(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 14 — a legacy profile ID that collides is named as ambiguous          */
+/* -------------------------------------------------------------------------- */
+
+describe("a legacy profile ID that another pack now owns", () => {
+  /** The standalone pack, re-issued under a different pack and source ID. */
+  const reissued = (packId: ID, sourceId: ID) => {
+    const base = standalonePack();
+    return JSON.stringify({
+      ...base,
+      pack: { ...base.pack, id: packId, name: `Pack ${packId.replace(":", "-")}` },
+      sources: [{ ...base.sources[0], id: sourceId }],
+      entries: base.entries.map(entry => ({
+        ...entry,
+        id: `${entry.id}-${sourceId}`,
+        sourceId,
+        sourceLocator: { ...entry.sourceLocator, sourceId },
+        conflict: { ...entry.conflict, conflictKey: `${entry.id}-${sourceId}` },
+      })),
+    });
+  };
+
+  /**
+   * `pack:zeta`'s *legacy* ID is `ruleset:zeta`, which is also the *current* ID
+   * of the unrelated pack `zeta`. From the ID alone the two cases — this pack
+   * installed under the old scheme, and a different pack installed under the new
+   * one — cannot be told apart, so the boundary refuses either way.
+   */
+  it("refuses without overwriting, and does not claim the new pack is installed", async () => {
+    const now = "2026-08-04T08:00:00.000Z";
+    await harness.database.rulesetProfiles.put({
+      id: "ruleset:zeta",
+      name: "Zeta, an unrelated pack",
+      activeSourceIds: ["source:zeta"],
+      editionPriority: [],
+      allowedCategories: [],
+      allowLegacy: false,
+      allowDuplicateVersions: false,
+      conflictResolution: "source-priority",
+      allowCustomOverrides: true,
+      requirementEnforcement: "soft",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const preview = await harness.install.preview([reissued("pack:zeta", "source:packzeta")]);
+    const offer = preview.offers.find(item => item.packId === "pack:zeta");
+    expect(offer?.alreadyInstalled).toBe(true);
+    // The match is legacy-only, and says so rather than asserting an install.
+    expect(offer?.installedMatch).toBe("legacy");
+    expect(offer?.installedRulesetId).toBe("ruleset:zeta");
+
+    const outcome = await harness.install.confirm(preview, { createRulesetForPackIds: ["pack:zeta"] });
+    expect(outcome.status).toBe("invalid");
+    expect(JSON.stringify(outcome)).toContain("RULESET_LEGACY_ID_AMBIGUOUS");
+    expect(JSON.stringify(outcome)).not.toContain("RULESET_ALREADY_INSTALLED");
+
+    // The unrelated profile is untouched, which is the property that matters.
+    const profiles = await harness.context.repositories.content.listRulesets();
+    expect(profiles.find(profile => profile.id === "ruleset:zeta")?.name).toBe("Zeta, an unrelated pack");
+    expect(profiles.some(profile => profile.id === "ruleset:pack:zeta")).toBe(false);
+  });
+
+  it("still calls a pack installed under its own current ID already installed", async () => {
+    await installAcceptanceRuleset(harness);
+    const preview = await harness.install.preview([acceptancePackJson()]);
+    const offer = preview.offers.find(item => item.packId === ACCEPTANCE_PACK_ID);
+    expect(offer?.alreadyInstalled).toBe(true);
+    expect(offer?.installedMatch).toBe("current");
   });
 });
