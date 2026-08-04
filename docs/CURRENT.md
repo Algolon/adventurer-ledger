@@ -215,7 +215,9 @@ These are recorded as follow-up dependencies and are deliberately absent here:
 - the broader character-sheet redesign;
 - spellcasting;
 - any additional official content;
-- rolled ability scores, and origin patterns whose increase amounts repeat (G-5);
+- rolled ability scores, and origin patterns that place two increases on the
+  *same* ability (part of G-5; a `+1/+1/+1` across three different abilities is
+  supported and tested — the slots are consumed as a multiset);
 - hydrating an edit draft from the character it edits, which today starts empty;
 - migrating profiles created under the earlier profile-ID derivation, or
   narrowing an existing source-scoped profile to an explicit entry set.

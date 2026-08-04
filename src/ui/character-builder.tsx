@@ -16,7 +16,7 @@
  * afterwards — the planner accumulates every level's progression into one build
  * and the commit writes that level directly.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, CircleHelp, ListChecks, TriangleAlert } from "lucide-react";
 import {
   BUILDER_STEPS,
@@ -30,7 +30,7 @@ import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-reco
 import type { Ability, ContentEntry } from "@/src/domain/model";
 import { RULESET_PRIVACY_LABELS, selectedEquipmentFor, standardArrayFor } from "@/src/services/content-scope";
 import { abilityModifier } from "@/src/rules/engine";
-import { signed } from "@/src/ui/primitives";
+import { Dialog, signed } from "@/src/ui/primitives";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import type { DraftSnapshot } from "@/src/services/character-services";
 import type { RulesetChangePreview } from "@/src/services/ruleset-change";
@@ -526,9 +526,16 @@ export function CharacterBuilder({
  * The ruleset-change confirmation.
  *
  * It states the whole effect before anything is written: what goes, what stays,
- * and what is recalculated. Cancel is the default action — it is focused on
- * open and bound to Escape — because the destructive path should never be the
- * one a user reaches by pressing Enter out of habit.
+ * and what is recalculated. Keeping the current ruleset is the default action —
+ * it holds focus on open and Escape does the same thing — because the
+ * destructive path should never be the one a user reaches by pressing Enter out
+ * of habit.
+ *
+ * It renders through the shared `Dialog`, so it inherits the one modal contract
+ * this app has: focus is trapped inside while it is open, Escape closes it from
+ * any control, and focus returns to whatever opened it. Hand-rolling the surface
+ * meant a keyboard user could Tab straight out into the builder behind it — and
+ * once focus had left, Escape stopped closing it at all.
  *
  * `alertdialog` rather than `dialog`: this interrupts to report a consequence,
  * and the role is what makes a screen reader announce the description rather
@@ -544,27 +551,27 @@ function RulesetChangeConfirmation({
   onConfirm(): void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    cancelRef.current?.focus();
-  }, []);
+  const bodyId = useId();
 
   return (
-    <div
-      className="m2-confirm-backdrop"
+    <Dialog
       role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="ruleset-change-title"
-      aria-describedby="ruleset-change-body"
-      onKeyDown={event => {
-        if (event.key === "Escape") {
-          event.stopPropagation();
-          onCancel();
-        }
-      }}
+      title={`Switch to ${preview.proposedRulesetName}?`}
+      onClose={onCancel}
+      describedBy={bodyId}
+      initialFocusRef={cancelRef}
+      footer={
+        <>
+          <button type="button" className="m2-button m2-button-secondary" ref={cancelRef} onClick={onCancel}>
+            Keep current ruleset
+          </button>
+          <button type="button" className="m2-button m2-button-primary" onClick={onConfirm}>
+            Switch ruleset
+          </button>
+        </>
+      }
     >
-      <div className="m2-confirm-panel">
-        <h3 id="ruleset-change-title">Switch to {preview.proposedRulesetName}?</h3>
-        <div id="ruleset-change-body">
+      <div id={bodyId} className="m2-confirm-body">
           <p className="m2-muted">
             This build is currently in {preview.currentRulesetName}. Nothing has been changed yet.
           </p>
@@ -616,18 +623,8 @@ function RulesetChangeConfirmation({
           ) : null}
 
           <p className="m2-muted">Your device&rsquo;s default ruleset for new characters is not changed.</p>
-        </div>
-
-        <div className="m2-confirm-actions">
-          <button type="button" className="m2-button m2-button-secondary" ref={cancelRef} onClick={onCancel}>
-            Keep current ruleset
-          </button>
-          <button type="button" className="m2-button m2-button-primary" onClick={onConfirm}>
-            Switch ruleset
-          </button>
-        </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

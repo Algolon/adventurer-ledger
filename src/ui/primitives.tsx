@@ -24,10 +24,34 @@ export interface DialogProps {
   /** Announced above the content when a submit produced errors. */
   errorSummary?: readonly { code: string; label: string }[];
   labelledBy?: string;
+  /**
+   * `alertdialog` for a surface that interrupts to report a consequence, so a
+   * screen reader announces the description rather than only the title.
+   * Everything else about the surface — the trap, Escape, restoration — is the
+   * same, because those are properties of being modal, not of the role.
+   */
+  role?: "dialog" | "alertdialog";
+  /** Element describing the surface, for the roles that announce one. */
+  describedBy?: string;
+  /**
+   * Where focus should land on open, when the first focusable control is not
+   * the right one. A confirmation puts it on the safe action, so the
+   * destructive path is never what Enter reaches by habit.
+   */
+  initialFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 /** Modal surface with a focus trap and focus restoration. */
-export function Dialog({ title, onClose, children, footer, errorSummary }: DialogProps) {
+export function Dialog({
+  title,
+  onClose,
+  children,
+  footer,
+  errorSummary,
+  role = "dialog",
+  describedBy,
+  initialFocusRef,
+}: DialogProps) {
   const container = useRef<HTMLElement>(null);
   const restoreTo = useRef<HTMLElement | null>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
@@ -35,12 +59,15 @@ export function Dialog({ title, onClose, children, footer, errorSummary }: Dialo
 
   useEffect(() => {
     restoreTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const requested = initialFocusRef?.current;
     const first = container.current?.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? container.current)?.focus();
+    (requested ?? first ?? container.current)?.focus();
     return () => {
       // Focus returns to whatever opened the dialog.
       restoreTo.current?.focus();
     };
+    // Intentionally once per mount: the surface owns focus for its lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -73,9 +100,10 @@ export function Dialog({ title, onClose, children, footer, errorSummary }: Dialo
     <div className="m2-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
       <section
         className="m2-dialog"
-        role="dialog"
+        role={role}
         aria-modal="true"
         aria-labelledby={titleId}
+        {...(describedBy ? { "aria-describedby": describedBy } : {})}
         ref={container}
         tabIndex={-1}
         onKeyDown={onKeyDown}

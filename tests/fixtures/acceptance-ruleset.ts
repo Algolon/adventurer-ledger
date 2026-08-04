@@ -890,3 +890,100 @@ export function sourceCollisionPack(): ContentPackDocument {
 }
 
 export const sourceCollisionPackJson = () => JSON.stringify(sourceCollisionPack());
+
+/* -------------------------------------------------------------------------- */
+/* A dependent pack, so two installed profiles can genuinely overlap           */
+/* -------------------------------------------------------------------------- */
+
+export const OVERLAP_PACK_ID = "pack:emberline-overlap";
+export const OVERLAP_SOURCE_ID = "source:emberline-overlap";
+/** The profile `rulesetIdForPack` derives for the dependent pack. */
+export const OVERLAP_RULESET_ID = "ruleset:pack:emberline-overlap";
+export const OVERLAP_BACKGROUND_ID = "background:eb-lampwright";
+
+/**
+ * A pack that adds one background and depends on the acceptance pack.
+ *
+ * This exists so a test can switch a draft between two rulesets that share
+ * content. Every other fixture pair is disjoint, which makes "the ruleset ID
+ * changed" and "this value is no longer valid" indistinguishable — exactly the
+ * confusion the per-value change contract exists to resolve. Because membership
+ * is `packEntries + dependencyEntries`, this profile resolves every acceptance
+ * entry *and* its own, so a class chosen under the acceptance profile is still a
+ * real class here.
+ */
+export function overlapPack(): ContentPackDocument {
+  return contentPackSchema.parse({
+    schemaVersion: 2,
+    pack: {
+      id: OVERLAP_PACK_ID,
+      name: "Emberline overlap addition",
+      description: "Original synthetic add-on that depends on the acceptance slice and adds one background.",
+      version: VERSION,
+      coverage: "partial",
+      rulesEditions: ["homebrew"],
+      visibility: "public",
+      licenseType: "original",
+      exportRestricted: false,
+      includeFullText: false,
+      dependencies: [ACCEPTANCE_PACK_ID],
+      optionalDependencies: [],
+    },
+    sources: [
+      {
+        id: OVERLAP_SOURCE_ID,
+        name: "Emberline overlap reference",
+        abbreviation: "EOR",
+        edition: "homebrew",
+        type: "homebrew",
+        licenseType: "original",
+        visibility: "public",
+        priority: 31,
+        enabledByDefault: true,
+        campaignIds: [],
+        version: VERSION,
+      },
+    ],
+    entries: [
+      {
+        id: OVERLAP_BACKGROUND_ID,
+        slug: "eb-lampwright",
+        name: "Lampwright",
+        aliases: [],
+        category: "background",
+        rulesEdition: "homebrew",
+        sourceId: OVERLAP_SOURCE_ID,
+        sourceLocator: { sourceId: OVERLAP_SOURCE_ID, page: "1", section: "Overlap addition" },
+        reviewStatus: "engine-verified",
+        licenseType: "original",
+        visibility: "public-original",
+        summary: "You keep the lamps burning along the crossing.",
+        prerequisites: [],
+        choices: [],
+        equipmentBundles: [],
+        effects: [],
+        links: [],
+        mechanics: {
+          abilityScoreChoices: { abilities: ["dexterity", "intelligence"], increasePattern: [2, 1] },
+          featId: ACCEPTANCE_IDS.featPlain,
+          proficiencyIds: [ACCEPTANCE_PROFICIENCIES.skillEmberlore],
+          equipmentChoiceIds: [],
+          equipmentBundleIds: [],
+        },
+        conflict: { sourcePriority: 31, conflictKey: OVERLAP_BACKGROUND_ID, resolution: "source-priority" },
+        tags: ["synthetic", "emberline-overlap"],
+        version: VERSION,
+        revision: 1,
+        editionRelations: [],
+        legacy: false,
+        optional: false,
+        private: false,
+        exportRestricted: false,
+        createdAt: AT,
+        updatedAt: AT,
+      },
+    ],
+  });
+}
+
+export const overlapPackJson = () => JSON.stringify(overlapPack());

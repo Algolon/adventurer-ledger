@@ -39,7 +39,7 @@ import {
   resolveDerivedCharacter,
   type DerivedCharacterSheet,
 } from "@/src/services/derived-resolver";
-import { loadRulesetScope } from "@/src/services/content-scope";
+import { loadRulesetScope, loadRulesetScopes } from "@/src/services/content-scope";
 import {
   invalid,
   noopLogger,
@@ -175,9 +175,11 @@ export class CharacterDraftService {
       return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: draftId, severity: "error" }]);
     const proposed = await repositories.content.getRuleset(rulesetProfileId);
     if (!proposed) return notFound(rulesetProfileId);
-    const [scope, proposedScope] = await Promise.all([
-      loadRulesetScope(repositories, current.rulesetProfileId),
-      loadRulesetScope(repositories, rulesetProfileId),
+    // One entry read, scoped twice: the comparison needs both profiles, not two
+    // passes over the whole table.
+    const [scope, proposedScope] = await loadRulesetScopes(repositories, [
+      current.rulesetProfileId,
+      rulesetProfileId,
     ]);
     return ok(
       planRulesetChange({
@@ -228,9 +230,9 @@ export class CharacterDraftService {
     // confirmed is a function of both. The revision is revalidated inside the
     // transaction, so a draft that moved on since makes this confirmation stale
     // rather than letting it apply against content it was not computed from.
-    const [currentScope, nextScope] = await Promise.all([
-      loadRulesetScope(repositories, existing.rulesetProfileId),
-      loadRulesetScope(repositories, rulesetProfileId),
+    const [currentScope, nextScope] = await loadRulesetScopes(repositories, [
+      existing.rulesetProfileId,
+      rulesetProfileId,
     ]);
 
     const outcome = await database.transaction(

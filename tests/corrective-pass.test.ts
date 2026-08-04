@@ -38,12 +38,16 @@ import type { CharacterDraftBuild } from "@/src/domain/character-record";
 import type { ContentEntry, ID, RulesetProfile } from "@/src/domain/model";
 import type { CommitResult, DraftSnapshot } from "@/src/services/character-services";
 import type { RulesetChangePreview } from "@/src/services/ruleset-change";
+import { resolveRulesetChange } from "@/src/services/ruleset-change";
 import { reconcileAbilityAllocation } from "@/src/services/ability-allocation";
 import { planActivation } from "@/src/services/choice-planner";
 import { planBuild } from "@/src/services/build-planner";
+import { EMPTY_DRAFT_BUILD } from "@/src/domain/character-record";
 import {
   equipmentGrantsFor,
   rulesetPrivacyFor,
+  loadRulesetScope,
+  loadRulesetScopes,
   scopeEntriesToRuleset,
   selectedEquipmentFor,
 } from "@/src/services/content-scope";
@@ -1029,5 +1033,339 @@ describe("an origin increase the active pattern does not offer is never effectiv
 
     const plan = planBuild(build, entries, "guided");
     expect(plan.issues.map(issue => issue.code)).toContain("ORIGIN_INCREASE_NOT_AVAILABLE");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 11 — deep activation chains settle to a fixpoint, not one pass        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A chain of entries where each one's choice activates the next.
+ *
+ * Depth matters, and so does *why* the parent goes. Removing the root entry
+ * outright proves nothing: the activation walk then never reaches the chain at
+ * all, so one pass clears it as completely as ten would.
+ *
+ * The case that genuinely separates a fixpoint from a single pass is a parent
+ * that still activates its child while being invalid itself. The root choice
+ * here takes two options: one continues the chain, the other the target no
+ * longer offers. In the first round the surviving option still activates the
+ * whole chain, so every descendant is reachable and looks valid — but the root
+ * selection is dropped, because a selection is kept only when *every* option in
+ * it is still offered. Only in the next round does the chain stop being
+ * reachable, and then one level falls per round after that.
+ */
+function chainEntries(depth: number): { entries: ContentEntry[]; narrowedClass: ContentEntry } {
+  const base = (
+    partial: Pick<ContentEntry, "id" | "slug" | "name" | "category" | "mechanics"> & Partial<ContentEntry>,
+  ): ContentEntry =>
+    ({
+      aliases: [],
+      rulesEdition: "homebrew",
+      sourceId: "source:chain",
+      sourceLocator: { sourceId: "source:chain", page: "1" },
+      reviewStatus: "engine-verified",
+      licenseType: "original",
+      visibility: "public-original",
+      prerequisites: [],
+      choices: [],
+      equipmentBundles: [],
+      effects: [],
+      links: [],
+      conflict: { sourcePriority: 30, conflictKey: partial.id, resolution: "source-priority" },
+      tags: ["synthetic", "chain"],
+      version: "1.0.0",
+      revision: 1,
+      editionRelations: [],
+      legacy: false,
+      optional: false,
+      private: false,
+      exportRestricted: false,
+      createdAt: "2026-08-04T00:00:00.000Z",
+      updatedAt: "2026-08-04T00:00:00.000Z",
+      ...partial,
+    }) as ContentEntry;
+
+  const links: ContentEntry[] = [];
+  for (let index = 1; index <= depth; index += 1) {
+    links.push(
+      base({
+        id: `feat:chain-${index}`,
+        slug: `chain-${index}`,
+        name: `Chain link ${index}`,
+        category: "feat",
+        mechanics: { category: "general", repeatable: false },
+        choices:
+          index < depth
+            ? [
+                {
+                  id: `choice:chain-${index}`,
+                  label: `Chain choice ${index}`,
+                  min: 1,
+                  max: 1,
+                  repeatable: false,
+                  options: [{ id: `option:chain-${index}`, label: `Onward ${index}`, entryId: `feat:chain-${index + 1}` }],
+                },
+              ]
+            : [],
+      }),
+    );
+  }
+
+  const klass = base({
+    id: "class:chain",
+    slug: "chain",
+    name: "Chainwalker",
+    category: "class",
+    choices: [
+      {
+        id: "choice:chain-0",
+        label: "Chain root",
+        min: 1,
+        max: 2,
+        repeatable: false,
+        options: [
+          { id: "option:chain-0", label: "Begin", entryId: "feat:chain-1" },
+          // Present here, absent from the target: this is what invalidates the
+          // root while `option:chain-0` still activates everything below it.
+          { id: "option:chain-extra", label: "Also this" },
+        ],
+      },
+    ],
+    mechanics: {
+      hitDie: 8,
+      primaryAbilities: ["strength"],
+      // The schema is strict: exactly two saves, and a declared subclass level.
+      savingThrows: ["proficiency:chain-save-a", "proficiency:chain-save-b"],
+      startingProficiencyIds: [],
+      progression: [{ level: 1, proficiencyBonus: 2, featureIds: [], choiceIds: ["choice:chain-0"], resourceChanges: {} }],
+      subclassLevel: 3,
+      subclassIds: [],
+    },
+  });
+
+  // Identical, except that the root's second option is gone. The option that
+  // continues the chain survives, so round one still activates every link.
+  const narrowedClass = base({
+    ...klass,
+    choices: [
+      { ...klass.choices[0], options: [{ id: "option:chain-0", label: "Begin", entryId: "feat:chain-1" }] },
+    ],
+  } as ContentEntry);
+
+  return { entries: [klass, ...links], narrowedClass };
+}
+
+function chainProfile(id: ID): RulesetProfile {
+  return {
+    id,
+    name: id,
+    activeSourceIds: ["source:chain"],
+    editionPriority: [],
+    allowedCategories: [],
+    allowLegacy: false,
+    allowDuplicateVersions: false,
+    conflictResolution: "source-priority",
+    allowCustomOverrides: true,
+    requirementEnforcement: "soft",
+    createdAt: "2026-08-04T00:00:00.000Z",
+    updatedAt: "2026-08-04T00:00:00.000Z",
+  } as RulesetProfile;
+}
+
+function chainBuild(depth: number, order: "forward" | "reverse"): CharacterDraftBuild {
+  const indices = [...Array(depth).keys()];
+  const ordered = order === "forward" ? indices : [...indices].reverse();
+  const choiceSelections: Record<string, string[]> = {};
+  for (const index of ordered)
+    choiceSelections[`choice:chain-${index}`] =
+      index === 0 ? ["option:chain-0", "option:chain-extra"] : [`option:chain-${index}`];
+  return {
+    ...EMPTY_DRAFT_BUILD,
+    name: "Chainwalker",
+    level: 1,
+    classId: "class:chain",
+    choiceSelections,
+  } as CharacterDraftBuild;
+}
+
+describe("a deep activation chain settles to a fixpoint", () => {
+  const DEPTH = 12;
+
+  const resolve = (build: CharacterDraftBuild, proposedEntries: readonly ContentEntry[], current: readonly ContentEntry[]) =>
+    resolveRulesetChange({
+      draftId: "draft:chain",
+      expectedRevision: 1,
+      build,
+      currentRuleset: chainProfile("ruleset:chain-a"),
+      currentRulesetId: "ruleset:chain-a",
+      currentEntries: current,
+      proposedRuleset: chainProfile("ruleset:chain-b"),
+      proposedEntries,
+    });
+
+  it("keeps every link when the target ruleset still resolves the whole chain", () => {
+    const { entries } = chainEntries(DEPTH);
+    const build = chainBuild(DEPTH, "forward");
+
+    const { preview, nextBuild } = resolve(build, entries, entries);
+
+    expect(Object.keys(nextBuild.choiceSelections).sort()).toEqual(Object.keys(build.choiceSelections).sort());
+    expect(preview.cleared.filter(field => field.fieldPath.startsWith("choiceSelections."))).toEqual([]);
+  });
+
+  /**
+   * The regression proper. A single pass clears only the root, because every
+   * deeper choice was still reachable in the walk that pass measured. Anything
+   * short of a fixpoint therefore leaves stale selections behind, and this
+   * assertion names how many.
+   */
+  it("removes every descendant when the root selection is invalidated, not just the root", () => {
+    const { entries, narrowedClass } = chainEntries(DEPTH);
+    const proposed = [narrowedClass, ...entries.slice(1)];
+    const build = chainBuild(DEPTH, "forward");
+
+    const { preview, nextBuild } = resolve(build, proposed, entries);
+
+    // Not one, not two: the entire chain.
+    expect(Object.keys(nextBuild.choiceSelections)).toEqual([]);
+    const clearedChoices = preview.cleared
+      .filter(field => field.fieldPath.startsWith("choiceSelections."))
+      .map(field => field.fieldPath);
+    expect(clearedChoices).toHaveLength(DEPTH);
+    // The iteration cap must not truncate a chain this schema can express.
+    expect(preview.retained.some(field => field.fieldPath.startsWith("choiceSelections."))).toBe(false);
+  });
+
+  it("produces the same verdict whichever order the selections were stored in", () => {
+    const { entries, narrowedClass } = chainEntries(DEPTH);
+    const proposed = [narrowedClass, ...entries.slice(1)];
+
+    const forward = resolve(chainBuild(DEPTH, "forward"), proposed, entries);
+    const reverse = resolve(chainBuild(DEPTH, "reverse"), proposed, entries);
+
+    expect(Object.keys(forward.nextBuild.choiceSelections)).toEqual([]);
+    expect(Object.keys(reverse.nextBuild.choiceSelections)).toEqual([]);
+    expect(forward.preview.cleared.map(f => f.fieldPath).sort()).toEqual(
+      reverse.preview.cleared.map(f => f.fieldPath).sort(),
+    );
+  });
+
+  it("reports exactly what it writes", () => {
+    const { entries, narrowedClass } = chainEntries(DEPTH);
+    const proposed = [narrowedClass, ...entries.slice(1)];
+    const { preview, nextBuild } = resolve(chainBuild(DEPTH, "forward"), proposed, entries);
+
+    const retainedChoiceIds = new Set(
+      preview.retained
+        .filter(field => field.fieldPath.startsWith("choiceSelections."))
+        .map(field => field.fieldPath.slice("choiceSelections.".length)),
+    );
+    expect(new Set(Object.keys(nextBuild.choiceSelections))).toEqual(retainedChoiceIds);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 12 — a repeated-amount origin pattern is honoured, not refused        */
+/* -------------------------------------------------------------------------- */
+
+describe("an origin pattern whose amounts repeat", () => {
+  /** The acceptance background, re-declared with the pattern under test. */
+  function backgroundWithPattern(abilities: readonly string[], increasePattern: readonly number[]): ContentEntry[] {
+    return ACCEPTANCE_ENTRIES.map(entry => {
+      if (entry.id !== ACCEPTANCE_IDS.background) return entry;
+      return {
+        ...entry,
+        mechanics: {
+          ...(entry.mechanics as object),
+          abilityScoreChoices: { abilities: [...abilities], increasePattern: [...increasePattern] },
+        },
+      } as ContentEntry;
+    });
+  }
+
+  it("accepts three separate +1 slots placed on three different abilities", () => {
+    const entries = backgroundWithPattern(["strength", "wisdom", "constitution"], [1, 1, 1]);
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+      abilityIncreases: { strength: 1, wisdom: 1, constitution: 1 },
+      abilityScores: {},
+    };
+
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    // Slots are consumed as a multiset, so identical amounts do not collide.
+    expect(allocation.invalid).toEqual([]);
+    expect(allocation.increases).toEqual({ strength: 1, wisdom: 1, constitution: 1 });
+    expect(allocation.patternSatisfied).toBe(true);
+    expect(allocation.final.strength).toBe(16);
+    expect(allocation.final.wisdom).toBe(11);
+    expect(allocation.final.constitution).toBe(14);
+  });
+
+  it("still refuses a second +1 when the pattern only declares one", () => {
+    const entries = backgroundWithPattern(["strength", "wisdom", "constitution"], [2, 1]);
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+      abilityIncreases: { strength: 1, wisdom: 1 },
+      abilityScores: {},
+    };
+
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    expect(allocation.invalid.map(item => item.reason)).toContain("slot-already-used");
+    expect(Object.keys(allocation.increases)).toHaveLength(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 13 — two profiles are scoped from one read of the entry table         */
+/* -------------------------------------------------------------------------- */
+
+describe("loading several ruleset scopes at once", () => {
+  it("returns exactly what loading each one separately returns", async () => {
+    await installAcceptanceRuleset(harness);
+    const { repositories } = harness.context;
+
+    const separately = [
+      await loadRulesetScope(repositories, ACCEPTANCE_RULESET_ID),
+      await loadRulesetScope(repositories, SYNTHETIC_RULESET_ID),
+    ];
+    const together = await loadRulesetScopes(repositories, [ACCEPTANCE_RULESET_ID, SYNTHETIC_RULESET_ID]);
+
+    expect(together).toHaveLength(2);
+    expect(together[0].ruleset).toEqual(separately[0].ruleset);
+    expect(together[1].ruleset).toEqual(separately[1].ruleset);
+    expect(together[0].entries).toEqual(separately[0].entries);
+    expect(together[1].entries).toEqual(separately[1].entries);
+    // The two profiles really are different, so this is not a vacuous match.
+    expect(together[0].entries).not.toEqual(together[1].entries);
+  });
+
+  it("reads the entry table once however many profiles are asked for", async () => {
+    await installAcceptanceRuleset(harness);
+    const { repositories } = harness.context;
+    let reads = 0;
+    // The read port is a class instance, so it is delegated to rather than
+    // spread: spreading would drop every method that lives on the prototype.
+    const countedContent = new Proxy(repositories.content, {
+      get(target, property, receiver) {
+        if (property === "listEntries")
+          return async () => {
+            reads += 1;
+            return target.listEntries();
+          };
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const counted = { ...repositories, content: countedContent } as typeof repositories;
+
+    await loadRulesetScopes(counted, [ACCEPTANCE_RULESET_ID, SYNTHETIC_RULESET_ID]);
+
+    expect(reads).toBe(1);
   });
 });

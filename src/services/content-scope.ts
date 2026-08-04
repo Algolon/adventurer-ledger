@@ -107,6 +107,25 @@ export async function loadRulesetScope(
   return { ruleset, entries: scopeEntriesToRuleset(allEntries, ruleset) };
 }
 
+/**
+ * Several profiles' scopes from one read of the entry table.
+ *
+ * Scoping is a pure filter over the same rows, so a comparison that needs two
+ * profiles does not need to read every entry twice. This is the identity
+ * `loadRulesetScope` already relies on, applied once per profile instead of once
+ * per call — no cache, no shared state, and nothing to invalidate.
+ */
+export async function loadRulesetScopes(
+  repositories: CharacterRepositories,
+  rulesetProfileIds: readonly ID[],
+): Promise<RulesetScope[]> {
+  const allEntries = await repositories.content.listEntries();
+  const rulesets = await Promise.all(
+    rulesetProfileIds.map(rulesetProfileId => repositories.content.getRuleset(rulesetProfileId)),
+  );
+  return rulesets.map(ruleset => ({ ruleset, entries: scopeEntriesToRuleset(allEntries, ruleset) }));
+}
+
 /** The ability a proficiency is rolled with, from its tag or its own key. */
 export function abilityForProficiency(entry: ContentEntry): Ability | undefined {
   const tagged = entry.tags

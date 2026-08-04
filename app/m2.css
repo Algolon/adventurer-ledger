@@ -1463,3 +1463,10 @@
 .m2-ruleset-privacy {
   color: #4f5860;
 }
+
+/* The ruleset-change confirmation renders inside the shared dialog surface, so
+   it only needs its own internal rhythm; the frame comes from `.m2-dialog`. */
+.m2-confirm-body {
+  display: grid;
+  gap: 12px;
+}

@@ -4,6 +4,7 @@ import {
   ACCEPTANCE_ARRAY,
   acceptancePackJson,
   sourceCollisionPackJson,
+  overlapPackJson,
 } from "@/tests/fixtures/acceptance-ruleset";
 
 /**
@@ -727,5 +728,230 @@ test.describe("the first step is accessible in either colour preference", () => 
     expect(name).toBeGreaterThanOrEqual(0);
     expect(ruleset).toBeGreaterThan(name);
     expect(level).toBeGreaterThan(ruleset);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+test.describe("the ruleset confirmation is a real modal", () => {
+  /** Opens the confirmation from a known initiating control. */
+  async function openConfirmation(page: Page) {
+    await importAcceptancePack(page);
+    await startBuild(page, "Modal Keys");
+    const opener = page.getByRole("button", { name: /^Runefolio 2024 synthetic/ });
+    await opener.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    return { dialog, opener };
+  }
+
+  /** True when the active element is inside the open dialog. */
+  const focusIsInside = (page: Page) =>
+    page.evaluate(() => {
+      const surface = document.querySelector('[role="alertdialog"]');
+      const active = document.activeElement;
+      return Boolean(surface && active && surface.contains(active));
+    });
+
+  test("keeps focus inside while tabbing forwards", async ({ page }) => {
+    const { dialog } = await openConfirmation(page);
+    // The safe action holds focus when the dialog opens.
+    await expect(dialog.getByRole("button", { name: "Keep current ruleset" })).toBeFocused();
+
+    // Deliberately more presses than the dialog has controls.
+    for (let press = 0; press < 12; press += 1) {
+      await page.keyboard.press("Tab");
+      expect(await focusIsInside(page)).toBe(true);
+    }
+  });
+
+  test("keeps focus inside while tabbing backwards", async ({ page }) => {
+    await openConfirmation(page);
+    for (let press = 0; press < 12; press += 1) {
+      await page.keyboard.press("Shift+Tab");
+      expect(await focusIsInside(page)).toBe(true);
+    }
+  });
+
+  test("closes on Escape from a control that is not the default, and restores focus", async ({ page }) => {
+    const { dialog, opener } = await openConfirmation(page);
+    // Move off the default action first: Escape must not depend on where focus is.
+    await dialog.getByRole("button", { name: "Switch ruleset" }).focus();
+    await expect(dialog.getByRole("button", { name: "Switch ruleset" })).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+
+    // Focus returns to the control that opened it, not to the document body.
+    await expect(opener).toBeFocused();
+    // And cancelling wrote nothing.
+    await expect(page.getByRole("button", { name: /^Emberline acceptance slice/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  test("does not let a control behind the modal take focus", async ({ page }) => {
+    await openConfirmation(page);
+    // Every stop is recorded, not just the last one: a trap that leaks on the
+    // second press and happens to land back inside on the twelfth still leaks.
+    const stops: string[] = [];
+    for (let press = 0; press < 12; press += 1) {
+      await page.keyboard.press("Tab");
+      stops.push(
+        await page.evaluate(() => {
+          const active = document.activeElement as HTMLElement | null;
+          return (active?.getAttribute("aria-label") || active?.textContent?.trim() || active?.tagName || "?").slice(0, 40);
+        }),
+      );
+    }
+    const behind = stops.filter(stop => /Continue|Back|All steps|Guided mode|Characters|Compendium|Settings/.test(stop));
+    expect(behind).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Installs the dependent pack and creates its profile through Settings.
+ *
+ * The dependency is what makes the two profiles overlap: membership is the
+ * pack's own entries plus its resolved dependency's, so this profile activates
+ * every acceptance entry as well as its own background.
+ */
+async function installOverlapProfile(page: Page) {
+  await page.goto(APP_ROOT);
+  await importPack(page, overlapPackJson(), { createRuleset: false });
+  await page.getByRole("button", { name: "Back to Settings" }).click();
+  await page.getByRole("button", { name: "Rulesets" }).click();
+  const offer = page.locator(".m2-card").filter({ hasText: "Emberline overlap addition" });
+  await expect(offer).toBeVisible();
+  await offer.getByRole("button", { name: "Create its ruleset" }).click();
+  await expect(
+    page.locator(".m2-card").filter({ hasText: "Emberline overlap addition" }).getByText("Installed", { exact: true }),
+  ).toBeVisible();
+}
+
+test.describe("switching between rulesets that share content", () => {
+  test("keeps everything the incoming ruleset still resolves", async ({ page }) => {
+    await importAcceptancePack(page);
+    await installOverlapProfile(page);
+
+    // A complete level 5 build: class, subclass, origin, background, a parent
+    // choice, the nested choice it activates, equipment, and origin increases.
+    await buildLevelFive(page, "Shared Content");
+
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /^Emberline overlap addition/ }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+
+    // Everything the incoming ruleset still resolves is reported as kept.
+    const kept = dialog.locator("h4", { hasText: "This is kept" });
+    await expect(kept).toBeVisible();
+    for (const label of [
+      /Class: Beaconkeeper/,
+      /Subclass: Kindled Watch/,
+      /Origin species: Cairnfolk/,
+      /Background: Ferry Clerk/,
+    ])
+      await expect(dialog.getByText(label)).toBeVisible();
+
+    // And nothing at all is cleared, because nothing became invalid.
+    await expect(dialog.locator("h4", { hasText: "This will be cleared" })).toHaveCount(0);
+    await expect(dialog.getByText(/Nothing in this build belongs to the current ruleset/)).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Switch ruleset" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Emberline overlap addition/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // The identity survived the switch.
+    await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Shared Content");
+    await expect(levelSelect(page)).toHaveValue("5");
+
+    const stillChosen = async () => {
+      await page.getByRole("button", { name: "All steps" }).click();
+      await page.getByRole("button", { name: /^Class (Incomplete|Complete)$/ }).click();
+      await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "All steps" }).click();
+      await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
+      await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("button", { name: /^Ferry Clerk/ })).toHaveAttribute("aria-pressed", "true");
+      // The parent choice and the nested choice it activates both survive.
+      await page.getByRole("button", { name: "All steps" }).click();
+      await page.getByRole("button", { name: /^Class choices (Incomplete|Complete)$/ }).click();
+      await expect(page.getByRole("button", { name: /^Attentive Clerk/ })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("button", { name: /^Signal lamp/ })).toHaveAttribute("aria-pressed", "true");
+      // Equipment too.
+      await page.getByRole("button", { name: "All steps" }).click();
+      await page.getByRole("button", { name: /^Equipment (Incomplete|Complete)$/ }).click();
+      await expect(page.getByRole("button", { name: /^Ledger case/ })).toHaveAttribute("aria-pressed", "true");
+    };
+
+    await stillChosen();
+
+    // Review agrees, and the build is still committable.
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /^Review/ }).click();
+    await expect(page.getByText("This level cannot be created")).toHaveCount(0);
+
+    // And a reload sees exactly the same thing: the write matched the preview.
+    await page.reload();
+    await page.getByRole("button", { name: "Characters", exact: true }).click();
+    await page.getByRole("button", { name: /Shared Content/ }).first().click();
+    await stillChosen();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+test.describe("a switch that strands the target level says so", () => {
+  test("names the conflict, keeps the draft open, and blocks the commit until it is repaired", async ({ page }) => {
+    await importAcceptancePack(page);
+    await buildLevelFive(page, "Stranded Level");
+
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    // The built-in synthetic ruleset's content stops well short of level 5.
+    await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.locator("h4", { hasText: "This will need repairing" })).toBeVisible();
+    const conflict = dialog.getByText(/Target level 5 is beyond the level this content reaches/);
+    await expect(conflict).toBeVisible();
+    // It states the repair rather than promising to silently lower the level.
+    await expect(conflict).toContainText(/Choose a supported level or a class that covers it/);
+    await expect(dialog.getByText(/level will be (lowered|reduced|set) automatically/i)).toHaveCount(0);
+
+    await dialog.getByRole("button", { name: "Switch ruleset" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    // The draft is still open, still at 5, and still says what is wrong.
+    await expect(page.getByText(/^Step 1 of/)).toBeVisible();
+    const stranded = page.getByRole("alert").filter({ hasText: /does not reach the chosen level/ });
+    await expect(stranded).toBeVisible();
+    await expect(stranded).toContainText("This build is set to level 5");
+    // The stored level stays visible and unselectable rather than being quietly
+    // rewritten to something the user never chose.
+    await expect(levelSelect(page).locator("option[disabled]")).toHaveText("5 — not supported");
+
+    // The commit stays blocked while the conflict stands: Review is still on
+    // screen afterwards, so nothing was created.
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /^Review/ }).click();
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Review", level: 3 })).toBeVisible();
+
+    // Choosing a level the incoming content supports resolves it.
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await levelSelect(page).selectOption("1");
+    await expect(page.getByText(/does not reach the chosen level/)).toHaveCount(0);
+    await expect(levelSelect(page).locator("option[disabled]")).toHaveCount(0);
   });
 });
