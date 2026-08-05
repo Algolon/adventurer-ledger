@@ -128,7 +128,8 @@ describe("Brammel at level 2", () => {
 
   it("applies the level-keyed hit point and resource increases", () => {
     expect(sheet.level).toBe(2);
-    expect(sheet.hitPoints.maximum.value).toBe(12);
+    // Class base 10 plus the Constitution modifier applied once per level.
+    expect(sheet.hitPoints.maximum.value).toBe(14);
     expect(sheet.hitDice.value).toBe("2d8");
     expect(sheet.resources[0].maximum.value).toBe(4);
     expect(sheet.completeness).toBe("guided-complete");

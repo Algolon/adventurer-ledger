@@ -244,8 +244,9 @@ export function requiredChoicesFor(
   activation: ActivationPlan = planActivation(build, entries),
   proficiencies: ProficiencyPlan = planProficiencies(activation, entries, build.choiceSelections),
 ): RequiredChoice[] {
-  // Built once for the whole pass, not once per choice.
-  const index = createPlanningIndex(build, entries);
+  // Built once for the whole pass, not once per choice, and against the armour
+  // the activation pass already resolved.
+  const index = createPlanningIndex(build, entries, activation.armor);
   return activation.choices.map(activated => {
     const choice = activated.choice;
     const selected = build.choiceSelections[choice.id] ?? [];
@@ -556,6 +557,20 @@ export function planBuild(
       stepIssues["class-choices"].push({ code: "SUBCLASS_NOT_CHOSEN", recordId: subclass.classId, severity: "error" });
     if (subclass && build.subclassId && !subclass.valid)
       stepIssues["class-choices"].push({ code: "SUBCLASS_INVALID", recordId: build.subclassId, severity: "error" });
+
+    /*
+     * A choice that partly overlaps the class's subclass declaration is an
+     * authoring problem, not a user one. It is reported as a warning against the
+     * choice so the pack can be repaired, and it does not block: the choice is
+     * still presented, so the build stays answerable rather than deadlocked.
+     */
+    for (const overlap of activation.subclassOverlaps)
+      if (overlap.kind === "ambiguous")
+        stepIssues["class-choices"].push({
+          code: "SUBCLASS_CHOICE_OVERLAP_AMBIGUOUS",
+          recordId: overlap.choiceId,
+          severity: "warning",
+        });
   }
 
   stepIssues.abilities.push(...abilityIssues(build, entries, allocation));

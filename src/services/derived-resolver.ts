@@ -25,7 +25,9 @@ import type {
 import { ABILITIES, isAllowedTargetPath } from "@/src/domain/character-record";
 import type { Ability, Character, ContentEntry, ID, RulesetProfile } from "@/src/domain/model";
 import { deriveCharacterState, type DerivedCharacterState } from "@/src/rules/derive-character";
+import { NO_ARMOR_RESOLUTION } from "@/src/rules/armor-context";
 import { abilityModifier, proficiencyBonus } from "@/src/rules/engine";
+import { maximumHitPointsFor } from "@/src/rules/hit-points";
 import {
   hitDieForClass,
   masteryWeaponRelations,
@@ -184,12 +186,6 @@ const actionDefinitionSchema = z
     range: z.string().max(40).optional(),
   })
   .passthrough();
-
-const armorMechanicsSchema = z.object({
-  category: z.enum(["light", "medium", "heavy", "shield"]),
-  baseArmorClass: z.number().int(),
-  dexterity: z.enum(["none", "full", "max-2"]),
-});
 
 const known = (value: number, contributors: Contributor[]): DerivedValue => ({ value, contributors });
 const unknown = (recovery: RecoveryAction, contributors: Contributor[] = []): DerivedValue => ({
@@ -394,16 +390,42 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   if (mode === "automatic") {
     const classBase = contextValues["hitPoints.classBase"];
     const constitution = modifierOf("constitution");
-    if (typeof classBase !== "number" || constitution === null) {
+    /*
+     * `hitPoints.classBase` is one scalar path, so two classes writing it
+     * overwrite one another. Nothing in this repository's schemas or decisions
+     * says how a multiclass base should be composed, so the case is named rather
+     * than answered with whichever class happened to write last.
+     */
+    if (character.classLevels.length > 1)
+      issues.push({ code: "HIT_POINTS_MULTICLASS_UNRESOLVED", severity: "warning", fieldPath: "hitPoints.maximum" });
+    const calculated = maximumHitPointsFor({
+      classBase: typeof classBase === "number" ? classBase : null,
+      constitutionModifier: constitution,
+      level: character.level,
+    });
+    if (calculated.value === null) {
       maximumHitPoints = unknown({
         code: constitution === null ? "ABILITY_SCORE_MISSING" : "CLASS_MISSING",
         fieldPath: "hitPoints.maximum",
         action: constitution === null ? "Set Constitution" : "Restore the class source",
       });
     } else {
-      maximumHitPoints = known(classBase + constitution, [
-        { kind: "base", label: `${classEntry?.name ?? "Class"} level ${character.level}`, amount: classBase, entryId: classEntry?.id, sourceId: classEntry?.sourceId },
-        { kind: "ability", label: "Constitution modifier", amount: constitution },
+      // A maximum of zero or less is reported, never quietly raised to a floor
+      // this project has never decided on.
+      if (calculated.notPositive)
+        issues.push({ code: "HIT_POINTS_MAXIMUM_NOT_POSITIVE", severity: "warning", fieldPath: "hitPoints.maximum" });
+      maximumHitPoints = known(calculated.value, [
+        { kind: "base", label: `${classEntry?.name ?? "Class"} level ${character.level}`, amount: classBase as number, entryId: classEntry?.id, sourceId: classEntry?.sourceId },
+        {
+          kind: "ability",
+          // The Constitution modifier applies once per level, so the explanation
+          // names the per-level modifier and the total it contributes.
+          label:
+            calculated.levelsApplied === 1
+              ? "Constitution modifier"
+              : `Constitution modifier across ${calculated.levelsApplied} levels`,
+          amount: calculated.constitutionTotal,
+        },
       ]);
     }
   } else {
@@ -437,43 +459,51 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
       : { value: null, contributors: [], recovery: { code: "CLASS_MISSING", fieldPath: "hitDice.total", action: "Choose a class" } };
 
   // ---- armour class --------------------------------------------------------
+  /*
+   * The worn armour comes from the shared resolver the rules evaluation used, so
+   * the number on the sheet, the contribution shown against each item, and the
+   * conditions the engine evaluated all read one resolution of one equipment
+   * list. Nothing here inspects an item's name or ID.
+   */
+  const armour = state?.armor ?? NO_ARMOR_RESOLUTION;
+  const wornArmourByItemId = new Map([...armour.body, ...armour.shields].map(piece => [piece.itemId, piece]));
   const equipmentItems = state?.equipment.items ?? [];
   const equipment: DerivedEquipmentItem[] = equipmentItems.map(item => {
     const definition = byId.get(item.itemId);
     if (!definition) missingDependencyIds.add(item.itemId);
-    const armour = definition?.category === "armor" ? armorMechanicsSchema.safeParse(definition.mechanics) : undefined;
+    const worn = wornArmourByItemId.get(item.itemId);
     return {
       itemId: item.itemId,
       label: definition?.name ?? item.itemId,
       quantity: item.quantity,
       status: item.status,
-      ...(armour?.success && item.status === "equipped" ? { armorContribution: armour.data.baseArmorClass } : {}),
+      ...(worn ? { armorContribution: worn.baseArmorClass } : {}),
     };
   });
 
   let armorClass: DerivedValue;
   if (mode === "automatic") {
-    const worn = equipmentItems
-      .filter(item => item.status === "equipped")
-      .map(item => ({ item, definition: byId.get(item.itemId) }))
-      .flatMap(({ item, definition }) => {
-        if (!definition || definition.category !== "armor") return [];
-        const parsed = armorMechanicsSchema.safeParse(definition.mechanics);
-        return parsed.success ? [{ itemId: item.itemId, name: definition.name, sourceId: definition.sourceId, ...parsed.data }] : [];
-      })
-      .sort((left, right) => left.itemId.localeCompare(right.itemId));
-    const body = worn.find(piece => piece.category !== "shield");
+    // Two worn body armours is a state the equipment model cannot decide
+    // between, so neither is picked. Choosing by array order would be a guess.
+    if (armour.context.ambiguous)
+      issues.push({ code: "ARMOUR_SELECTION_AMBIGUOUS", severity: "warning", fieldPath: "armorClass" });
+    const body = armour.body.length === 1 ? armour.body[0] : undefined;
     const dexterity = modifierOf("dexterity");
     if (!body || dexterity === null) {
       armorClass = unknown({
         code: dexterity === null ? "ABILITY_SCORE_MISSING" : "ARMOUR_UNRESOLVED",
         fieldPath: "armorClass",
-        action: dexterity === null ? "Set Dexterity" : "Equip armour or enter a manual value",
+        action:
+          dexterity === null
+            ? "Set Dexterity"
+            : armour.context.ambiguous
+              ? "Wear one body armour, or enter a manual value"
+              : "Equip armour or enter a manual value",
       });
     } else {
       const dexterityApplied = body.dexterity === "none" ? 0 : body.dexterity === "max-2" ? Math.min(dexterity, 2) : dexterity;
       const contributors: Contributor[] = [
-        { kind: "equipment", label: body.name, amount: body.baseArmorClass, entryId: body.itemId, sourceId: body.sourceId },
+        { kind: "equipment", label: body.label, amount: body.baseArmorClass, entryId: body.itemId, sourceId: body.sourceId },
         {
           kind: "ability",
           label: body.dexterity === "max-2" ? "Dexterity modifier (capped at +2)" : "Dexterity modifier",
@@ -481,9 +511,9 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         },
       ];
       let total = body.baseArmorClass + dexterityApplied;
-      for (const shield of worn.filter(piece => piece.category === "shield")) {
+      for (const shield of armour.shields) {
         total += shield.baseArmorClass;
-        contributors.push({ kind: "equipment", label: shield.name, amount: shield.baseArmorClass, entryId: shield.itemId, sourceId: shield.sourceId });
+        contributors.push({ kind: "equipment", label: shield.label, amount: shield.baseArmorClass, entryId: shield.itemId, sourceId: shield.sourceId });
       }
       // Declarative armour-class effects contributed by features or styles.
       const effectBonus = contextValues.armorClass;

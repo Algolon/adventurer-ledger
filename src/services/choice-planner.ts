@@ -25,6 +25,14 @@ import type { CharacterDraftBuild } from "@/src/domain/character-record";
 import { ABILITIES } from "@/src/domain/character-record";
 import type { Category, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
 import { evaluateCondition, type RuleContext } from "@/src/rules/engine";
+import {
+  armorContextForEntries,
+  entriesGateOnArmor,
+  NO_ARMOR_CONTEXT,
+  sameArmorContext,
+  type ArmorContext,
+} from "@/src/rules/armor-context";
+import { reconcileSubclassChoices, type SubclassChoiceOverlap } from "@/src/rules/subclass-reconciliation";
 import type { BuilderStepId } from "@/src/services/builder-steps";
 
 /** Why an entry is active. The route fixes which builder step owns its choices. */
@@ -96,6 +104,14 @@ export interface SubclassRequirement {
   valid: boolean;
   /** Reached, offers at least one option, and no valid selection is stored. */
   unresolved: boolean;
+  /**
+   * Generic choices this one typed decision absorbed, kept as provenance.
+   *
+   * A pack may declare the same decision twice — typed, and again as a choice
+   * over the same subclass entries. Only one decision is presented; this records
+   * which redundant declaration it stands in for.
+   */
+  unifiedChoiceIds: readonly ID[];
 }
 
 /**
@@ -121,10 +137,22 @@ export interface ActivationPlan {
   /** Progression rows referenced a feature entry that is not installed. */
   missingFeatureIds: readonly ID[];
   subclass?: SubclassRequirement;
+  /**
+   * Overlaps between a class's typed subclass declaration and one of its own
+   * generic choices. A `duplicate` has been unified away; an `ambiguous` one is
+   * still presented and is reported as an authoring diagnostic.
+   */
+  subclassOverlaps: readonly SubclassChoiceOverlap[];
   /** The highest level the selected class actually defines a progression row for. */
   classProgressionMax?: number;
   /** Trait IDs an activated lineage replaces. They are not in `entries`. */
   replacedTraitIds: readonly ID[];
+  /**
+   * The armour the draft's own equipment selection actually puts on. Planning
+   * reads it from the same resolver the derived sheet does, so an armour-
+   * dependent option is judged the same way before and after commit.
+   */
+  armor: ArmorContext;
   levelCoverage: LevelCoverage;
   /**
    * True only when a readable class progression reaches the draft's level.
@@ -137,7 +165,7 @@ export interface ActivationPlan {
  * A minimal evaluation context built from the draft, used only to test option
  * and entry prerequisites declaratively. It runs no effects and derives nothing.
  */
-export function draftContext(build: CharacterDraftBuild): RuleContext {
+export function draftContext(build: CharacterDraftBuild, armor: ArmorContext = NO_ARMOR_CONTEXT): RuleContext {
   const abilities = Object.fromEntries(
     ABILITIES.map(ability => [ability, build.abilityScores[ability] ?? 0]),
   ) as RuleContext["abilities"];
@@ -148,7 +176,10 @@ export function draftContext(build: CharacterDraftBuild): RuleContext {
     tags: new Set<string>(),
     features: new Set<string>(),
     proficiencies: new Set<string>(),
-    armor: { worn: false },
+    // Supplied by the caller from the shared resolver. The default is "nothing
+    // worn", which is the honest answer before any equipment is known — not a
+    // permanent assertion, which is what it used to be.
+    armor,
     flags: {},
     values: {},
   };
@@ -224,20 +255,40 @@ function replacedTraitsIn(activated: readonly ActivatedEntry[]): Set<ID> {
  * and the result is compared so a pathological cycle cannot loop.
  */
 export function planActivation(build: CharacterDraftBuild, entries: readonly ContentEntry[]): ActivationPlan {
-  const first = traverseActivation(build, entries, new Set());
+  const first = traverseActivation(build, entries, new Set(), NO_ARMOR_CONTEXT);
   const replaced = replacedTraitsIn(first.entries);
-  if (!replaced.size) return { ...first, replacedTraitIds: [] };
-  const second = traverseActivation(build, entries, replaced);
-  return { ...second, replacedTraitIds: [...replaced].sort() };
+  const replacedTraitIds = replaced.size ? [...replaced].sort() : [];
+  const base = replaced.size ? traverseActivation(build, entries, replaced, NO_ARMOR_CONTEXT) : first;
+
+  /*
+   * Armour is resolved from the entries the walk actually activated, and the
+   * plan reports it so every later consumer reads the same context the derived
+   * sheet will. It comes from the shared resolver, so an armour-dependent
+   * decision is judged the same way before and after commit.
+   *
+   * The walk itself is repeated only when it could produce a different answer —
+   * something is worn *and* some entry gates its activation on armour. Content
+   * that never mentions armour pays nothing for the correction, which keeps the
+   * bounded planning cost this module already guarantees.
+   */
+  const armor = armorContextForEntries(
+    base.entries.map(item => item.entry),
+    entries,
+    build.equipmentSelections,
+  ).context;
+  if (sameArmorContext(armor, NO_ARMOR_CONTEXT) || !entriesGateOnArmor(entries))
+    return { ...base, replacedTraitIds, armor };
+  return { ...traverseActivation(build, entries, replaced, armor), replacedTraitIds, armor };
 }
 
 function traverseActivation(
   build: CharacterDraftBuild,
   entries: readonly ContentEntry[],
   suppressed: ReadonlySet<ID>,
-): Omit<ActivationPlan, "replacedTraitIds"> {
+  armor: ArmorContext,
+): Omit<ActivationPlan, "replacedTraitIds" | "armor"> {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
-  const context = draftContext(build);
+  const context = draftContext(build, armor);
   const activated: ActivatedEntry[] = [];
   const activatedIds = new Set<ID>();
   const choices: ActivatedChoice[] = [];
@@ -248,6 +299,9 @@ function traverseActivation(
   const progressionChoiceIds = new Set<ID>();
   /** The level each progression-gated choice became reachable at. */
   const progressionChoiceLevels = new Map<ID, number>();
+  /** Generic choices the typed subclass decision already answers. */
+  const unifiedSubclassChoiceIds = new Set<ID>();
+  const subclassOverlaps: SubclassChoiceOverlap[] = [];
   const queue: Pending[] = [];
 
   const stepFor = (route: ActivationRoute, inherited?: BuilderStepId): BuilderStepId =>
@@ -325,6 +379,25 @@ function traverseActivation(
     classProgressionMax = contiguousProgressionMax(mechanics.progression.map(row => row.level));
     readProgression(classEntry, mechanics.progression, classFeatureIds);
 
+    /*
+     * One conceptual subclass decision, one user-facing decision.
+     *
+     * A generic choice that offers exactly this class's declared subclasses at
+     * the same decision point is the typed decision written twice. It is
+     * suppressed here so the builder renders one surface and the typed
+     * selection alone clears the requirement. Anything that only partly
+     * overlaps stays, and is reported instead.
+     */
+    const reconciliation = reconcileSubclassChoices({
+      classEntry,
+      subclassIds: mechanics.subclassIds,
+      subclassLevel: mechanics.subclassLevel,
+      byId,
+      choiceLevels: progressionChoiceLevels,
+    });
+    for (const choiceId of reconciliation.duplicateChoiceIds) unifiedSubclassChoiceIds.add(choiceId);
+    subclassOverlaps.push(...reconciliation.overlaps);
+
     // ---- explicit subclass identity ---------------------------------------
     const options = mechanics.subclassIds
       .map(id => byId.get(id))
@@ -344,6 +417,7 @@ function traverseActivation(
       ...(selected ? { selectedId: selected } : {}),
       valid,
       unresolved: reached && options.length > 0 && !valid,
+      unifiedChoiceIds: [...unifiedSubclassChoiceIds].sort(),
     };
 
     if (reached && valid && selected) {
@@ -455,6 +529,9 @@ function traverseActivation(
     const gated = pending.entry.category === "class" || pending.entry.category === "subclass";
     for (const choice of pending.entry.choices) {
       if (gated && !progressionChoiceIds.has(choice.id)) continue;
+      // A generic restatement of the typed subclass decision is never presented
+      // a second time; the typed panel is the one surface for it.
+      if (unifiedSubclassChoiceIds.has(choice.id)) continue;
       walkChoice(choice, activation, gated ? progressionChoiceLevels.get(choice.id) : pending.level);
     }
   }
@@ -473,6 +550,7 @@ function traverseActivation(
     missingProgressionChoiceIds: [...new Set(missingProgressionChoiceIds)].sort(),
     missingFeatureIds: [...new Set(missingFeatureIds)].sort(),
     ...(subclass ? { subclass } : {}),
+    subclassOverlaps,
     ...(classProgressionMax === undefined ? {} : { classProgressionMax }),
     levelCoverage,
     levelCovered: levelCoverage === "covered",

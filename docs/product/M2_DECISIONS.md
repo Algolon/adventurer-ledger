@@ -169,9 +169,13 @@ They do not create a full character version. An explicit session snapshot create
 The synthetic ruleset uses **preserve deficit/expenditure** when a maximum increases:
 
 ```text
-HP:       5 / 10 + 2 maximum → 7 / 12
+HP:       5 / 10 + 4 maximum → 9 / 14
 Resource: 1 /  3 + 1 maximum → 2 /  4
 ```
+
+The hit-point delta is 4 because the Constitution modifier applies once per
+character level: level 2 is class base 10 plus `+2` twice. The policy itself is
+unchanged — only the maximum it is applied to was previously wrong.
 
 Equivalent form: `newCurrent = oldCurrent + (newMaximum - oldMaximum)`, clamped only to the new valid range. A decreasing maximum uses an explicit preview and never creates a negative current value.
 

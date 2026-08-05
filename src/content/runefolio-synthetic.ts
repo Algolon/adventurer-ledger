@@ -12,7 +12,9 @@
  *   Abilities   standard array 15/14/13/12/10/8 with the Caravan Warden +2/+1
  *               becomes STR 16, DEX 15, CON 14, INT 12, WIS 10, CHA 8
  *   Hit points  level 1: class base 8 + Constitution +2 = 10
- *               level 2: class base 10 + Constitution +2 = 12   (+2 maximum)
+ *               level 2: class base 10 + Constitution +2 twice = 14  (+4 maximum)
+ *               The Constitution modifier applies once per character level; the
+ *               class base is the cumulative class contribution for that level.
  *   Resource    Rallying Breath 3 uses at level 1, 4 at level 2 (+1 maximum)
  *   Armour      Travel Mail 14 + Dexterity 2 (capped) + Round Guard 2 = 18
  *   Attack      Longblade Strike +5 to hit, 1d8+4 damage

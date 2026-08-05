@@ -16,6 +16,8 @@
  */
 import type { CharacterDraftBuild } from "@/src/domain/character-record";
 import type { ContentEntry, ID } from "@/src/domain/model";
+import type { ArmorContext } from "@/src/rules/armor-context";
+import { NO_ARMOR_CONTEXT } from "@/src/rules/armor-context";
 import type { RuleContext } from "@/src/rules/engine";
 import { draftContext } from "@/src/services/choice-planner";
 
@@ -26,10 +28,17 @@ export interface PlanningIndex {
   context: RuleContext;
 }
 
-/** Builds the per-pass index and evaluation context together, once. */
+/**
+ * Builds the per-pass index and evaluation context together, once.
+ *
+ * The armour context comes from the activation pass that has already resolved
+ * it, so option prerequisites are judged against what the draft actually wears
+ * rather than against a hard-coded "no armour".
+ */
 export function createPlanningIndex(
   build: CharacterDraftBuild,
   entries: readonly ContentEntry[],
+  armor: ArmorContext = NO_ARMOR_CONTEXT,
 ): PlanningIndex {
-  return { byId: new Map(entries.map(entry => [entry.id, entry])), context: draftContext(build) };
+  return { byId: new Map(entries.map(entry => [entry.id, entry])), context: draftContext(build, armor) };
 }

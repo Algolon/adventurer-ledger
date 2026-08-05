@@ -337,8 +337,10 @@ test.describe("level up", () => {
     const dialog = page.getByRole("dialog", { name: "Level 1 to 2" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("Preserve deficit and expenditure")).toBeVisible();
-    // 5/10 with a +2 maximum becomes 7/12; 1/3 with a +1 maximum becomes 2/4.
-    await expect(dialog.getByRole("row", { name: /Hit points.*5 \/ 10.*\+2.*7 \/ 12/ })).toBeVisible();
+    // The Constitution modifier applies to both levels, so level 2 is class base
+    // 10 + (2 x +2) = 14. 5/10 with a +4 maximum becomes 9/14; 1/3 with a +1
+    // maximum becomes 2/4.
+    await expect(dialog.getByRole("row", { name: /Hit points.*5 \/ 10.*\+4.*9 \/ 14/ })).toBeVisible();
     await expect(dialog.getByRole("row", { name: /Rallying Breath.*1 \/ 3.*\+1.*2 \/ 4/ })).toBeVisible();
     // Only the newly required choice appears.
     await expect(dialog.getByText("Weapon mastery", { exact: true })).toBeVisible();
@@ -348,7 +350,7 @@ test.describe("level up", () => {
     await dialog.getByRole("button", { name: "Confirm level 2" }).click();
 
     await expect(page.getByText("Vanguard 2")).toBeVisible();
-    await expect(page.getByText("7 / 12")).toBeVisible();
+    await expect(page.getByText("9 / 14")).toBeVisible();
     await expect(page.getByText("2 / 4")).toBeVisible();
   });
 

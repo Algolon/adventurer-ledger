@@ -560,8 +560,9 @@ describe("CharacterLevelUpService", () => {
     expect(preview.fromLevel).toBe(1);
     expect(preview.toLevel).toBe(2);
     expect(preview.policyId).toBe("preserve-deficit-expenditure");
-    // 5 / 10 with a +2 maximum becomes 7 / 12.
-    expect(preview.hitPoints).toMatchObject({ beforeCurrent: 5, beforeMaximum: 10, afterMaximum: 12, maximumDelta: 2, proposedCurrent: 7 });
+    // Level 2 is class base 10 plus the Constitution modifier applied to both
+    // levels: 10 + (2 x +2) = 14. 5 / 10 with a +4 maximum becomes 9 / 14.
+    expect(preview.hitPoints).toMatchObject({ beforeCurrent: 5, beforeMaximum: 10, afterMaximum: 14, maximumDelta: 4, proposedCurrent: 9 });
     // 1 / 3 uses with a +1 maximum becomes 2 / 4.
     expect(preview.resources[0]).toMatchObject({ beforeCurrent: 1, beforeMaximum: 3, afterMaximum: 4, maximumDelta: 1, proposedCurrent: 2 });
     // Only the newly required choice is offered.
@@ -600,10 +601,11 @@ describe("CharacterLevelUpService", () => {
     expect(snapshots[0].runtimeState.currentHitPoints).toBe(10);
 
     const sheet = await harness.query.sheet("character:brammel");
-    expect(sheet?.hitPoints.maximum.value).toBe(12);
+    // Class base 10 plus the Constitution modifier on each of the two levels.
+    expect(sheet?.hitPoints.maximum.value).toBe(14);
     expect(sheet?.resources[0].maximum.value).toBe(4);
     const runtime = await harness.database.characterRuntimeStates.get("character:brammel");
-    expect(runtime?.currentHitPoints).toBe(12);
+    expect(runtime?.currentHitPoints).toBe(14);
     expect(runtime?.resourceUses[SYNTHETIC_IDS.resource]).toBe(4);
   });
 

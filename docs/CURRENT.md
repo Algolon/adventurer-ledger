@@ -36,7 +36,7 @@ Database version 5 adds character drafts, revision-bearing committed characters,
 
 Seven application services own every mutation: draft, build/commit, query, derived resolver, runtime, level-up and transfer. Each validates an expected revision inside the same transaction that writes, so a stale command performs no writes and returns a typed outcome rather than an exception string. A record is versioned before it is replaced. Runtime actions write runtime state plus one action entry and never a durable version. The application-layer resolver is the only component that produces authoritative derived values; React components import services, never Dexie.
 
-The synthetic slice supplies Vanguard, Riverborn, Caravan Warden, Guarded Hand, Measured Cut, Longblade, Round Guard, Travel Mail, Longblade Strike and Rallying Breath, level-keyed by stable ID so later levels are a data change. Brammel resolves to 10 maximum hit points and 3 Rallying Breath uses at level 1, and 12 and 4 at level 2, which is the preserve-deficit demonstration the acceptance criteria require.
+The synthetic slice supplies Vanguard, Riverborn, Caravan Warden, Guarded Hand, Measured Cut, Longblade, Round Guard, Travel Mail, Longblade Strike and Rallying Breath, level-keyed by stable ID so later levels are a data change. Brammel resolves to 10 maximum hit points and 3 Rallying Breath uses at level 1, and 14 and 4 at level 2, which is the preserve-deficit demonstration the acceptance criteria require. The level 2 maximum is class base 10 plus the Constitution modifier applied to each of the two levels; it read 12 before the per-level hit-point correction below.
 
 The product surfaces are mobile first: a real empty library, a builder over the nine-step catalogue that presents only the steps applicable to the build — a step with nothing to decide is omitted and reported on Review instead — with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
 
@@ -202,13 +202,62 @@ prefers a private profile.
 Planning cost is also now bounded: one activation walk and one proficiency walk
 per planning pass, asserted by an instrumented density test rather than a clock.
 
+### Engine-correctness pass
+
+Three generic contracts that real-content validation showed the engine breaking.
+Each has one authoritative implementation, used by planning, diagnostics,
+Review, commit, the level-up preview, the level-up commit and the derived sheet
+alike — there is deliberately no creation-only or level-up-only variant.
+
+**Maximum hit points apply Constitution once per level.**
+`maximumHitPointsFor` in `src/rules/hit-points.ts` is the one calculation:
+`classBase(level) + constitutionModifier × level`, where `classBase` is whatever
+the content declares for that level. Level 1 is unchanged; every level above it
+had been dropping its Constitution contribution, so a level `N` character was
+short by `(N − 1) × modifier`. Direct creation at level `N` and a sequential
+climb to level `N` now produce the same maximum, and the preview promises what
+the commit writes.
+
+Two cases are named rather than guessed at. No schema, decision record or
+content mechanism in this repository declares a **minimum hit-point gain per
+level**, so a negative modifier is applied as written and a maximum of zero or
+less is reported as `HIT_POINTS_MAXIMUM_NOT_POSITIVE` instead of being clamped
+to an invented floor. `hitPoints.classBase` is a single scalar path, so a
+**multiclass** base cannot be composed from two classes; that is reported as
+`HIT_POINTS_MULTICLASS_UNRESOLVED`.
+
+**The armour context is resolved, not asserted.** `armorContextFor` in
+`src/rules/armor-context.ts` derives it from typed item mechanics and the
+equipment model's own `equipped` marker; it never reads a name, label, slug or
+ID. The derivation and the planning paths both hard-coded `worn: false`, so every
+`wearingArmor` condition evaluated false however the build was equipped. Body
+armour and shields are now separate facts — a shield alone cannot satisfy a
+body-armour condition — and weapons, tools and ordinary gear contribute nothing.
+Equipment reaches a character through effects while conditions are evaluated
+during those same effects, so the two are resolved to a bounded fixed point
+rather than assumed. Two worn body armours is a state the public equipment model
+cannot decide between; it is reported as `ARMOUR_SELECTION_AMBIGUOUS` rather than
+resolved by array order or by name.
+
+**One subclass decision is one decision.** `reconcileSubclassChoices` in
+`src/rules/subclass-reconciliation.ts` decides structurally when a generic choice
+is the class's typed subclass decision written a second time: declared by the
+class, offering exactly its declared subclasses, a single non-repeatable pick, at
+the same decision point, carrying nothing of its own. A pack that declared it
+both ways produced two disconnected surfaces — the typed panel wrote
+`subclassId`, the generic choice expected a `choiceSelections` entry, neither
+satisfied the other, and the sheet stayed uncommittable behind a
+`CHOICE_UNRESOLVED` the typed decision could not clear. The duplicate is now
+unified away, with the choice it absorbed recorded on the requirement as
+provenance. An overlap that is only partial is never discarded: it stays exactly
+as declared and is reported as `SUBCLASS_CHOICE_OVERLAP_AMBIGUOUS`, which is a
+warning rather than a block, so the build stays answerable.
+
 ### Deferred, and depended on by later work
 
 These are recorded as follow-up dependencies and are deliberately absent here:
 
-- the per-level Constitution hit-point correction;
 - current-hit-point finalisation during creation;
-- the armour-context correction;
 - automatic attacks derived from equipped weapons;
 - custom or durable inventory, and removal of granted equipment;
 - resource-recovery redesign;

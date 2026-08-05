@@ -11,6 +11,7 @@ import type {
   Value,
 } from "@/src/domain/model";
 import { effectCapability } from "@/src/rules/effect-capabilities";
+import type { ArmorContext } from "@/src/rules/armor-context";
 
 export interface RuleContext {
   totalLevel: number;
@@ -19,7 +20,12 @@ export interface RuleContext {
   tags: Set<string>;
   features: Set<string>;
   proficiencies: Set<string>;
-  armor: { worn: boolean; type?: "light" | "medium" | "heavy" | "shield" };
+  /**
+   * Resolved by `armorContextFor` from the build's own typed equipment. `worn`
+   * and `type` describe body armour only; `shield` is reported separately so a
+   * shield can never satisfy a body-armour condition.
+   */
+  armor: ArmorContext;
   flags: Record<string, string | number | boolean>;
   values: Record<string, number>;
 }
@@ -115,7 +121,18 @@ export function evaluateCondition(condition: Condition | undefined, context: Rul
   if ("not" in condition) return !evaluateCondition(condition.not, context);
   switch (condition.type) {
     case "always": return true;
-    case "wearingArmor": return context.armor.worn && (!condition.armorType || context.armor.type === condition.armorType);
+    /*
+     * Body armour and shields are separate facts. `worn` and `type` describe
+     * body armour, so a shield alone leaves a body-armour condition unmet; a
+     * condition that asks for a shield reads the shield flag instead. When two
+     * worn body armours leave the category undetermined, an unqualified
+     * condition still matches — armour is certainly worn — and a category-
+     * specific one does not, because the engine cannot assert which it is.
+     */
+    case "wearingArmor":
+      if (condition.armorType === "shield") return context.armor.shield || context.armor.type === "shield";
+      if (!context.armor.worn) return false;
+      return !condition.armorType || context.armor.type === condition.armorType;
     case "hasFeature": return context.features.has(condition.featureId);
     case "hasTag": return context.tags.has(condition.tag);
     case "classLevel": return compare(context.classLevels[condition.classId] ?? 0, condition.operator, condition.value);

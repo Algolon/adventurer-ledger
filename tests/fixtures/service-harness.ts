@@ -22,6 +22,7 @@ import { CharacterTransferService } from "@/src/services/transfer-service";
 import { ContentInstallService } from "@/src/services/content-install-service";
 import type { ServiceLogLine } from "@/src/services/contracts";
 import { acceptancePackJson, ACCEPTANCE_PACK_ID, ACCEPTANCE_RULESET_ID } from "@/tests/fixtures/acceptance-ruleset";
+import { tidewatchPackJson, TIDEWATCH_PACK_ID, TIDEWATCH_RULESET_ID } from "@/tests/fixtures/engine-correctness-ruleset";
 
 const open: LedgerDB[] = [];
 
@@ -91,6 +92,24 @@ export async function installAcceptanceRuleset(harness: Harness, { createRuleset
   if (outcome.status !== "ok") throw new Error(`The acceptance import failed: ${JSON.stringify(outcome)}`);
   if (createRuleset && !outcome.result.createdRulesetIds.includes(ACCEPTANCE_RULESET_ID))
     throw new Error("The acceptance import created no ruleset profile");
+}
+
+/**
+ * Installs the engine-correctness pack by the same real import route.
+ *
+ * It is a separate ruleset from the acceptance slice on purpose: the contracts
+ * it pins need their own hit-point base, their own armour and their own
+ * deliberately redundant subclass declarations, and folding those into an
+ * existing fixture would change what that fixture already proves.
+ */
+export async function installTidewatchRuleset(harness: Harness): Promise<void> {
+  const preview = await harness.install.preview([tidewatchPackJson()]);
+  if (!preview.canImport)
+    throw new Error(`The engine-correctness pack did not validate: ${preview.issues.map(issue => issue.code).join(", ")}`);
+  const outcome = await harness.install.confirm(preview, { createRulesetForPackIds: [TIDEWATCH_PACK_ID] });
+  if (outcome.status !== "ok") throw new Error(`The engine-correctness import failed: ${JSON.stringify(outcome)}`);
+  if (!outcome.result.createdRulesetIds.includes(TIDEWATCH_RULESET_ID))
+    throw new Error("The engine-correctness import created no ruleset profile");
 }
 
 export async function closeHarnesses(): Promise<void> {

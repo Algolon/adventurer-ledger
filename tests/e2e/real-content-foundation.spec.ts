@@ -175,10 +175,11 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
     await expect(page.getByRole("heading", { name: "Wren Halloway", level: 2 })).toBeVisible();
     await expect(page.getByText("Beaconkeeper 5 (Kindled Watch)")).toBeVisible();
     // Level 5 values, reached in one pass: the level 5 proficiency bonus, the
-    // level 5 hit-point base plus Constitution, and the level 5 resource
-    // maximum. A character created at 1 would show none of them.
+    // level 5 hit-point base plus the Constitution modifier on each of the five
+    // levels, and the level 5 resource maximum. A character created at 1 would
+    // show none of them.
     await expect(page.getByRole("button", { name: /Explain Proficiency, \+3/ })).toBeVisible();
-    await expect(page.getByText("23 / 23")).toBeVisible();
+    await expect(page.getByText("27 / 27")).toBeVisible();
     await expect(page.getByText("Emberlight")).toBeVisible();
     await expect(page.getByText("4 / 4")).toBeVisible();
   });

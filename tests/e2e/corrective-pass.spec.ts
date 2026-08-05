@@ -404,7 +404,9 @@ test.describe("level 5 is created directly and read back", () => {
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: /Direct Five/ }).first().click();
     await expect(page.getByText("Beaconkeeper 5 (Kindled Watch)")).toBeVisible();
-    await expect(page.getByText("23 / 23")).toBeVisible();
+    // Class base 22 at level 5 plus a +1 Constitution modifier on each of the
+    // five levels. Direct creation and a sequential climb reach the same number.
+    await expect(page.getByText("27 / 27")).toBeVisible();
   });
 
   test("the array offered is the imported ruleset's own", async ({ page }) => {

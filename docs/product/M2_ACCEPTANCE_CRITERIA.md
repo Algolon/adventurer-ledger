@@ -137,7 +137,7 @@ Removing the override previews the automatic replacement and is undoable/version
 
 Given renderable automatic level-1 Brammel, when Level up begins, then a pre-level restore point is identified before edits.
 
-The flow shows automatic gains, only newly required choices, resource/equipment impacts, and a before/after diff. It demonstrates `5/10 HP → 7/12` for a +2 maximum and `1/3 uses → 2/4` for a +1 maximum, naming the preserve-deficit/expenditure policy.
+The flow shows automatic gains, only newly required choices, resource/equipment impacts, and a before/after diff. It demonstrates `5/10 HP → 9/14` for a +4 maximum and `1/3 uses → 2/4` for a +1 maximum, naming the preserve-deficit/expenditure policy. The hit-point maximum moves by 4 because the Constitution modifier applies once per character level.
 
 Confirm commits level, choices, version, and derived state atomically. Cancel leaves level 1 unchanged. Undo restores the pre-level snapshot without deleting history.
 

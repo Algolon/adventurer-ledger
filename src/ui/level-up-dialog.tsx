@@ -6,7 +6,7 @@
  * The preview is read-only: opening this dialog writes nothing, and Cancel
  * leaves the character at its current level. Confirm takes the pre-level restore
  * point and commits atomically. The before/after table names the current-value
- * policy explicitly so the 5/10 to 7/12 and 1/3 to 2/4 results are explained
+ * policy explicitly so the 5/10 to 9/14 and 1/3 to 2/4 results are explained
  * rather than surprising.
  *
  * The dialog will not offer a level the class's own progression does not
