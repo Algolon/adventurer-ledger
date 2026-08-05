@@ -10,6 +10,7 @@
  */
 import { useState } from "react";
 import { Archive, Download, FolderLock, HardDrive, Import, RefreshCw, ScrollText, ShieldCheck, WifiOff } from "lucide-react";
+import { RULESET_PRIVACY_LABELS } from "@/src/services/content-scope";
 import { ContentWorkspace } from "@/src/ui/content-workspace";
 import { StorageSettings } from "@/src/ui/storage-settings";
 import { TransferPanel } from "@/src/ui/transfer-panel";
@@ -101,11 +102,23 @@ export function SettingsView({ onOpenCharacter }: { onOpenCharacter(id: string):
   );
 }
 
-/** Lists whatever ruleset profiles are installed on this device. */
+/**
+ * Installed rulesets, and the packs that could still become one.
+ *
+ * An imported pack with no profile is installed and unreachable, so the offer to
+ * create its profile belongs here as well as at the import boundary. Activation
+ * is explicit: the active ruleset is the one a new build starts in, and nothing
+ * picks it from the order of this list.
+ */
 function RulesetsPage() {
-  const { query } = useServices();
-  const state = useAsync(() => query.rulesets(), []);
-  const rulesets = state.status === "ready" ? state.value : [];
+  const { install, refresh } = useServices();
+  const installedState = useAsync(() => install.installedRulesets(), []);
+  const pendingState = useAsync(() => install.pendingOffers(), []);
+  const activeState = useAsync(() => install.activeRulesetId(), []);
+  const rulesets = installedState.status === "ready" ? installedState.value : [];
+  const pending = pendingState.status === "ready" ? pendingState.value : [];
+  const active = activeState.status === "ready" ? activeState.value : undefined;
+
   return (
     <div className="m2-step">
       <h2 className="m2-page-title">Rulesets</h2>
@@ -114,18 +127,63 @@ function RulesetsPage() {
           <div className="m2-card" key={ruleset.id}>
             <div className="m2-card-head">
               <h3>{ruleset.name}</h3>
-              <span className="m2-badge">Installed</span>
+              <span className="m2-badge">{ruleset.id === active ? "Active" : "Installed"}</span>
             </div>
             <p className="m2-muted">
-              Conflict resolution: {ruleset.conflictResolution} · requirement enforcement: {ruleset.requirementEnforcement} ·
-              legacy content {ruleset.allowLegacy ? "allowed" : "not allowed"}.
+              {ruleset.entryCount} entries · creation levels 1 to {ruleset.maxSupportedLevel}
+              {ruleset.usable ? "" : ` · missing ${ruleset.missingCategories.join(", ")}`}
             </p>
+            {/*
+             * Whether this profile reaches private or export-restricted content,
+             * classified from record metadata. Private content stays local; this
+             * says that it is in scope without reproducing any of it.
+             */}
+            <p className="m2-muted m2-ruleset-privacy">{RULESET_PRIVACY_LABELS[ruleset.privacy]}</p>
             <p className="m2-muted">Active sources: {ruleset.activeSourceIds.join(", ")}</p>
+            {ruleset.id === active ? null : (
+              <button
+                type="button"
+                className="m2-button"
+                onClick={() => void install.activate(ruleset.id).then(refresh)}
+              >
+                Use this ruleset for new characters
+              </button>
+            )}
           </div>
         ))
       ) : (
         <p className="m2-muted">No ruleset profiles are installed on this device.</p>
       )}
+
+      {pending.length ? (
+        <>
+          <h3 className="m2-section-title">Installed packs with no ruleset</h3>
+          <p className="m2-muted">
+            Content is only reachable through a ruleset. These packs are installed but nothing activates them yet.
+          </p>
+          {pending.map(offer => (
+            <div className="m2-card" key={offer.packId}>
+              <div className="m2-card-head">
+                <h3>{offer.name}</h3>
+                <span className="m2-badge">{offer.entryCount} entries</span>
+              </div>
+              {offer.usable ? (
+                <button
+                  type="button"
+                  className="m2-button m2-button-primary"
+                  onClick={() => void install.createRulesetForPack(offer.packId).then(refresh)}
+                >
+                  Create its ruleset
+                </button>
+              ) : (
+                <p className="m2-muted">
+                  This pack cannot stand as a ruleset on its own: it supplies no {offer.missingCategories.join(", ")}.
+                </p>
+              )}
+            </div>
+          ))}
+        </>
+      ) : null}
     </div>
   );
 }

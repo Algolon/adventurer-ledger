@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   BookOpen,
@@ -23,11 +23,8 @@ import {
   createContentExport,
   RestrictedExportConfirmationError,
 } from "@/src/export/content-export";
-import {
-  confirmImportSet,
-  previewContentPackSet,
-  type ImportSetPreview,
-} from "@/src/import/content-pipeline";
+import type { InstallPreview } from "@/src/services/content-install-service";
+import { useServices } from "@/src/ui/services-context";
 import { db } from "@/src/storage/db";
 import {
   ContentEntryRepository,
@@ -601,26 +598,81 @@ function PackEditor() {
 }
 
 function ImportExportPanel() {
+  const { install, refresh } = useServices();
   const [text, setText] = useState(""),
-    [preview, setPreview] = useState<ImportSetPreview>(),
+    /** A preview and the exact input it was computed from, never one alone. */
+    [preview, setPreview] = useState<{ source: string; result: InstallPreview }>(),
+    [createRuleset, setCreateRuleset] = useState(true),
     [message, setMessage] = useState(""),
     [includeRestricted, setIncludeRestricted] = useState(false),
     [confirmed, setConfirmed] = useState(false);
-  // Always the set boundary, so the preview shows exactly what confirmation revalidates.
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * The preview, but only while it still describes what is in the input.
+   *
+   * Carrying the source alongside the result makes a stale preview
+   * unrepresentable rather than merely unlikely: choosing another file, typing,
+   * or a slow preview landing after the input moved on all leave
+   * `preview.source` and `text` disagreeing, and a disagreeing preview is not
+   * rendered and cannot be confirmed. Clearing it in each handler is still done,
+   * but it is no longer what correctness depends on.
+   */
+  const currentPreview = preview && preview.source === text ? preview.result : undefined;
+
+  /** Forgets the current preview. The input is left alone. */
+  const invalidatePreview = () => {
+    setPreview(undefined);
+    setMessage("");
+  };
+
+  /** Clears input and preview together, so neither can outlive the other. */
+  const clearImport = () => {
+    setPreview(undefined);
+    setText("");
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  // Always the set boundary, so the preview shows exactly what confirmation
+  // revalidates, and always through the service, so no component installs
+  // content by writing tables itself.
   const inspect = async () => {
     setMessage("");
-    setPreview(await previewContentPackSet([text], db));
-  };
-  const commit = async () => {
-    if (!preview) return;
+    const source = text;
     try {
-      await confirmImportSet(preview, db);
-      setMessage("Import completed atomically.");
+      const result = await install.preview([source]);
+      setPreview({ source, result });
+    } catch (error) {
+      // A preview that could not be produced must not leave the previous one
+      // standing: the input has already moved on from whatever it described.
       setPreview(undefined);
-      setText("");
-    } catch {
-      setMessage("Import was not applied. No partial records were kept.");
+      setMessage(safeMessage(error));
     }
+  };
+  /**
+   * Importing content that no ruleset activates leaves it installed and
+   * unreachable, so the offer to create one is part of the same confirmation and
+   * lands in the same transaction: a rolled-back import leaves no profile behind.
+   */
+  const commit = async () => {
+    if (!currentPreview) return;
+    const creatable = currentPreview.offers.filter(offer => offer.usable && !offer.alreadyInstalled);
+    const requested = createRuleset ? creatable.map(offer => offer.packId) : [];
+    const outcome = await install.confirm(currentPreview, {
+      createRulesetForPackIds: requested,
+      ...(requested.length === 1 ? { activateRulesetId: creatable[0].rulesetId } : {}),
+    });
+    if (outcome.status !== "ok") {
+      setMessage("Import was not applied. No content and no ruleset profile were kept.");
+      return;
+    }
+    setMessage(
+      outcome.result.createdRulesetIds.length
+        ? `Import completed atomically. ${outcome.result.createdRulesetIds.length} ruleset profile(s) created and ready to select.`
+        : "Import completed atomically. No ruleset profile was created, so this content is only reachable through an existing ruleset.",
+    );
+    clearImport();
+    refresh();
   };
   const exportData = async () => {
     try {
@@ -655,9 +707,14 @@ function ImportExportPanel() {
           <input
             type="file"
             accept="application/json,.json"
+            ref={fileRef}
             onChange={async (event) => {
               const file = event.target.files?.[0];
-              if (file) setText(await file.text());
+              if (!file) return;
+              // Invalidate first: the preview on screen stops describing the
+              // input the moment another file is chosen, not once it is read.
+              invalidatePreview();
+              setText(await file.text());
             }}
           />
         </label>
@@ -668,7 +725,7 @@ function ImportExportPanel() {
             value={text}
             onChange={(event) => {
               setText(event.target.value);
-              setPreview(undefined);
+              invalidatePreview();
             }}
             rows={10}
             spellCheck={false}
@@ -678,20 +735,42 @@ function ImportExportPanel() {
           <Import />
           Preview import
         </button>
-        {preview && (
+        {currentPreview && (
           <div className="preview" aria-label="Import preview">
-            <h4>{preview.canImport ? "Ready to import" : "Import blocked"}</h4>
+            <h4>{currentPreview.canImport ? "Ready to import" : "Import blocked"}</h4>
             <p>
-              {preview.plan.sources.add.length} sources,{" "}
-              {preview.plan.packs.add.length} packs, and{" "}
-              {preview.plan.entries.add.length} entries will be added.
+              {currentPreview.set.plan.sources.add.length} sources,{" "}
+              {currentPreview.set.plan.packs.add.length} packs, and{" "}
+              {currentPreview.set.plan.entries.add.length} entries will be added.
             </p>
             <p>
-              {preview.plan.sources.update.length} sources,{" "}
-              {preview.plan.packs.update.length} packs, and{" "}
-              {preview.plan.entries.update.length} entries will be updated.
+              {currentPreview.set.plan.sources.update.length} sources,{" "}
+              {currentPreview.set.plan.packs.update.length} packs, and{" "}
+              {currentPreview.set.plan.entries.update.length} entries will be updated.
             </p>
-            {preview.issues.map((issue, index) => (
+            {currentPreview.offers.map(offer => (
+              <p className="issue" key={offer.packId}>
+                <b>{offer.name}</b>{" "}
+                {offer.alreadyInstalled
+                  ? offer.installedMatch === "legacy"
+                    ? `maps to the existing ruleset ${offer.installedRulesetId}, which an earlier naming scheme also produced for a differently-named pack. Nothing is overwritten; this pack cannot be installed until that is resolved.`
+                    : `already has the ruleset ${offer.installedRulesetId ?? offer.rulesetId}.`
+                  : offer.usable
+                    ? `can become the ruleset ${offer.rulesetId}, covering levels 1 to ${offer.maxSupportedLevel}.`
+                    : `cannot stand as a ruleset on its own: it supplies no ${offer.missingCategories.join(", ")}.`}
+              </p>
+            ))}
+            {currentPreview.offers.some(offer => offer.usable && !offer.alreadyInstalled) && (
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={createRuleset}
+                  onChange={event => setCreateRuleset(event.target.checked)}
+                />
+                Create a ruleset profile so this content can be selected in the builder
+              </label>
+            )}
+            {currentPreview.issues.map((issue, index) => (
               <p className="issue" key={`${issue.code}-${index}`}>
                 <b>{issue.code}</b> {issue.message}
               </p>
@@ -699,7 +778,7 @@ function ImportExportPanel() {
             <div className="actions">
               <button
                 className="btn primary"
-                disabled={!preview.canImport}
+                disabled={!currentPreview.canImport}
                 onClick={commit}
               >
                 <FileCheck2 />
@@ -708,7 +787,7 @@ function ImportExportPanel() {
               <button
                 className="btn secondary"
                 onClick={() => {
-                  setPreview(undefined);
+                  clearImport();
                   setMessage("Import cancelled. The database was not changed.");
                 }}
               >

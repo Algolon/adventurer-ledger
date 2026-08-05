@@ -146,7 +146,7 @@ describe("unrelated pack isolation", () => {
       abilityScores: { strength: 16, dexterity: 15, constitution: 14, intelligence: 12, wisdom: 10, charisma: 8 },
       choiceSelections: {
         "choice:vanguard-stance": ["option:guarded-hand"],
-        "choice:vanguard-skills": ["option:proficiency:skill-watchcraft", "option:proficiency:skill-haulage"],
+        "choice:vanguard-skills": ["option:proficiency:skill-riverlore", "option:proficiency:skill-haulage"],
         "choice:warden-languages": ["option:proficiency:language-trade-cant"],
       },
       equipmentSelections: { "equipment-choice:vanguard-pack": ["equipment-option:warden-pack"] },

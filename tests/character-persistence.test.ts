@@ -197,7 +197,7 @@ describe("database version 4 to 5 upgrade", () => {
 
     const upgraded = openDatabase(name);
     await upgraded.open();
-    expect(upgraded.verno).toBe(5);
+    expect(upgraded.verno).toBe(6);
 
     // Content survives the character migration untouched.
     expect(await upgraded.contentPacks.count()).toBe(1);
@@ -219,12 +219,14 @@ describe("database version 4 to 5 upgrade", () => {
     expect(await upgraded.characterActions.count()).toBe(0);
     expect(await upgraded.characterOverrides.count()).toBe(0);
     expect(await upgraded.characterDerivedSnapshots.count()).toBe(0);
+    // Version 6 is additive: an explicit ruleset decision has simply not been made yet.
+    expect(await upgraded.appPreferences.count()).toBe(0);
   });
 
-  it("opens a fresh database directly at version 5 with empty character tables", async () => {
+  it("opens a fresh database directly at the current version with empty character tables", async () => {
     const database = openDatabase(`ledger-fresh-${Math.random().toString(36).slice(2)}`);
     await database.open();
-    expect(database.verno).toBe(5);
+    expect(database.verno).toBe(6);
     expect(await database.characters.count()).toBe(0);
     expect(await database.characterRuntimeStates.count()).toBe(0);
   });

@@ -22,6 +22,7 @@ import { CharacterRuntimeService } from "@/src/services/runtime-service";
 import { CharacterLevelUpService } from "@/src/services/levelup-service";
 import { CharacterTransferService } from "@/src/services/transfer-service";
 import { CharacterLibraryService, CharacterOverrideService } from "@/src/services/character-services";
+import { ContentInstallService } from "@/src/services/content-install-service";
 
 export interface CharacterServices {
   drafts: CharacterDraftService;
@@ -32,6 +33,8 @@ export interface CharacterServices {
   transfer: CharacterTransferService;
   overrides: CharacterOverrideService;
   library: CharacterLibraryService;
+  /** Importing content and turning a pack into a selectable ruleset. */
+  install: ContentInstallService;
   ready: boolean;
   /** Bumped after any mutation so dependent reads refresh. */
   revision: number;
@@ -55,6 +58,7 @@ export function ServicesProvider({ children }: { children: ReactNode }) {
       transfer: new CharacterTransferService(context),
       overrides: new CharacterOverrideService(context),
       library: new CharacterLibraryService(context),
+      install: new ContentInstallService(context),
     };
   }, []);
 

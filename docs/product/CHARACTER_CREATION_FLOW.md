@@ -13,7 +13,7 @@ Mode is not stored as character truth. Switching presentation does not erase, re
 
 Creation order:
 
-1. Start / ruleset
+1. Name, ruleset and level
 2. Class
 3. Origin
 4. Abilities
@@ -25,7 +25,7 @@ Creation order:
 
 ```mermaid
 flowchart LR
-  S["Start / ruleset"] --> C["Class"]
+  S["Name, ruleset and level"] --> C["Class"]
   C --> O["Origin"]
   O --> A["Abilities"]
   A --> CC["Class choices"]
@@ -92,19 +92,39 @@ Recommendations are deterministic and ruleset/source-aware. Each recommendation 
 
 ## Step specification
 
-### 1. Start / ruleset
+### 1. Name, ruleset and level
 
-Purpose: define the interpretation context before loading large option lists.
+Purpose: settle who this is, which content interprets them, and how much of each
+progression the build has to resolve — before any option list is loaded.
 
-Required for guided completion:
+The step holds exactly three things:
 
-- level target for initial creation (Brammel slice: level 1);
-- ruleset profile;
-- guided/flexible presentation.
+- **Character name.** Autosaved as it is typed, and flushed on navigation, on a
+  mode switch and on commit, so it survives a reload, a closed tab and a switch
+  between guided and flexible. It is a warning, never a blocker: an unnamed
+  character falls back to `Unnamed character`.
+- **Ruleset.** Every installed profile is listed with the entry count and the
+  level range its content covers. Selecting one persists it on the draft and
+  scopes every later step to it. Nothing is ever selected by list order: with
+  more than one usable profile and none activated, the app asks.
+- **Intended starting level.** The maximum offered is derived from content — the
+  longest run of consecutive class progression rows starting at level 1 — so the
+  control never offers a level the installed pack cannot describe.
 
-Show a small set of ruleset presets first, such as “2024 core” and “2024 with configured private sources.” Advanced source toggles link to Settings and return to this step. Legacy and homebrew inclusion has explicit badges and a one-line compatibility policy.
+Selecting a level above 1 creates the character **at** that level. Every level's
+progression is accumulated into one build: all reachable choices are exposed,
+subclass and feat timing are honoured, unresolved choices block the commit, and
+the commit writes that level directly. It is never a level 1 character that is
+silently advanced afterwards.
 
-Changing ruleset later produces an impact preview: choices still available, choices missing, changed calculations, and manual/override values unaffected. Confirming the change creates a restore point.
+If the chosen class covers fewer levels than the target, the step reports it and
+names both repairs: lower the level, or choose a class whose content reaches it.
+
+Changing the ruleset clears the class, subclass, origin, choices and equipment
+selections, because those belong to the ruleset that defined them. The name,
+level, ability scores and manual values are kept. Pronouns are no longer
+collected anywhere in the flow; a value stored by an older build is preserved
+untouched and feeds no calculation.
 
 ### 2. Class
 

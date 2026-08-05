@@ -1379,3 +1379,94 @@
   max-width: 100%;
   overflow-x: auto;
 }
+
+/*
+ * The ruleset-change confirmation.
+ *
+ * A destructive change is stated in full before it happens, so this is a real
+ * modal rather than an inline note: it owns the surface until it is answered.
+ * Colours are explicit rather than inherited, because the app is light-only and
+ * a dark browser preference would otherwise let the user agent paint the panel's
+ * text. The panel scrolls internally so a long list of cleared values never
+ * pushes the document sideways at 360 px.
+ */
+.m2-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #050a0ec4;
+}
+
+.m2-confirm-panel {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--brass);
+  border-radius: 12px;
+  background: #fffaf0;
+  color: var(--ink);
+}
+
+.m2-confirm-panel h3 {
+  margin: 0;
+  font: 600 24px var(--display);
+}
+
+.m2-confirm-panel h4 {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.m2-confirm-panel ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.m2-confirm-panel .m2-muted {
+  color: #4f5860;
+}
+
+.m2-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.m2-confirm-actions .m2-button {
+  flex: 1 1 auto;
+  min-width: 44%;
+  justify-content: center;
+}
+
+/* The level conflict wraps a repair action, so it stacks rather than centres. */
+.m2-inline-issue[role="alert"] {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.m2-inline-issue[role="alert"] .m2-button {
+  display: inline-flex;
+  margin-left: 6px;
+}
+
+/* Whether a ruleset reaches private content. Never a colour on its own. */
+.m2-ruleset-privacy {
+  color: #4f5860;
+}
+
+/* The ruleset-change confirmation renders inside the shared dialog surface, so
+   it only needs its own internal rhythm; the frame comes from `.m2-dialog`. */
+.m2-confirm-body {
+  display: grid;
+  gap: 12px;
+}

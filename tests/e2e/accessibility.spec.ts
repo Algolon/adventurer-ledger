@@ -46,6 +46,7 @@ const ABILITY_ASSIGNMENT: readonly [string, string][] = [
 
 async function buildBrammel(page: Page) {
   const next = () => page.getByRole("button", { name: "Continue" }).click();
+  await page.getByLabel("Character name", { exact: true }).fill("Brammel Voss");
   await next();
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await next();
@@ -58,12 +59,11 @@ async function buildBrammel(page: Page) {
   await page.getByLabel("+1 to").selectOption("constitution");
   await next();
   await page.getByRole("button", { name: /^Guarded Hand/ }).click();
-  await page.getByRole("button", { name: /^Watchcraft/ }).click();
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
   await next();
   await page.getByRole("button", { name: /^Warden pack/ }).click();
   await next();
-  await page.getByLabel("Name", { exact: true }).fill("Brammel Voss");
   await next();
   await page.getByRole("button", { name: "Finish and open sheet" }).click();
   await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();

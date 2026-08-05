@@ -55,7 +55,9 @@ async function startNewCharacter(page: Page) {
 
 /** Walks the applicable steps and commits Brammel at level 1. */
 async function buildBrammel(page: Page, { name = "Brammel Voss" }: { name?: string } = {}) {
-  await continueStep(page); // Start / ruleset
+  // Name, ruleset and target level are the first decisions.
+  await page.getByLabel("Character name", { exact: true }).fill(name);
+  await continueStep(page);
 
   await expect(page.getByText("Step 2 of 8")).toBeVisible();
   await page.getByRole("button", { name: /^Vanguard/ }).click();
@@ -75,7 +77,7 @@ async function buildBrammel(page: Page, { name = "Brammel Voss" }: { name?: stri
 
   await expect(page.getByText("Step 5 of 8")).toBeVisible();
   await page.getByRole("button", { name: /^Guarded Hand/ }).click();
-  await page.getByRole("button", { name: /^Watchcraft/ }).click();
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
   await continueStep(page);
 
@@ -86,7 +88,6 @@ async function buildBrammel(page: Page, { name = "Brammel Voss" }: { name?: stri
   await continueStep(page);
 
   await expect(page.getByText("Step 7 of 8")).toBeVisible();
-  await page.getByLabel("Name", { exact: true }).fill(name);
   await page.getByLabel("Nickname").fill("Boss");
   await continueStep(page);
 

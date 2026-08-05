@@ -140,6 +140,8 @@ export interface DerivedCharacterSheet {
   nickname?: string;
   level: number;
   classLabel: string | null;
+  /** Named on the sheet whenever the committed class level carries a subclass. */
+  subclassLabel: string | null;
   speciesLabel: string | null;
   backgroundLabel: string | null;
   /** `automatic` claims rules justification; `manual` never does (D-03). */
@@ -297,6 +299,10 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   if (classSelection && !classEntry) {
     missingDependencyIds.add(classSelection.classId);
     issues.push({ code: "CLASS_SOURCE_MISSING", severity: "error", recordId: classSelection.classId });
+  }
+  if (classSelection?.subclassId && !byId.get(classSelection.subclassId)) {
+    missingDependencyIds.add(classSelection.subclassId);
+    issues.push({ code: "SUBCLASS_SOURCE_MISSING", severity: "error", recordId: classSelection.subclassId });
   }
   if (character.speciesId && !byId.get(character.speciesId)) {
     missingDependencyIds.add(character.speciesId);
@@ -709,6 +715,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     actions.length > 0;
 
   const blockingIssue = issues.some(issue => issue.severity === "error");
+
   const guidedComplete = automaticMinimumMet && !blockingIssue && (state?.pendingChoiceIds.size ?? 0) === 0;
   const completeness: CompletenessClass = automaticMinimumMet
     ? guidedComplete
@@ -724,6 +731,23 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
 
   const activeSourceIds = [...new Set(entries.map(item => item.sourceId))].sort((left, right) => left.localeCompare(right));
 
+  /**
+   * One issue per (code, record, path).
+   *
+   * The pure engine and this resolver can both notice the same unresolved
+   * choice, and an unresolved choice used to arrive twice from the engine
+   * itself. Collapsing on identity means the sheet reports each fact once, no
+   * matter how many layers observed it.
+   */
+  const uniqueIssues: SanitizedIssue[] = [];
+  const seenIssues = new Set<string>();
+  for (const issue of issues) {
+    const key = `${issue.code}|${issue.recordId ?? ""}|${issue.fieldPath ?? ""}`;
+    if (seenIssues.has(key)) continue;
+    seenIssues.add(key);
+    uniqueIssues.push(issue);
+  }
+
   return {
     characterId: character.id,
     characterRevision: character.revision,
@@ -732,6 +756,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     ...(character.nickname ? { nickname: character.nickname } : {}),
     level: character.level,
     classLabel: label(classSelection?.classId),
+    subclassLabel: label(classSelection?.subclassId),
     speciesLabel: label(character.speciesId),
     backgroundLabel: label(character.backgroundId),
     mode,
@@ -753,7 +778,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     activeRulesetId: character.rulesetProfileId,
     activeRulesetLabel: input.ruleset?.name ?? null,
     activeSourceIds,
-    issues,
+    issues: uniqueIssues,
     missingDependencyIds: [...missingDependencyIds].sort((left, right) => left.localeCompare(right)),
     staleOverrideIds,
     contentFingerprint: computeContentFingerprint(entries, character.rulesetProfileId),

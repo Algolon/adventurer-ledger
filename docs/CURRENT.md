@@ -65,6 +65,167 @@ M2.1 validates the technical vertical slice against **public-original synthetic 
 
 Consequently M2.1 can demonstrate that the engine, services and surfaces are correct, but it cannot settle content-density or real-rulebook interaction questions — option counts, name lengths, description volume and cross-reference depth all differ from real material. Final content UX validation depends on the later private PHB pack, imported locally through the M1.3 private-library schema and never committed here.
 
+## M2.1a implemented, pending certification
+
+M2.1a is the first public real-content creation foundation. It is stacked on the
+M2.1 slice and changes no private content: everything committed here is
+public-original synthetic material.
+
+**Imported content is reachable.** The pilot's blocking defect was that a pack
+could be imported and then be invisible: every builder and resolver read is
+scoped to a ruleset profile, and importing created none. `ContentInstallService`
+now proposes the profile a pack would produce, derives its ID from the pack ID,
+and writes it inside the import's own transaction, so a failed or cancelled
+import leaves neither content nor a partial profile. Installed packs that still
+have no profile are offered one from Settings, Rulesets. Selection is explicit:
+an activated profile, or a single usable profile, is an answer; anything else is
+reported as ambiguous and asked. Nothing is ever chosen from list order.
+
+**Creation is name-first and level-targeted.** The first step holds the name,
+the ruleset and the intended starting level. The maximum level offered is
+derived from content. Creating at level 5 accumulates levels 1 to 5 in one pass,
+exposes every reachable choice, honours subclass and feat timing, blocks the
+commit while any remain, and writes level 5 directly.
+
+**Choice discovery is generic.** `choice-planner` walks activated entries —
+class, subclass, their progression-granted features, species and its traits,
+background and its feat, and anything a selected option activates — and returns
+each choice once, keyed by its own stable ID, with its declaring entry and level
+retained. A choice is discovered only when the entry that owns it is genuinely
+active, so no diagnostic can name a decision the builder never rendered. The
+duplicate unresolved-choice diagnostic is fixed at its source: an empty required
+choice is one fact, and both the planner and the resolver collapse issues on
+identity.
+
+**The subclass is a typed identity.** It is offered at the level the class
+declares, persisted on the class level, activates its own progression and
+choices, appears in Review and on the sheet, and blocks completion when required
+and unresolved.
+
+**Ability entry keeps one model.** Base scores plus origin increases give the
+final scores in both methods; the manual inputs edit base scores, the origin
+interface stays visible, and switching methods preserves the allocation.
+
+**Equipment is legible.** Class and background grants are both shown, each
+package lists its contents before it is chosen, Review shows the resulting
+equipment, and the step is omitted only when a build genuinely grants and offers
+nothing.
+
+**Proficiencies carry provenance.** Every proficiency names its source entry and
+whether it was automatic or chosen, and Review groups them by source. An option
+that only grants something already granted is labelled with the source that
+grants it and is not offered as a live choice; a build that already stores such a
+selection is blocked with a named repair rather than silently producing one
+proficiency fewer.
+
+**Level-up stays one level at a time**, and now refuses a level the class
+progression does not define, naming the highest level the content reaches
+instead of showing an empty confirmation. The preview lists the features,
+actions and resources the level adds, and says outright when a level adds none.
+
+Database version 6 is additive: one preference record holding the explicitly
+activated ruleset. No existing record is read or rewritten.
+
+### Corrective pass
+
+A merge-readiness review of the above found eight defects. They are corrected in
+place rather than deferred, because each one is a case where the product was
+confidently wrong rather than merely incomplete.
+
+**Changing the ruleset is previewed before it is written, and decided per
+value.** Selecting another ruleset produces a non-writing preview — what would be
+cleared, what stays, what is recalculated, and what would be left needing repair
+— and offers `Keep current ruleset` and `Switch ruleset`. Keeping writes nothing.
+Confirmation sends the revision the preview was computed at, so an autosave
+landing in between makes the confirmation stale instead of reviving a value the
+change had cleared.
+
+A ruleset ID changing is not by itself a reason to discard a selection. Two
+profiles can scope the same entries, so `resolveRulesetChange` checks each value
+against the content the *target* ruleset actually resolves: the entry has to be
+present, under a category its field can mean, and a stored choice's options have
+to still be offered by a choice the target build reaches. A class the incoming
+ruleset still defines survives; one it does not is cleared and named. The preview
+and the write are one pass over the same inputs, so what was read and what is
+written cannot differ. A target level the incoming content cannot reach is
+reported as a conflict to repair rather than silently lowered.
+
+Switching *this* build's ruleset no longer repoints the device-wide default for
+future characters. That default is changed only from Settings, with
+`Use this ruleset for new characters`, where it is the subject of the action
+rather than an unannounced side effect of an unrelated one.
+
+**Origin ability increases cannot outlive the origin that authorised them.**
+`reconcileAbilityAllocation` validates the stored allocation against the pattern
+the active origin declares, excludes anything it does not authorise from the
+final scores, and reports `ORIGIN_INCREASE_NOT_AVAILABLE`. Changing the origin or
+the ruleset repairs the allocation in the same write, and the commit writes the
+recomputed finals rather than the draft's stored ones.
+
+**Level coverage is one contract in both modes.** `LEVEL_NOT_COVERED_BY_CLASS`
+now reaches the commit boundary in guided *and* flexible mode and cannot be
+acknowledged away, because a level the class does not define produces a sheet
+whose hit dice and maximum hit points come from different levels. The level
+selector offers only supported levels rather than `max(supported, stored)`, an
+unsupported stored level is a named conflict with a one-click repair, and a build
+with no class reports that its level is unverified rather than fine.
+
+**A profile activates its own pack's entries, not its source's.** Membership is
+now the explicit `allowedEntryIds` set taken from the imported pack; declared
+dependencies join it only through a typed mechanism. Reusing an installed source
+ID can no longer widen an existing profile. Profiles written earlier keep source
+scoping and resolve exactly as they did.
+
+**Profile IDs keep the whole pack ID.** `rulesetIdForPack` stripped a leading
+`pack:`, so `pack:x` and `x` collided on one profile. It no longer strips;
+`legacyRulesetIdsForPack` reports the earlier derivation and the install boundary
+checks every candidate, so a pack installed under the old scheme is recognised
+rather than duplicated or overwritten. Existing IDs are deliberately not migrated.
+
+**Activation follows typed links and lineages.** `ContentLink` activation honours
+`required` and `level`, never activates above the build level, terminates on
+cycles and retains provenance. A lineage activates its own traits and suppresses
+the ones its `replacesTraitIds` names, so a character never holds both the
+replaced and the replacement trait. The legacy `race` origin category activates
+its traits by the same rules and is offered in the builder.
+
+**Equipment reads once.** One view per bundle with every granting entry listed,
+and the resulting item list totalled per item and status — so a bundle two
+entries grant appears once with both sources named, while two different bundles
+holding the same item report the genuine larger quantity.
+
+**A ruleset says what kind of content it reaches.** A classification derived from
+record metadata — public-only, restricted, or mixed — shown in the builder's
+ruleset picker and in Settings, Rulesets. It quotes no content, and nothing
+prefers a private profile.
+
+Planning cost is also now bounded: one activation walk and one proficiency walk
+per planning pass, asserted by an instrumented density test rather than a clock.
+
+### Deferred, and depended on by later work
+
+These are recorded as follow-up dependencies and are deliberately absent here:
+
+- the per-level Constitution hit-point correction;
+- current-hit-point finalisation during creation;
+- the armour-context correction;
+- automatic attacks derived from equipped weapons;
+- custom or durable inventory, and removal of granted equipment;
+- resource-recovery redesign;
+- the broader character-sheet redesign;
+- spellcasting;
+- any additional official content;
+- rolled ability scores, and origin patterns that place two increases on the
+  *same* ability (part of G-5; a `+1/+1/+1` across three different abilities is
+  supported and tested — the slots are consumed as a multiset);
+- hydrating an edit draft from the character it edits, which today starts empty;
+- migrating profiles created under the earlier profile-ID derivation, or
+  narrowing an existing source-scoped profile to an explicit entry set.
+
+The reasoning for the last three, and for the inventory-provenance and
+hit-point-finalisation items above, is recorded in
+[`docs/product/M2.1A_DEFERRED_DESIGN_NOTES.md`](./product/M2.1A_DEFERRED_DESIGN_NOTES.md).
+
 ## Device and installation behavior
 
 - Every phone, desktop browser, browser profile, and installed PWA has its own IndexedDB.

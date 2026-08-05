@@ -29,24 +29,48 @@ async function reachAbilities(page: Page) {
   await expect(page.getByText("Step 4 of 8")).toBeVisible();
 }
 
-test.describe("starting level is stated, not offered for editing", () => {
-  test("shows the level without a focusable or spinnable control", async ({ page }) => {
+/**
+ * Supersedes the earlier requirement that the starting level be a static fact.
+ * Creating directly at a higher level is supported now, so the level is a real
+ * decision on the first step — offered only as far as the installed content
+ * actually covers, rather than up to an arbitrary maximum.
+ */
+test.describe("name, ruleset and starting level come first", () => {
+  test("the first step holds all three decisions", async ({ page }) => {
     await openBuilder(page);
-    await expect(page.getByText("Starting level")).toBeVisible();
-    await expect(page.getByText("Level 1", { exact: true })).toBeVisible();
-
-    // No number input to spin, and nothing focusable that refuses input.
-    const numberInputs = page.locator(".m2-step input[type=number]");
-    await expect(numberInputs).toHaveCount(0);
-    await expect(page.locator(".m2-step input[readonly]")).toHaveCount(0);
+    await expect(page.getByLabel("Character name", { exact: true })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Ruleset" })).toBeVisible();
+    await expect(page.getByLabel("Create this character at level")).toBeVisible();
   });
 
-  test("the review still reports the level", async ({ page }) => {
+  test("offers only the levels the installed content covers", async ({ page }) => {
     await openBuilder(page);
+    // This ruleset's class progression defines levels 1 and 2 and no further.
+    await expect(page.getByLabel("Create this character at level").locator("option")).toHaveText(["1", "2"]);
+  });
+
+  test("the review reports the level that was chosen", async ({ page }) => {
+    await openBuilder(page);
+    await page.getByLabel("Create this character at level").selectOption("2");
     await page.getByRole("button", { name: "All steps" }).click();
     await page.getByRole("button", { name: /Review/ }).click();
     await expect(page.getByRole("term").filter({ hasText: "Level" })).toBeVisible();
-    await expect(page.getByRole("definition").filter({ hasText: "Level 1" })).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: "Level 2" })).toBeVisible();
+  });
+
+  test("the name autosaves and survives navigation and a reload", async ({ page }) => {
+    await openBuilder(page);
+    await page.getByLabel("Character name", { exact: true }).fill("Brammel Voss");
+    await next(page);
+    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Brammel Voss");
+
+    await page.reload();
+    await page.getByRole("button", { name: /Resume building/ }).click();
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Brammel Voss");
   });
 });
 
@@ -68,7 +92,7 @@ test.describe("a step with nothing to decide is omitted", () => {
 
     await expect(page.getByText("Step 5 of 8")).toBeVisible();
     await page.getByRole("button", { name: /^Guarded Hand/ }).click();
-    await page.getByRole("button", { name: /^Watchcraft/ }).click();
+    await page.getByRole("button", { name: /^Riverlore/ }).click();
     await page.getByRole("button", { name: /^Haulage/ }).click();
     await next(page);
 
@@ -84,7 +108,6 @@ test.describe("a step with nothing to decide is omitted", () => {
 
     await page.getByRole("button", { name: /^Warden pack/ }).click();
     await next(page);
-    await page.getByLabel("Name", { exact: true }).fill("Brammel Voss");
     await next(page);
 
     // Review records the absence rather than leaving it unexplained.
@@ -164,12 +187,12 @@ test.describe("builder navigation is one coherent structure", () => {
     await page.getByLabel("+1 to").selectOption("constitution");
     await next(page);
     await page.getByRole("button", { name: /^Guarded Hand/ }).click();
-    await page.getByRole("button", { name: /^Watchcraft/ }).click();
+    await page.getByRole("button", { name: /^Riverlore/ }).click();
     await page.getByRole("button", { name: /^Haulage/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Warden pack/ }).click();
     await next(page);
-    await page.getByLabel("Name", { exact: true }).fill("Brammel Voss of the Long River Crossing and the Farther Shore");
+    await page.getByLabel("Nickname").fill("Brammel Voss of the Long River Crossing and the Farther Shore");
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -188,10 +211,10 @@ test.describe("standard array assignment", () => {
     await page.getByLabel("Strength", { exact: true }).selectOption("15");
     await expect(remaining).toHaveCount(5);
     // 15 + the origin increase is not applied yet, so the modifier is for 15.
-    await expect(page.getByLabel("Strength total")).toContainText("+2");
+    await expect(page.getByLabel("Strength final")).toContainText("+2");
 
     await page.getByLabel("Dexterity", { exact: true }).selectOption("14");
-    await expect(page.getByLabel("Dexterity total")).toContainText("+2");
+    await expect(page.getByLabel("Dexterity final")).toContainText("+2");
     await expect(remaining).toHaveCount(4);
   });
 
@@ -254,7 +277,7 @@ test.describe("standard array assignment", () => {
     // A keyboard-driven change is reflected in the remaining pool.
     await page.getByLabel("Charisma", { exact: true }).selectOption("8");
     await expect(page.locator(".m2-remaining-chip")).toHaveCount(5);
-    await expect(page.getByLabel("Charisma total")).toContainText("-1");
+    await expect(page.getByLabel("Charisma final")).toContainText("-1");
   });
 
   test("stays usable at 320 px without horizontal drift", async ({ page }) => {

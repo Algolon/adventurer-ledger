@@ -1,48 +1,73 @@
 /**
  * Pure creation planning for the M2.1 builder.
  *
- * Nothing here touches Dexie or React. It turns a draft build plus content into
- * the exact nine-step plan from AC-03, the sanitized issue list, and the guided
- * recommendations from AC-04. Recommendations are ranked and explained but never
- * auto-selected, and presentation mode changes guidance only: the same plan runs
- * for guided and flexible drafts, so switching modes cannot clear a selection.
+ * Nothing here touches Dexie or React. It turns a draft plus content into the
+ * step plan from AC-03, the sanitized issue list, and the guided recommendations
+ * from AC-04. Recommendations are ranked and explained but never auto-selected,
+ * and presentation mode changes guidance only: the same plan runs for guided and
+ * flexible drafts, so switching modes cannot clear a selection.
+ *
+ * The planner composes three generic layers rather than hard-coding what a build
+ * needs: `choice-planner` discovers activated entries and their choices,
+ * `proficiency-planner` traces where each proficiency comes from, and
+ * `content-scope` reads equipment grants out of bundle declarations. That is why
+ * a subclass, a feat's nested choice or a background's kit appear with no
+ * planner change and no reference to any particular entry.
  */
 import { classMechanicsSchema } from "@/src/domain/content-pack";
 import type { CharacterDraftBuild, CharacterPresentationMode } from "@/src/domain/character-record";
 import { ABILITIES } from "@/src/domain/character-record";
-import type { Ability, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
+import type { Ability, Category, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
 import {
   abilityGenerationMethods,
   equipmentChoicesFor,
+  equipmentGrantsFor,
   grantingEntriesFor,
   standardArrayFor,
+  type EquipmentGrantView,
 } from "@/src/services/content-scope";
 import { evaluateCondition, type RuleContext } from "@/src/rules/engine";
+import {
+  draftContext,
+  maxSupportedLevel,
+  planActivation,
+  type ActivationPlan,
+  type LevelCoverage,
+  type SubclassRequirement,
+} from "@/src/services/choice-planner";
+import {
+  originIncreasePatternFor,
+  reconcileAbilityAllocation,
+  type AbilityAllocation,
+} from "@/src/services/ability-allocation";
+import {
+  planProficiencies,
+  redundantOptionKey,
+  type ProficiencyPlan,
+  type ProficiencySource,
+} from "@/src/services/proficiency-planner";
+import { createPlanningIndex, type PlanningIndex } from "@/src/services/planning-context";
+import { BUILDER_STEPS, type BuilderStepId } from "@/src/services/builder-steps";
 import type { ServiceIssue } from "@/src/services/contracts";
 
-export type BuilderStepId =
-  | "start"
-  | "class"
-  | "origin"
-  | "abilities"
-  | "class-choices"
-  | "spells-resources"
-  | "equipment"
-  | "identity"
-  | "review";
+export { BUILDER_STEPS };
+export type { BuilderStepId };
+export type { SubclassRequirement, LevelCoverage } from "@/src/services/choice-planner";
+export { maxSupportedLevel } from "@/src/services/choice-planner";
 
-/** The step list is exactly this, in this order (AC-03). */
-export const BUILDER_STEPS: readonly { id: BuilderStepId; label: string }[] = [
-  { id: "start", label: "Start / ruleset" },
-  { id: "class", label: "Class" },
-  { id: "origin", label: "Origin" },
-  { id: "abilities", label: "Abilities" },
-  { id: "class-choices", label: "Class choices" },
-  { id: "spells-resources", label: "Spells & resources" },
-  { id: "equipment", label: "Equipment" },
-  { id: "identity", label: "Identity" },
-  { id: "review", label: "Review" },
-];
+/**
+ * Issues a commit may never proceed past, in any presentation mode, and which
+ * an acknowledgement cannot buy off.
+ *
+ * Flexible mode exists so a half-finished build can be saved with its gaps
+ * recorded. That is a statement about *missing* decisions. It is not a licence
+ * to write a record the content cannot describe: a level the class has no
+ * progression row for produces hit dice for one level and a maximum for
+ * another, and no amount of acknowledging makes that sheet coherent. Unresolved
+ * choices, absent origins and unset scores stay outside this set, because those
+ * are exactly the incompleteness flexible mode is for.
+ */
+export const STRUCTURAL_COMMIT_BLOCKERS: ReadonlySet<string> = new Set(["LEVEL_NOT_COVERED_BY_CLASS"]);
 
 /** The values a manual character sheet must supply explicitly (D-03). */
 const MANUAL_MINIMUM: readonly [string, BuilderStepId][] = [
@@ -91,17 +116,35 @@ export interface OptionIncompatibility {
   repair: string;
 }
 
+export interface RequiredChoiceOption {
+  id: ID;
+  label: string;
+  entryId?: ID;
+  /**
+   * Set when everything the option grants is already granted automatically.
+   * Taking it would spend a decision for nothing, so the builder offers the
+   * remaining options instead of letting the selection silently disappear.
+   */
+  alreadyGrantedBy?: ProficiencySource;
+}
+
 export interface RequiredChoice {
   choiceId: ID;
   label: string;
   min: number;
   max: number;
   stepId: BuilderStepId;
-  options: readonly { id: ID; label: string }[];
+  options: readonly RequiredChoiceOption[];
   selected: readonly ID[];
   resolved: boolean;
   /** Options whose prerequisites the current build does not satisfy. */
   incompatibleOptions: readonly OptionIncompatibility[];
+  /** Provenance: the entry that declares this choice. */
+  sourceEntryId: ID;
+  sourceLabel: string;
+  sourceCategory: Category;
+  /** The level at which the choice became reachable, when a progression set one. */
+  level?: number;
 }
 
 /**
@@ -130,37 +173,45 @@ export interface BuildPlan {
   guidedComplete: boolean;
   /** Non-applicable systems, stated on the review instead of as empty steps. */
   systemSummaries: readonly SystemSummary[];
+  /** The explicit subclass decision, when the selected class declares one. */
+  subclass?: SubclassRequirement;
+  /** Where every proficiency comes from, and any duplicate selection. */
+  proficiencies: ProficiencyPlan;
+  /** Granted equipment, attributed to the entry that grants it. */
+  equipmentGrants: readonly EquipmentGrantView[];
+  /** Highest starting level the installed content honestly supports. */
+  maxLevel: number;
+  /** False when the class defines no progression row for the draft's level. */
+  levelCovered: boolean;
+  /** The full coverage verdict, which distinguishes "no class" from "covered". */
+  levelCoverage: LevelCoverage;
+  /** Highest level the selected class defines a contiguous progression for. */
+  classProgressionMax?: number;
+  /**
+   * Base scores, the increases the active origin still authorises, and the
+   * finals recomputed from the two. Review and the commit read these rather than
+   * the raw stored finals, so an increase whose origin has been replaced cannot
+   * keep contributing to a score.
+   */
+  abilities: AbilityAllocation;
 }
 
 /**
- * A minimal evaluation context built from the draft, used only to test option
- * prerequisites declaratively. It runs no effects and derives no values.
+ * Options the current build cannot satisfy, with the repair that would help.
+ *
+ * The entry index and the evaluation context are accepted as arguments so one
+ * planning pass builds them once. Rebuilding them per choice makes the cost of
+ * planning scale with the number of choices times the size of the ruleset,
+ * which is invisible on a small fixture and quadratic on a real one.
  */
-function draftContext(build: CharacterDraftBuild): RuleContext {
-  const abilities = Object.fromEntries(
-    ABILITIES.map(ability => [ability, build.abilityScores[ability] ?? 0]),
-  ) as RuleContext["abilities"];
-  return {
-    totalLevel: build.level,
-    classLevels: build.classId ? { [build.classId]: build.level } : {},
-    abilities,
-    tags: new Set<string>(),
-    features: new Set<string>(),
-    proficiencies: new Set<string>(),
-    armor: { worn: false },
-    flags: {},
-    values: {},
-  };
-}
-
-/** Options the current build cannot satisfy, with the repair that would help. */
 export function incompatibleOptionsFor(
   choice: ChoiceDefinition,
   build: CharacterDraftBuild,
   entries: readonly ContentEntry[],
+  index?: PlanningIndex,
 ): OptionIncompatibility[] {
-  const byId = new Map(entries.map(entry => [entry.id, entry]));
-  const context = draftContext(build);
+  const byId = index?.byId ?? new Map(entries.map(entry => [entry.id, entry]));
+  const context = index?.context ?? draftContext(build);
   const blocked: OptionIncompatibility[] = [];
   for (const option of choice.options) {
     const entry = option.entryId ? byId.get(option.entryId) : undefined;
@@ -179,44 +230,94 @@ export function incompatibleOptionsFor(
   return blocked;
 }
 
-/** Collects the choice definitions the ruleset requires at the draft's level. */
-export function requiredChoicesFor(build: CharacterDraftBuild, entries: readonly ContentEntry[]): RequiredChoice[] {
-  const byId = new Map(entries.map(entry => [entry.id, entry]));
-  const required: RequiredChoice[] = [];
-  const push = (choice: ChoiceDefinition, stepId: BuilderStepId) => {
+/**
+ * Every choice the activated content requires at the draft's level.
+ *
+ * Discovery is generic (see `planActivation`): a choice reaches this list
+ * because the entry that declares it is active, never because the planner knows
+ * the entry. Identity is the choice's own stable ID, so the same choice reached
+ * through two routes is presented once.
+ */
+export function requiredChoicesFor(
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+  activation: ActivationPlan = planActivation(build, entries),
+  proficiencies: ProficiencyPlan = planProficiencies(activation, entries, build.choiceSelections),
+): RequiredChoice[] {
+  // Built once for the whole pass, not once per choice.
+  const index = createPlanningIndex(build, entries);
+  return activation.choices.map(activated => {
+    const choice = activated.choice;
     const selected = build.choiceSelections[choice.id] ?? [];
-    required.push({
+    return {
       choiceId: choice.id,
       label: choice.label,
       min: choice.min,
       max: choice.max,
-      stepId,
-      options: choice.options.map(option => ({ id: option.id, label: option.label })),
+      stepId: activated.stepId,
+      options: choice.options.map(option => {
+        const redundant = proficiencies.redundantOptions.get(redundantOptionKey(choice.id, option.id));
+        return {
+          id: option.id,
+          label: option.label,
+          ...(option.entryId ? { entryId: option.entryId } : {}),
+          ...(redundant ? { alreadyGrantedBy: redundant } : {}),
+        };
+      }),
       selected,
-      resolved: selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length,
-      incompatibleOptions: incompatibleOptionsFor(choice, build, entries),
-    });
-  };
-
-  const classEntry = build.classId ? byId.get(build.classId) : undefined;
-  if (classEntry?.category === "class") {
-    const mechanics = classMechanicsSchema.safeParse(classEntry.mechanics);
-    if (mechanics.success) {
-      const activeChoiceIds = new Set(
-        mechanics.data.progression.filter(row => row.level <= build.level).flatMap(row => row.choiceIds),
-      );
-      for (const choice of classEntry.choices) if (activeChoiceIds.has(choice.id)) push(choice, "class-choices");
-    }
-  }
-  const backgroundEntry = build.backgroundId ? byId.get(build.backgroundId) : undefined;
-  if (backgroundEntry) for (const choice of backgroundEntry.choices) push(choice, "origin");
-  return required;
+      resolved:
+        selected.length >= choice.min &&
+        selected.length <= choice.max &&
+        new Set(selected).size === selected.length,
+      incompatibleOptions: incompatibleOptionsFor(choice, build, entries, index),
+      sourceEntryId: activated.sourceEntryId,
+      sourceLabel: activated.sourceLabel,
+      sourceCategory: activated.sourceCategory,
+      ...(activated.level === undefined ? {} : { level: activated.level }),
+    };
+  });
 }
 
 /** Equipment choices the build's granted bundles require. */
-export function requiredEquipmentChoices(build: CharacterDraftBuild, entries: readonly ContentEntry[]) {
-  const granting = grantingEntriesFor([build.classId, build.speciesId, build.backgroundId], entries);
-  return equipmentChoicesFor(granting, entries);
+export function requiredEquipmentChoices(
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+  activation: ActivationPlan = planActivation(build, entries),
+) {
+  return equipmentChoicesFor(grantingEntriesOf(build, entries, activation), entries);
+}
+
+/** Everything the build's granted bundles contain, with its provenance. */
+export function equipmentGrantsForBuild(
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+  activation: ActivationPlan = planActivation(build, entries),
+): EquipmentGrantView[] {
+  return equipmentGrantsFor(grantingEntriesOf(build, entries, activation), entries);
+}
+
+/**
+ * Entries that may grant equipment.
+ *
+ * Every activated entry qualifies — a subclass or a chosen feat grants a kit as
+ * legitimately as a class does — with the class, species and background included
+ * explicitly so a build that has not activated anything else still sees its
+ * starting gear.
+ */
+function grantingEntriesOf(
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+  activation: ActivationPlan,
+): ContentEntry[] {
+  const seeds = grantingEntriesFor([build.classId, build.speciesId, build.backgroundId], entries);
+  const seen = new Set(seeds.map(entry => entry.id));
+  const combined = [...seeds];
+  for (const activated of activation.entries) {
+    if (seen.has(activated.entry.id)) continue;
+    seen.add(activated.entry.id);
+    combined.push(activated.entry);
+  }
+  return combined;
 }
 
 /** Ability-generation methods the ruleset offers. */
@@ -275,15 +376,22 @@ export function remainingArraySlots(
 }
 
 /**
- * A draft stores final ability scores, so validating the standard array means
- * asking whether *some* assignment of the array plus the origin's increase
- * pattern reproduces them. Brammel's 16/15/14/12/10/8 is the array 15/14/13/12/10/8
- * with the Caravan Warden +2 on Strength and +1 on Constitution.
+ * Whether the draft's scores are a legitimate standard-array assignment.
+ *
+ * A draft that recorded its base scores is checked directly: the base scores
+ * must be exactly the array. A legacy draft that only stored final scores is
+ * checked the way it always was, by asking whether *some* assignment of the
+ * array plus the origin's increase pattern reproduces them, so an older saved
+ * build keeps validating without being rewritten.
  */
 export function standardArrayConsistent(build: CharacterDraftBuild, entries: readonly ContentEntry[]): boolean {
   const standardArray = standardArrayFor(entries);
   // A ruleset that declares no fixed array has nothing to check against.
   if (!standardArray) return true;
+
+  const base = ABILITIES.map(ability => build.abilityBaseScores[ability]);
+  if (base.every((score): score is number => typeof score === "number")) return sameMultiset(base, standardArray);
+
   const scores = ABILITIES.map(ability => build.abilityScores[ability]);
   if (scores.some(score => typeof score !== "number")) return true;
   const finals = scores as number[];
@@ -314,14 +422,45 @@ export function standardArrayConsistent(build: CharacterDraftBuild, entries: rea
   return assign(pattern, new Set(), finals);
 }
 
-function abilityIssues(build: CharacterDraftBuild, entries: readonly ContentEntry[]): ServiceIssue[] {
+function abilityIssues(
+  build: CharacterDraftBuild,
+  entries: readonly ContentEntry[],
+  allocation: AbilityAllocation,
+): ServiceIssue[] {
   const issues: ServiceIssue[] = [];
   for (const ability of ABILITIES)
-    if (typeof build.abilityScores[ability] !== "number")
+    if (typeof allocation.final[ability] !== "number")
       issues.push({ code: "ABILITY_SCORE_MISSING", fieldPath: `abilityScore.${ability}`, severity: "error" });
+  /*
+   * An increase the active origin does not offer blocks rather than warns.
+   *
+   * It cannot be applied — the finals here are recomputed without it — so
+   * leaving it recorded and merely noted would show the user an allocation the
+   * sheet is not using. Naming the ability is enough to repair it, and it names
+   * no value the user did not enter themselves.
+   */
+  for (const invalid of allocation.invalid)
+    issues.push({
+      code: "ORIGIN_INCREASE_NOT_AVAILABLE",
+      fieldPath: `abilityIncrease.${invalid.ability}`,
+      severity: "error",
+    });
   if (build.abilityMethod === "standard-array" && !issues.length && !standardArrayConsistent(build, entries))
     issues.push({ code: "STANDARD_ARRAY_MISMATCH", fieldPath: "abilityMethod", severity: "warning" });
   return issues;
+}
+
+/** One issue per (code, record, path). The same fact is never reported twice. */
+function dedupeIssues(issues: readonly ServiceIssue[]): ServiceIssue[] {
+  const seen = new Set<string>();
+  const unique: ServiceIssue[] = [];
+  for (const issue of issues) {
+    const key = `${issue.code}|${issue.recordId ?? ""}|${issue.fieldPath ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(issue);
+  }
+  return unique;
 }
 
 export function planBuild(
@@ -330,7 +469,13 @@ export function planBuild(
   presentation: CharacterPresentationMode = "guided",
 ): BuildPlan {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
-  const requiredChoices = build.manualSheet === true ? [] : requiredChoicesFor(build, entries);
+  const manualSheet = build.manualSheet === true;
+  const allocation = reconcileAbilityAllocation(build, entries);
+  const activation = planActivation(build, entries);
+  const proficiencies = planProficiencies(activation, entries, build.choiceSelections);
+  const requiredChoices = manualSheet ? [] : requiredChoicesFor(build, entries, activation, proficiencies);
+  const equipmentGrants = manualSheet ? [] : equipmentGrantsForBuild(build, entries, activation);
+  const equipmentChoices = manualSheet ? [] : requiredEquipmentChoices(build, entries, activation);
   const hasSpells = classHasSpells(build, entries);
 
   const stepIssues: Record<BuilderStepId, ServiceIssue[]> = {
@@ -345,19 +490,28 @@ export function planBuild(
     review: [],
   };
 
-  const manualSheet = build.manualSheet === true;
-
   /**
    * Steps that actually apply to this build.
    *
    * A step with nothing to decide is omitted from the sequence rather than
    * shown as an empty "Not needed" screen the user still has to walk through.
    * Applicability is derived from content — `classHasSpells` inspects the
-   * selected class's own progression — so a future spell-capable class brings
-   * the step back with no change here and no reference to any class ID.
+   * selected class's own progression, and Equipment appears whenever something
+   * is granted or chosen — so no step is hidden by a rule about a named entry.
    */
+  const equipmentApplies =
+    manualSheet ||
+    // Before a class exists there is nothing to conclude from, so the step
+    // stays. It is dropped only once the build genuinely grants and offers
+    // nothing — which is the difference between "no equipment" and "not yet".
+    !build.classId ||
+    equipmentGrants.length > 0 ||
+    equipmentChoices.length > 0;
   const applicableSteps = new Set<BuilderStepId>(
-    BUILDER_STEPS.filter(step => step.id !== "spells-resources" || hasSpells).map(step => step.id),
+    BUILDER_STEPS.filter(
+      step =>
+        (step.id !== "spells-resources" || hasSpells) && (step.id !== "equipment" || equipmentApplies),
+    ).map(step => step.id),
   );
 
   if (manualSheet) {
@@ -379,9 +533,32 @@ export function planBuild(
       stepIssues.origin.push({ code: "BACKGROUND_NOT_CHOSEN", fieldPath: "backgroundId", severity: "error" });
     else if (!byId.has(build.backgroundId))
       stepIssues.origin.push({ code: "BACKGROUND_SOURCE_MISSING", recordId: build.backgroundId, severity: "error" });
+
+    // The level is a decision on the first step, so its repair belongs there:
+    // either lower the target level or choose a class whose content reaches it.
+    // Only a class that genuinely stops short is reported here. With no class
+    // selected there is nothing to check the level against, and `CLASS_NOT_CHOSEN`
+    // above already says so — reporting both would name the same gap twice.
+    if (activation.levelCoverage === "not-covered")
+      stepIssues.start.push({ code: "LEVEL_NOT_COVERED_BY_CLASS", fieldPath: "level", severity: "error" });
+
+    // A progression that names a choice or feature the pack does not define is a
+    // content defect, not a user decision. It is reported against the missing
+    // record so a repair is possible without guessing.
+    for (const choiceId of activation.missingProgressionChoiceIds)
+      stepIssues["class-choices"].push({ code: "PROGRESSION_CHOICE_MISSING", recordId: choiceId, severity: "error" });
+    for (const featureId of activation.missingFeatureIds)
+      stepIssues["class-choices"].push({ code: "PROGRESSION_FEATURE_MISSING", recordId: featureId, severity: "error" });
+
+    // ---- explicit subclass identity ---------------------------------------
+    const subclass = activation.subclass;
+    if (subclass?.unresolved)
+      stepIssues["class-choices"].push({ code: "SUBCLASS_NOT_CHOSEN", recordId: subclass.classId, severity: "error" });
+    if (subclass && build.subclassId && !subclass.valid)
+      stepIssues["class-choices"].push({ code: "SUBCLASS_INVALID", recordId: build.subclassId, severity: "error" });
   }
 
-  stepIssues.abilities.push(...abilityIssues(build, entries));
+  stepIssues.abilities.push(...abilityIssues(build, entries, allocation));
 
   for (const choice of requiredChoices) {
     if (!choice.resolved)
@@ -397,8 +574,16 @@ export function planBuild(
     }
   }
 
+  // A selection that duplicates an automatic grant produces one fewer
+  // proficiency than the rules promise. Blocking with a named repair is the
+  // minimum honest response; the option list also offers the alternatives.
+  for (const duplicate of proficiencies.duplicates) {
+    const step = requiredChoices.find(choice => choice.choiceId === duplicate.choiceId)?.stepId ?? "class-choices";
+    stepIssues[step].push({ code: "PROFICIENCY_DUPLICATE_SELECTION", recordId: duplicate.optionId, severity: "error" });
+  }
+
   // Equipment choices come from whatever bundles the build's entries grant.
-  for (const choice of manualSheet ? [] : requiredEquipmentChoices(build, entries)) {
+  for (const choice of equipmentChoices) {
     const selected = build.equipmentSelections[choice.choiceId] ?? [];
     const resolved =
       selected.length >= choice.min && selected.length <= choice.max && new Set(selected).size === selected.length;
@@ -407,7 +592,10 @@ export function planBuild(
   }
 
   // Identity never blocks the sheet; a missing name falls back safely (D-03).
-  if (!build.name.trim()) stepIssues.identity.push({ code: "NAME_NOT_SET", fieldPath: "name", severity: "warning" });
+  if (!build.name.trim()) stepIssues.start.push({ code: "NAME_NOT_SET", fieldPath: "name", severity: "warning" });
+
+  for (const key of Object.keys(stepIssues) as BuilderStepId[])
+    stepIssues[key] = dedupeIssues(stepIssues[key]);
 
   const steps: PlannedStep[] = BUILDER_STEPS.filter(step => applicableSteps.has(step.id)).map(step => {
     const issues = stepIssues[step.id];
@@ -421,7 +609,7 @@ export function planBuild(
       status: blocking ? "incomplete" : "complete",
       issues,
       // Flexible mode may save with any step outstanding; identity never blocks.
-      optional: presentation === "flexible" || step.id === "identity" || step.id === "start",
+      optional: presentation === "flexible" || step.id === "identity",
     };
   });
 
@@ -446,17 +634,31 @@ export function planBuild(
         applicable: hasSpells,
       },
     ],
+    ...(activation.subclass ? { subclass: activation.subclass } : {}),
+    proficiencies,
+    equipmentGrants,
+    maxLevel: maxSupportedLevel(entries, build.classId),
+    levelCovered: activation.levelCovered,
+    levelCoverage: activation.levelCoverage,
+    ...(activation.classProgressionMax === undefined ? {} : { classProgressionMax: activation.classProgressionMax }),
+    abilities: allocation,
   };
 }
 
 /**
  * Guided recommendations for a step. Each carries "Why this?" copy and a rank;
  * the caller renders them in rank order and never applies one automatically.
+ *
+ * `plan` is the plan already computed for this draft. Recommendations describe
+ * decisions the plan has discovered, so producing them must not re-walk the
+ * activation graph — the builder re-renders this on every keystroke, and a
+ * traversal per render is a traversal per option in everything but name.
  */
 export function recommendationsFor(
   stepId: BuilderStepId,
   build: CharacterDraftBuild,
   entries: readonly ContentEntry[],
+  plan?: Pick<BuildPlan, "requiredChoices" | "equipmentGrants">,
 ): Recommendation[] {
   const recommendations: Recommendation[] = [];
   const primaryAbility = (): Ability | undefined => {
@@ -501,18 +703,26 @@ export function recommendationsFor(
   }
 
   if (stepId === "class-choices") {
-    for (const choice of requiredChoicesFor(build, entries).filter(choice => choice.stepId === stepId))
+    const choices = plan?.requiredChoices ?? requiredChoicesFor(build, entries);
+    for (const choice of choices.filter(choice => choice.stepId === stepId))
       for (const option of choice.options)
         recommendations.push({
           optionId: option.id,
           label: option.label,
-          why: "A context-valid option for this class at this level.",
-          rank: 1,
+          why: option.alreadyGrantedBy
+            ? `Already granted by ${option.alreadyGrantedBy.entryLabel}; choosing it would spend this decision for nothing.`
+            : "A context-valid option for this class at this level.",
+          rank: option.alreadyGrantedBy ? 3 : 1,
         });
   }
 
   if (stepId === "equipment") {
-    for (const choice of requiredEquipmentChoices(build, entries))
+    // The plan's grants already hold every bundle choice and its options, so the
+    // equipment recommendations are read off the same pass as everything else.
+    const choices = plan
+      ? plan.equipmentGrants.flatMap(grant => grant.choices)
+      : requiredEquipmentChoices(build, entries);
+    for (const choice of choices)
       for (const option of choice.options)
         recommendations.push({ optionId: option.id, label: option.label, why: "Offered by the granted starting kit.", rank: 1 });
   }

@@ -683,6 +683,21 @@ async function writeDocument(
 }
 
 /**
+ * Work that must land with the content or not at all.
+ *
+ * Creating a ruleset profile for an imported pack is the motivating case: a
+ * profile written after the transaction could survive a rolled-back import and
+ * point at content that was never installed, which is exactly the half-installed
+ * state the set boundary exists to prevent. Running it inside the transaction
+ * makes a failed or cancelled import leave neither content nor a partial profile.
+ */
+export type ImportSideEffect = (
+  documents: readonly ContentPackDocument[],
+  database: LedgerDB,
+  now: string,
+) => Promise<void>;
+
+/**
  * The single confirmation boundary for every import. One flat Dexie transaction
  * asserts preview freshness, revalidates the complete set against confirmation-time
  * database state, and only then writes packs, sources, entries and history. Any
@@ -692,15 +707,19 @@ async function commitImportStates(
   states: readonly PreviewState[],
   database: LedgerDB,
   signal?: AbortSignal,
+  afterWrite?: ImportSideEffect,
 ): Promise<void> {
   abortIfNeeded(signal);
   await database.transaction(
     "rw",
-    database.sources,
-    database.contentPacks,
-    database.contentEntries,
-    database.contentPackVersions,
-    database.contentEntryVersions,
+    [
+      database.sources,
+      database.contentPacks,
+      database.contentEntries,
+      database.contentPackVersions,
+      database.contentEntryVersions,
+      database.rulesetProfiles,
+    ],
     async () => {
       abortIfNeeded(signal);
       for (const state of states) await assertNotStale(state, database);
@@ -717,8 +736,10 @@ async function commitImportStates(
           revalidated.issues.filter((issue) => issue.severity === "error"),
         );
       const now = new Date().toISOString();
-      for (const document of orderDocuments(revalidated.documents))
-        await writeDocument(document, database, now, signal);
+      const ordered = orderDocuments(revalidated.documents);
+      for (const document of ordered) await writeDocument(document, database, now, signal);
+      abortIfNeeded(signal);
+      if (afterWrite) await afterWrite(ordered, database, now);
       abortIfNeeded(signal);
     },
   );
@@ -733,6 +754,7 @@ export async function confirmImport(
   preview: ImportPreview,
   database: LedgerDB,
   signal?: AbortSignal,
+  afterWrite?: ImportSideEffect,
 ): Promise<void> {
   const state = previewStates.get(preview);
   if (!preview.canImport || !state)
@@ -740,7 +762,7 @@ export async function confirmImport(
       "PREVIEW_INVALID",
       "Import preview is invalid or contains blocking issues",
     );
-  await commitImportStates([state], database, signal);
+  await commitImportStates([state], database, signal, afterWrite);
 }
 
 /** Confirm every file in one Dexie transaction; any failure rolls back the set. */
@@ -748,6 +770,7 @@ export async function confirmImportSet(
   preview: ImportSetPreview,
   database: LedgerDB,
   signal?: AbortSignal,
+  afterWrite?: ImportSideEffect,
 ): Promise<void> {
   const setState = importSetStates.get(preview);
   if (!preview.canImport || !setState)
@@ -764,5 +787,5 @@ export async function confirmImportSet(
       );
     return state;
   });
-  await commitImportStates(states, database, signal);
+  await commitImportStates(states, database, signal, afterWrite);
 }

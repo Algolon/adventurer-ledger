@@ -28,6 +28,7 @@ async function startNewCharacter(page: Page) {
 }
 
 async function buildBrammel(page: Page, name = "Brammel Voss") {
+  await page.getByLabel("Character name", { exact: true }).fill(name);
   await next(page);
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await next(page);
@@ -40,12 +41,11 @@ async function buildBrammel(page: Page, name = "Brammel Voss") {
   await page.getByLabel("+1 to").selectOption("constitution");
   await next(page);
   await page.getByRole("button", { name: /^Guarded Hand/ }).click();
-  await page.getByRole("button", { name: /^Watchcraft/ }).click();
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
   await next(page);
   await page.getByRole("button", { name: /^Warden pack/ }).click();
   await next(page);
-  await page.getByLabel("Name", { exact: true }).fill(name);
   await next(page);
   await page.getByRole("button", { name: "Finish and open sheet" }).click();
   await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible();
@@ -146,6 +146,7 @@ test.describe("AC-04 incompatible option", () => {
 test.describe("AC-05 manual-sheet entry", () => {
   test("creates, saves and reopens a manual character that never claims rules justification", async ({ page }) => {
     await startNewCharacter(page);
+    await page.getByLabel("Character name", { exact: true }).fill("Marek Tal");
     await next(page);
 
     await page.getByRole("button", { name: /^Manual character sheet/ }).click();
@@ -168,8 +169,7 @@ test.describe("AC-05 manual-sheet entry", () => {
     // A manual sheet has no class, so no spell choices apply and that step is
     // not in the sequence: Equipment follows directly.
     await next(page); // Equipment
-    await page.getByLabel("Name", { exact: true }).fill("Marek Tal");
-    await next(page);
+    await next(page); // Identity
 
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByRole("heading", { name: "Marek Tal", level: 2 })).toBeVisible();

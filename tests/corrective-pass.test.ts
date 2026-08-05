@@ -1,0 +1,1445 @@
+/**
+ * The M2.1a corrective pass.
+ *
+ * Each block here is a defect the merge-readiness review found in the first
+ * real-content foundation, expressed as the behaviour that has to hold instead.
+ * They are grouped by the contract they belong to rather than by the module they
+ * happen to touch, because several of them are only visible where two modules
+ * meet: a ruleset switch that clears a selection but leaves the origin increase
+ * it authorised, or a level the planner reports as uncovered and the commit
+ * boundary then accepts anyway.
+ *
+ * All content is the original synthetic acceptance and density slices.
+ */
+import "fake-indexeddb/auto";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  closeHarnesses,
+  createHarness,
+  expectOk,
+  installAcceptanceRuleset,
+  type Harness,
+} from "@/tests/fixtures/service-harness";
+import {
+  ACCEPTANCE_BUNDLES,
+  ACCEPTANCE_CHOICES,
+  ACCEPTANCE_ENTRIES,
+  ACCEPTANCE_IDS,
+  ACCEPTANCE_PACK_ID,
+  ACCEPTANCE_PROFICIENCIES,
+  ACCEPTANCE_RULESET_ID,
+  ACCEPTANCE_SOURCE_ID,
+  COLLISION_CLASS_ID,
+  acceptancePack,
+  acceptancePackJson,
+  sourceCollisionPackJson,
+  standalonePack,
+} from "@/tests/fixtures/acceptance-ruleset";
+import { SYNTHETIC_RULESET_ID } from "@/src/content/runefolio-synthetic";
+import type { CharacterDraftBuild } from "@/src/domain/character-record";
+import type { ContentEntry, ID, RulesetProfile } from "@/src/domain/model";
+import type { CommitResult, DraftSnapshot } from "@/src/services/character-services";
+import type { RulesetChangePreview } from "@/src/services/ruleset-change";
+import { resolveRulesetChange } from "@/src/services/ruleset-change";
+import { reconcileAbilityAllocation } from "@/src/services/ability-allocation";
+import { planActivation } from "@/src/services/choice-planner";
+import { planBuild } from "@/src/services/build-planner";
+import { EMPTY_DRAFT_BUILD } from "@/src/domain/character-record";
+import {
+  equipmentGrantsFor,
+  rulesetPrivacyFor,
+  loadRulesetScope,
+  loadRulesetScopes,
+  scopeEntriesToRuleset,
+  selectedEquipmentFor,
+} from "@/src/services/content-scope";
+import {
+  legacyRulesetIdsForPack,
+  proposeRulesetForPack,
+  rulesetIdForPack,
+} from "@/src/services/ruleset-planner";
+
+let harness: Harness;
+
+beforeEach(async () => {
+  harness = await createHarness();
+});
+
+afterEach(async () => {
+  await closeHarnesses();
+});
+
+const scopedEntries = () => harness.query.contentForRuleset(ACCEPTANCE_RULESET_ID);
+
+/** A level 5 Beaconkeeper with every reachable decision answered. */
+function completeBuild(level = 5): Partial<CharacterDraftBuild> {
+  return {
+    name: "Wren Halloway",
+    level,
+    classId: ACCEPTANCE_IDS.class,
+    ...(level >= 3 ? { subclassId: ACCEPTANCE_IDS.subclassWatch } : {}),
+    speciesId: ACCEPTANCE_IDS.species,
+    backgroundId: ACCEPTANCE_IDS.background,
+    abilityMethod: "standard-array",
+    abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+    abilityIncreases: { strength: 2, wisdom: 1 },
+    abilityScores: { strength: 17, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 11, charisma: 8 },
+    choiceSelections: {
+      [ACCEPTANCE_CHOICES.classSkills]: [
+        `option:${ACCEPTANCE_PROFICIENCIES.skillLedgerwork}`,
+        `option:${ACCEPTANCE_PROFICIENCIES.skillStonecraft}`,
+      ],
+      [ACCEPTANCE_CHOICES.speciesTrait]: [`option:${ACCEPTANCE_PROFICIENCIES.skillCairnlore}`],
+      ...(level >= 3 ? { [ACCEPTANCE_CHOICES.subclassFlare]: ["option:eb-flare-wide"] } : {}),
+      ...(level >= 4
+        ? {
+            [ACCEPTANCE_CHOICES.boon]: ["option:eb-attentive"],
+            [ACCEPTANCE_CHOICES.featFocus]: [`option:${ACCEPTANCE_PROFICIENCIES.toolSignalLamp}`],
+          }
+        : {}),
+    },
+    equipmentSelections: {
+      [ACCEPTANCE_BUNDLES.classChoice]: ["equipment-option:eb-ledger-case"],
+      [ACCEPTANCE_BUNDLES.backgroundChoice]: ["equipment-option:eb-ink-set"],
+    },
+  };
+}
+
+/** Opens a draft in the acceptance ruleset and applies one patch. */
+async function seedDraft(patch: Partial<CharacterDraftBuild>, draftId = "draft:corrective"): Promise<DraftSnapshot> {
+  await installAcceptanceRuleset(harness);
+  const created = expectOk<DraftSnapshot>(
+    await harness.drafts.create({
+      draftId,
+      rulesetProfileId: ACCEPTANCE_RULESET_ID,
+      level: patch.level ?? 1,
+      presentation: "guided",
+    }),
+  );
+  return expectOk<DraftSnapshot>(
+    await harness.drafts.update({ draftId, expectedRevision: created.revision, patch }),
+  );
+}
+
+/** The acceptance entries with the main class's progression truncated. */
+function entriesCoveringUpTo(maxLevel: number): ContentEntry[] {
+  return ACCEPTANCE_ENTRIES.map(entry => {
+    if (entry.id !== ACCEPTANCE_IDS.class) return entry;
+    const mechanics = entry.mechanics as { progression: { level: number }[] };
+    return {
+      ...entry,
+      mechanics: {
+        ...mechanics,
+        progression: mechanics.progression.filter(row => row.level <= maxLevel),
+      },
+    } as ContentEntry;
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Scope 1 — a ruleset switch is previewed, then cancelled or confirmed        */
+/* -------------------------------------------------------------------------- */
+
+describe("changing the ruleset is a two-phase decision", () => {
+  it("previews the change without writing anything", async () => {
+    const seeded = await seedDraft(completeBuild());
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, SYNTHETIC_RULESET_ID),
+    );
+
+    expect(preview.currentRulesetId).toBe(ACCEPTANCE_RULESET_ID);
+    expect(preview.proposedRulesetId).toBe(SYNTHETIC_RULESET_ID);
+    // What goes, stated by field path, before anything is written.
+    const clearedPaths = preview.cleared.map(field => field.fieldPath);
+    expect(clearedPaths).toContain("classId");
+    expect(clearedPaths).toContain("subclassId");
+    expect(clearedPaths).toContain("speciesId");
+    expect(clearedPaths).toContain("backgroundId");
+    expect(clearedPaths.some(path => path.startsWith("choiceSelections."))).toBe(true);
+    expect(clearedPaths.some(path => path.startsWith("equipmentSelections."))).toBe(true);
+    // What stays.
+    const retainedPaths = preview.retained.map(field => field.fieldPath);
+    expect(retainedPaths).toContain("name");
+    expect(retainedPaths).toContain("level");
+    expect(retainedPaths).toContain("abilityBaseScores");
+    // The origin increases are recomputed, not silently retained.
+    expect(preview.recomputed.map(field => field.fieldPath)).toContain("abilityIncreases");
+
+    // Nothing was written: the draft is byte-identical at the same revision.
+    const after = await harness.drafts.get(seeded.draft.id);
+    expect(after?.revision).toBe(seeded.revision);
+    expect(after?.draft.build).toEqual(seeded.draft.build);
+    expect(after?.draft.rulesetProfileId).toBe(ACCEPTANCE_RULESET_ID);
+  });
+
+  it("leaves the complete draft untouched when the preview is not confirmed", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await harness.drafts.previewRulesetChange(seeded.draft.id, SYNTHETIC_RULESET_ID);
+    await harness.drafts.previewRulesetChange(seeded.draft.id, SYNTHETIC_RULESET_ID);
+
+    const after = await harness.drafts.get(seeded.draft.id);
+    expect(after?.draft.build).toEqual(seeded.draft.build);
+    expect(after?.revision).toBe(seeded.revision);
+  });
+
+  it("applies exactly the previewed change on confirmation", async () => {
+    const seeded = await seedDraft(completeBuild());
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, SYNTHETIC_RULESET_ID),
+    );
+    const applied = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, preview.expectedRevision, SYNTHETIC_RULESET_ID),
+    );
+    const build = applied.draft.build;
+
+    expect(applied.draft.rulesetProfileId).toBe(SYNTHETIC_RULESET_ID);
+    expect(build.classId).toBeUndefined();
+    expect(build.subclassId).toBeUndefined();
+    expect(build.speciesId).toBeUndefined();
+    expect(build.backgroundId).toBeUndefined();
+    expect(build.choiceSelections).toEqual({});
+    expect(build.equipmentSelections).toEqual({});
+    // Ruleset-independent values survive.
+    expect(build.name).toBe("Wren Halloway");
+    expect(build.level).toBe(5);
+    expect(build.abilityBaseScores).toEqual(seeded.draft.build.abilityBaseScores);
+    // The origin that authorised the increases is gone, so they cannot remain,
+    // and the final scores must fall back to the base scores.
+    expect(build.abilityIncreases).toEqual({});
+    expect(build.abilityScores.strength).toBe(15);
+    expect(build.abilityScores.wisdom).toBe(10);
+  });
+
+  it("refuses a confirmation that carries a stale revision", async () => {
+    const seeded = await seedDraft(completeBuild());
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, SYNTHETIC_RULESET_ID),
+    );
+    // Something else touches the draft between preview and confirmation.
+    await harness.drafts.update({
+      draftId: seeded.draft.id,
+      expectedRevision: preview.expectedRevision,
+      patch: { name: "Renamed mid-flight" },
+    });
+
+    const outcome = await harness.drafts.changeRuleset(
+      seeded.draft.id,
+      preview.expectedRevision,
+      SYNTHETIC_RULESET_ID,
+    );
+    expect(outcome.status).toBe("stale");
+    const after = await harness.drafts.get(seeded.draft.id);
+    expect(after?.draft.rulesetProfileId).toBe(ACCEPTANCE_RULESET_ID);
+    expect(after?.draft.build.classId).toBe(ACCEPTANCE_IDS.class);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 2 — an origin increase cannot outlive the origin that authorised it   */
+/* -------------------------------------------------------------------------- */
+
+describe("origin ability increases are revalidated against the active pattern", () => {
+  it("recomputes the final scores from base plus the valid allocation", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const allocation = reconcileAbilityAllocation(
+      { ...(completeBuild() as CharacterDraftBuild) },
+      entries,
+    );
+    expect(allocation.invalid).toEqual([]);
+    expect(allocation.final.strength).toBe(17);
+    expect(allocation.final.wisdom).toBe(11);
+  });
+
+  it("invalidates an increase in an ability the new origin cannot increase", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    // Charisma is not one of the background's offered abilities.
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityIncreases: { charisma: 2, wisdom: 1 },
+      abilityScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 11, charisma: 10 },
+    };
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    expect(allocation.invalid.map(item => item.ability)).toContain("charisma");
+    // The invalid increase is not quietly applied to the final score.
+    expect(allocation.final.charisma).toBe(8);
+    expect(allocation.final.wisdom).toBe(11);
+
+    const plan = planBuild(build, entries, "guided");
+    expect(plan.issues.map(issue => issue.code)).toContain("ORIGIN_INCREASE_NOT_AVAILABLE");
+  });
+
+  it("clears an increase the new background does not authorise when the background changes", async () => {
+    const seeded = await seedDraft(completeBuild());
+    // Move to a draft state whose stored increase the origin cannot justify.
+    const withBadIncrease = expectOk<DraftSnapshot>(
+      await harness.drafts.update({
+        draftId: seeded.draft.id,
+        expectedRevision: seeded.revision,
+        patch: {
+          abilityIncreases: { charisma: 2, wisdom: 1 },
+          abilityScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 11, charisma: 10 },
+        },
+      }),
+    );
+    // Removing the background removes the pattern entirely.
+    const cleared = expectOk<DraftSnapshot>(
+      await harness.drafts.update({
+        draftId: seeded.draft.id,
+        expectedRevision: withBadIncrease.revision,
+        patch: { backgroundId: undefined },
+      }),
+    );
+
+    expect(cleared.draft.build.abilityIncreases).toEqual({});
+    expect(cleared.draft.build.abilityScores.wisdom).toBe(10);
+    expect(cleared.draft.build.abilityScores.charisma).toBe(8);
+  });
+
+  it("never commits a final score an invalid increase inflated", async () => {
+    const seeded = await seedDraft(completeBuild());
+    const staged = expectOk<DraftSnapshot>(
+      await harness.drafts.update({
+        draftId: seeded.draft.id,
+        expectedRevision: seeded.revision,
+        patch: {
+          abilityIncreases: { charisma: 2, wisdom: 1 },
+          abilityScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 11, charisma: 10 },
+        },
+      }),
+    );
+    const outcome = await harness.commit.commit({
+      operationId: "op:corrective-origin",
+      draftId: seeded.draft.id,
+      expectedDraftRevision: staged.revision,
+      characterId: "character:corrective-origin",
+      intent: "create",
+      acknowledgedIssueCodes: [],
+      expectedContentFingerprint: await harness.query.contentFingerprint(ACCEPTANCE_RULESET_ID),
+    });
+    expect(outcome.status).toBe("invalid");
+    if (outcome.status === "invalid")
+      expect(outcome.issues.map(issue => issue.code)).toContain("ORIGIN_INCREASE_NOT_AVAILABLE");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 3 — level coverage is one contract across both modes                  */
+/* -------------------------------------------------------------------------- */
+
+describe("class level coverage", () => {
+  it("does not claim coverage is valid when no class is selected", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const activation = planActivation(
+      { ...(completeBuild() as CharacterDraftBuild), classId: undefined, subclassId: undefined },
+      entries,
+    );
+    expect(activation.levelCoverage).toBe("no-class");
+    expect(activation.levelCovered).toBe(false);
+  });
+
+  it("reports a level the ruleset's content does not reach", async () => {
+    const entries = entriesCoveringUpTo(2);
+    const plan = planBuild({ ...(completeBuild() as CharacterDraftBuild), level: 5 }, entries, "guided");
+    expect(plan.maxLevel).toBe(2);
+    expect(plan.levelCoverage).toBe("not-covered");
+    expect(plan.issues.map(issue => issue.code)).toContain("LEVEL_NOT_COVERED_BY_CLASS");
+  });
+
+  it("reports a level the selected class does not reach", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const plan = planBuild(
+      { ...(completeBuild() as CharacterDraftBuild), classId: ACCEPTANCE_IDS.shortClass, subclassId: undefined, level: 5 },
+      entries,
+      "guided",
+    );
+    expect(plan.classProgressionMax).toBe(3);
+    expect(plan.maxLevel).toBe(3);
+    expect(plan.levelCoverage).toBe("not-covered");
+  });
+
+  it("recomputes the supported range when the class changes", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const five = planBuild({ ...(completeBuild() as CharacterDraftBuild), level: 5 }, entries, "guided");
+    expect(five.maxLevel).toBe(5);
+    const three = planBuild(
+      { ...(completeBuild() as CharacterDraftBuild), classId: ACCEPTANCE_IDS.shortClass, subclassId: undefined, level: 5 },
+      entries,
+      "guided",
+    );
+    // The selector must not be inflated back up to the stored level.
+    expect(three.maxLevel).toBe(3);
+    expect(three.maxLevel).toBeLessThan(five.maxLevel);
+  });
+
+  it("refuses the commit in guided mode", async () => {
+    const seeded = await seedDraft({
+      ...completeBuild(),
+      classId: ACCEPTANCE_IDS.shortClass,
+      subclassId: undefined,
+      level: 5,
+    });
+    const outcome = await harness.commit.commit({
+      operationId: "op:coverage-guided",
+      draftId: seeded.draft.id,
+      expectedDraftRevision: seeded.revision,
+      characterId: "character:coverage-guided",
+      intent: "create",
+      acknowledgedIssueCodes: [],
+      expectedContentFingerprint: await harness.query.contentFingerprint(ACCEPTANCE_RULESET_ID),
+    });
+    expect(outcome.status).toBe("invalid");
+    if (outcome.status === "invalid")
+      expect(outcome.issues.map(issue => issue.code)).toContain("LEVEL_NOT_COVERED_BY_CLASS");
+  });
+
+  it("refuses the commit in flexible mode, and cannot be acknowledged away", async () => {
+    const seeded = await seedDraft({
+      ...completeBuild(),
+      classId: ACCEPTANCE_IDS.shortClass,
+      subclassId: undefined,
+      level: 5,
+    });
+    const flexible = expectOk<DraftSnapshot>(
+      await harness.drafts.changePresentation(seeded.draft.id, seeded.revision, "flexible"),
+    );
+    const outcome = await harness.commit.commit({
+      operationId: "op:coverage-flexible",
+      draftId: seeded.draft.id,
+      expectedDraftRevision: flexible.revision,
+      characterId: "character:coverage-flexible",
+      intent: "create",
+      // Even an explicit acknowledgement cannot buy a structurally impossible sheet.
+      acknowledgedIssueCodes: ["LEVEL_NOT_COVERED_BY_CLASS"],
+      expectedContentFingerprint: await harness.query.contentFingerprint(ACCEPTANCE_RULESET_ID),
+    });
+    expect(outcome.status).toBe("invalid");
+    if (outcome.status === "invalid")
+      expect(outcome.issues.map(issue => issue.code)).toContain("LEVEL_NOT_COVERED_BY_CLASS");
+    // Nothing was written.
+    expect(await harness.query.sheet("character:coverage-flexible")).toBeUndefined();
+  });
+
+  it("still lets flexible mode save an incomplete but structurally supported draft", async () => {
+    const seeded = await seedDraft({ ...completeBuild(3), choiceSelections: {} });
+    const flexible = expectOk<DraftSnapshot>(
+      await harness.drafts.changePresentation(seeded.draft.id, seeded.revision, "flexible"),
+    );
+    const outcome = await harness.commit.commit({
+      operationId: "op:coverage-incomplete",
+      draftId: seeded.draft.id,
+      expectedDraftRevision: flexible.revision,
+      characterId: "character:coverage-incomplete",
+      intent: "create",
+      acknowledgedIssueCodes: [],
+      expectedContentFingerprint: await harness.query.contentFingerprint(ACCEPTANCE_RULESET_ID),
+    });
+    expect(outcome.status).toBe("ok");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 4 and 8 — profile membership and profile identity                     */
+/* -------------------------------------------------------------------------- */
+
+describe("an imported pack's ruleset covers only that pack", () => {
+  it("derives an explicit entry-identity membership set", () => {
+    const pack = acceptancePack();
+    const proposal = proposeRulesetForPack(
+      { id: pack.pack.id, name: pack.pack.name, sourceIds: pack.sources.map(source => source.id) },
+      pack.entries,
+    );
+    expect(proposal.activeEntryIds).toHaveLength(pack.entries.length);
+    expect([...proposal.activeEntryIds].sort()).toEqual([...pack.entries.map(entry => entry.id)].sort());
+  });
+
+  it("does not activate an unrelated entry that reuses the same source ID", async () => {
+    await installAcceptanceRuleset(harness);
+    // An entry that already exists on the same source but belongs to no pack in
+    // the import. Reusing a source ID must not widen the profile.
+    const intruder: ContentEntry = {
+      ...ACCEPTANCE_ENTRIES.find(item => item.id === ACCEPTANCE_IDS.shortClass)!,
+      id: "class:eb-intruder",
+      slug: "eb-intruder",
+      name: "Intruder",
+      sourceId: ACCEPTANCE_SOURCE_ID,
+    };
+    await harness.database.contentEntries.put(intruder);
+
+    const scoped = await harness.query.contentForRuleset(ACCEPTANCE_RULESET_ID);
+    expect(scoped.map(item => item.id)).not.toContain("class:eb-intruder");
+    expect(scoped.map(item => item.id)).toContain(ACCEPTANCE_IDS.class);
+  });
+
+  it("refuses to widen an installed profile from a pack that reuses its source ID", async () => {
+    await installAcceptanceRuleset(harness);
+    // The adversarial pack is well-formed and importable; nothing about it is
+    // rejected. Only explicit entry membership keeps it out of the other profile.
+    const preview = await harness.install.preview([sourceCollisionPackJson()]);
+    expect(preview.issues.filter(issue => issue.severity === "error")).toEqual([]);
+    expect(preview.canImport).toBe(true);
+    expectOk(await harness.install.confirm(preview, {}));
+
+    // It really did land on the installed source.
+    const stored = await harness.database.contentEntries.get(COLLISION_CLASS_ID);
+    expect(stored?.sourceId).toBe(ACCEPTANCE_SOURCE_ID);
+
+    const scoped = await harness.query.contentForRuleset(ACCEPTANCE_RULESET_ID);
+    expect(scoped.map(entry => entry.id)).toContain(ACCEPTANCE_IDS.class);
+    expect(scoped.map(entry => entry.id)).not.toContain(COLLISION_CLASS_ID);
+
+    // And the counts a user reads did not move either.
+    const views = await harness.install.installedRulesets();
+    expect(views.find(view => view.id === ACCEPTANCE_RULESET_ID)?.entryCount).toBe(
+      acceptancePack().entries.length,
+    );
+  });
+
+  it("matches preview membership to the profile it writes", async () => {
+    const preview = await harness.install.preview([JSON.stringify(acceptancePack())]);
+    const offer = preview.offers.find(item => item.packId === ACCEPTANCE_PACK_ID);
+    expect(offer).toBeDefined();
+    expectOk(await harness.install.confirm(preview, { createRulesetForPackIds: [ACCEPTANCE_PACK_ID] }));
+
+    const profile = await harness.database.rulesetProfiles.get(offer!.rulesetId);
+    expect([...(profile?.allowedEntryIds ?? [])].sort()).toEqual([...offer!.activeEntryIds].sort());
+  });
+
+  it("keeps an existing profile's source-scoped membership readable", async () => {
+    const all = await harness.database.contentEntries.toArray();
+    const legacy = await harness.database.rulesetProfiles.get(SYNTHETIC_RULESET_ID);
+    expect(legacy).toBeDefined();
+    expect(legacy?.allowedEntryIds).toBeUndefined();
+    // With no explicit set, source scoping is still how the profile reads.
+    expect(scopeEntriesToRuleset(all, legacy).length).toBeGreaterThan(0);
+  });
+});
+
+describe("a pack's profile ID keeps the pack's complete identity", () => {
+  it("does not collide across a stripped prefix", () => {
+    expect(rulesetIdForPack("pack:x")).not.toBe(rulesetIdForPack("x"));
+  });
+
+  it("stays distinct for prefix-related and visually similar pack IDs", () => {
+    const packIds = ["pack:alpha", "pack:alpha-beta", "alpha", "alpha-beta", "pack:pack:alpha", "pack:a1pha", "pack:alpha1"];
+    const derived = packIds.map(rulesetIdForPack);
+    expect(new Set(derived).size).toBe(packIds.length);
+  });
+
+  it("is deterministic", () => {
+    expect(rulesetIdForPack(ACCEPTANCE_PACK_ID)).toBe(rulesetIdForPack(ACCEPTANCE_PACK_ID));
+  });
+
+  it("still recognises a profile installed under the earlier derivation", async () => {
+    const legacyId = legacyRulesetIdsForPack(ACCEPTANCE_PACK_ID)[0];
+    expect(legacyId).toBe("ruleset:emberline-acceptance");
+    const now = "2026-08-04T08:00:00.000Z";
+    await harness.database.rulesetProfiles.put({
+      id: legacyId,
+      name: "Previously installed",
+      activeSourceIds: [ACCEPTANCE_SOURCE_ID],
+      editionPriority: [],
+      allowedCategories: [],
+      allowLegacy: false,
+      allowDuplicateVersions: false,
+      conflictResolution: "source-priority",
+      allowCustomOverrides: true,
+      requirementEnforcement: "soft",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const preview = await harness.install.preview([JSON.stringify(acceptancePack())]);
+    const offer = preview.offers.find(item => item.packId === ACCEPTANCE_PACK_ID);
+    // Recognised as already installed, so nothing is silently overwritten and no
+    // duplicate profile is created under the new derivation.
+    expect(offer?.alreadyInstalled).toBe(true);
+    const outcome = await harness.install.confirm(preview, { createRulesetForPackIds: [ACCEPTANCE_PACK_ID] });
+    expect(outcome.status).toBe("invalid");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 5 — typed links and lineages join the traversal                       */
+/* -------------------------------------------------------------------------- */
+
+describe("activation follows typed content links", () => {
+  it("activates a required link at its own level and not above the build level", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const atFive = planActivation(completeBuild(5) as CharacterDraftBuild, entries);
+    const ids = atFive.entries.map(item => item.entry.id);
+    expect(ids).toContain(ACCEPTANCE_IDS.linkedEcho);
+    // The other link on the same entry is due at a level this build never reaches.
+    expect(ids).not.toContain(ACCEPTANCE_IDS.linkedFarBeacon);
+
+    const atFour = planActivation(completeBuild(4) as CharacterDraftBuild, entries);
+    expect(atFour.entries.map(item => item.entry.id)).not.toContain(ACCEPTANCE_IDS.linkedEcho);
+  });
+
+  it("terminates on a link cycle and activates each entry once", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const activation = planActivation(completeBuild(5) as CharacterDraftBuild, entries);
+    const ids = activation.entries.map(item => item.entry.id);
+    expect(ids.filter(id => id === ACCEPTANCE_IDS.linkedCycleA)).toHaveLength(1);
+    expect(ids.filter(id => id === ACCEPTANCE_IDS.linkedCycleB)).toHaveLength(1);
+  });
+
+  it("keeps the provenance of a linked activation", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const activation = planActivation(completeBuild(5) as CharacterDraftBuild, entries);
+    const echo = activation.entries.find(item => item.entry.id === ACCEPTANCE_IDS.linkedEcho);
+    expect(echo?.route).toBe("link");
+    expect(echo?.viaLinkFromEntryId).toBe("feature:eb-second-beacon");
+  });
+});
+
+describe("a lineage replaces the trait it declares it replaces", () => {
+  const withLineage = (level = 5): CharacterDraftBuild => {
+    const build = completeBuild(level) as CharacterDraftBuild;
+    return {
+      ...build,
+      choiceSelections: { ...build.choiceSelections, [ACCEPTANCE_CHOICES.lineage]: ["option:eb-deepcairn"] },
+    };
+  };
+
+  it("activates the lineage's own trait", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const ids = planActivation(withLineage(), entries).entries.map(item => item.entry.id);
+    expect(ids).toContain(ACCEPTANCE_IDS.lineage);
+    expect(ids).toContain(ACCEPTANCE_IDS.lineageTrait);
+  });
+
+  it("does not leave the replaced species trait active as well", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const activation = planActivation(withLineage(), entries);
+    expect(activation.entries.map(item => item.entry.id)).not.toContain(ACCEPTANCE_IDS.traitPlain);
+    expect(activation.replacedTraitIds).toContain(ACCEPTANCE_IDS.traitPlain);
+  });
+
+  it("leaves the species trait alone when no lineage is taken", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const activation = planActivation(completeBuild(5) as CharacterDraftBuild, entries);
+    expect(activation.entries.map(item => item.entry.id)).toContain(ACCEPTANCE_IDS.traitPlain);
+    expect(activation.replacedTraitIds).toEqual([]);
+  });
+
+  it("activates a legacy race origin's traits by the same rules", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const activation = planActivation(
+      { ...(completeBuild(5) as CharacterDraftBuild), speciesId: ACCEPTANCE_IDS.legacyRace },
+      entries,
+    );
+    const ids = activation.entries.map(item => item.entry.id);
+    expect(ids).toContain(ACCEPTANCE_IDS.legacyRace);
+    expect(ids).toContain(ACCEPTANCE_IDS.traitPlain);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 6 — one bundle, granted twice, is shown once                          */
+/* -------------------------------------------------------------------------- */
+
+describe("equipment granted by two entries is not doubled", () => {
+  /** Level 5 with the feat that grants the background's own bundle. */
+  const sharedBundleBuild = (): CharacterDraftBuild => {
+    const build = completeBuild(5) as CharacterDraftBuild;
+    return {
+      ...build,
+      choiceSelections: {
+        ...build.choiceSelections,
+        [ACCEPTANCE_CHOICES.boon]: ["option:eb-stonewise"],
+        [ACCEPTANCE_CHOICES.featFocus]: [],
+      },
+    };
+  };
+
+  it("lists the resulting items once", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const plan = planBuild(sharedBundleBuild(), entries, "guided");
+    const items = selectedEquipmentFor(plan.equipmentGrants, sharedBundleBuild().equipmentSelections);
+    const tallySticks = items.filter(item => item.itemId === "item:eb-tally-sticks");
+    expect(tallySticks).toHaveLength(1);
+    expect(tallySticks[0].quantity).toBe(1);
+    const inkSets = items.filter(item => item.itemId === "item:eb-ink-set");
+    expect(inkSets).toHaveLength(1);
+  });
+
+  it("keeps both sources visible on the one bundle", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const plan = planBuild(sharedBundleBuild(), entries, "guided");
+    const satchels = plan.equipmentGrants.filter(grant => grant.bundleId === ACCEPTANCE_BUNDLES.backgroundKit);
+    expect(satchels).toHaveLength(1);
+    expect(satchels[0].grantedBy.map(source => source.entryId).sort()).toEqual(
+      [ACCEPTANCE_IDS.background, ACCEPTANCE_IDS.featPlain].sort(),
+    );
+  });
+
+  it("still shows genuinely distinct class and background bundles separately", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    const plan = planBuild(completeBuild(5) as CharacterDraftBuild, entries, "guided");
+    const bundleIds = plan.equipmentGrants.map(grant => grant.bundleId);
+    expect(bundleIds).toContain(ACCEPTANCE_BUNDLES.classKit);
+    expect(bundleIds).toContain(ACCEPTANCE_BUNDLES.backgroundKit);
+  });
+
+  it("adds quantities when two different bundles hold the same item", () => {
+    const grants = equipmentGrantsFor(
+      [
+        {
+          ...ACCEPTANCE_ENTRIES[0],
+          id: "entry:a",
+          effects: [{ id: "e:a", type: "grantEquipmentBundle", bundleId: "bundle:a" }],
+          equipmentBundles: [
+            { id: "bundle:a", label: "A", entries: [{ type: "item", itemId: "item:x", quantity: 1, status: "carried" }] },
+          ],
+        } as ContentEntry,
+        {
+          ...ACCEPTANCE_ENTRIES[0],
+          id: "entry:b",
+          effects: [{ id: "e:b", type: "grantEquipmentBundle", bundleId: "bundle:b" }],
+          equipmentBundles: [
+            { id: "bundle:b", label: "B", entries: [{ type: "item", itemId: "item:x", quantity: 2, status: "carried" }] },
+          ],
+        } as ContentEntry,
+      ],
+      [
+        {
+          ...ACCEPTANCE_ENTRIES[0],
+          id: "entry:a",
+          equipmentBundles: [
+            { id: "bundle:a", label: "A", entries: [{ type: "item", itemId: "item:x", quantity: 1, status: "carried" }] },
+          ],
+        } as ContentEntry,
+        {
+          ...ACCEPTANCE_ENTRIES[0],
+          id: "entry:b",
+          equipmentBundles: [
+            { id: "bundle:b", label: "B", entries: [{ type: "item", itemId: "item:x", quantity: 2, status: "carried" }] },
+          ],
+        } as ContentEntry,
+      ],
+    );
+    const items = selectedEquipmentFor(grants, {});
+    expect(items.filter(item => item.itemId === "item:x")).toHaveLength(1);
+    expect(items.find(item => item.itemId === "item:x")?.quantity).toBe(3);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 7 — a ruleset says whether it reaches private content                 */
+/* -------------------------------------------------------------------------- */
+
+describe("ruleset privacy is derived from metadata", () => {
+  it("reports a public-only profile", async () => {
+    await installAcceptanceRuleset(harness);
+    const entries = await scopedEntries();
+    expect(rulesetPrivacyFor(entries)).toBe("public-only");
+  });
+
+  it("reports a profile that reaches private or export-restricted content", () => {
+    const restricted = ACCEPTANCE_ENTRIES.map(entry => ({ ...entry, private: true, exportRestricted: true }));
+    expect(rulesetPrivacyFor(restricted)).toBe("restricted");
+  });
+
+  it("reports a mixed profile", () => {
+    const mixed = ACCEPTANCE_ENTRIES.map((entry, index) =>
+      index === 0 ? { ...entry, exportRestricted: true } : entry,
+    );
+    expect(rulesetPrivacyFor(mixed)).toBe("mixed");
+  });
+
+  it("surfaces the signal on the installed ruleset view without any content text", async () => {
+    await installAcceptanceRuleset(harness);
+    const views = await harness.install.installedRulesets();
+    const view = views.find(item => item.id === ACCEPTANCE_RULESET_ID);
+    expect(view?.privacy).toBe("public-only");
+    // The signal is a classification, never a quotation of the content.
+    expect(JSON.stringify(view)).not.toContain("Beaconkeeper");
+  });
+
+  it("does not prefer a private profile when resolving a starting ruleset", async () => {
+    await installAcceptanceRuleset(harness);
+    const selection = await harness.install.resolveStartingRuleset();
+    // Two usable profiles and no activation is genuinely ambiguous, whatever
+    // their privacy is; nothing may quietly pick the private one.
+    expect(selection.kind).toBe("ambiguous");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 9 — the value that survives is the latest one                         */
+/* -------------------------------------------------------------------------- */
+
+describe("a delayed or out-of-order save cannot resurrect an older value", () => {
+  it("keeps the newest name after a burst of sequential updates", async () => {
+    const seeded = await seedDraft({ name: "" });
+    let revision = seeded.revision;
+    const words = ["Wren", "Wren H", "Wren Hal", "Wren Hallo", "Wren Halloway"];
+    for (const value of words) {
+      const applied = expectOk<DraftSnapshot>(
+        await harness.drafts.update({ draftId: seeded.draft.id, expectedRevision: revision, patch: { name: value } }),
+      );
+      revision = applied.revision;
+    }
+    const stored = await harness.drafts.get(seeded.draft.id);
+    expect(stored?.draft.build.name).toBe("Wren Halloway");
+  });
+
+  it("refuses a late write that carries an already-spent revision", async () => {
+    const seeded = await seedDraft({ name: "First" });
+    const applied = expectOk<DraftSnapshot>(
+      await harness.drafts.update({
+        draftId: seeded.draft.id,
+        expectedRevision: seeded.revision,
+        patch: { name: "Second" },
+      }),
+    );
+    // A save that was in flight while "Second" landed must not overwrite it.
+    const late = await harness.drafts.update({
+      draftId: seeded.draft.id,
+      expectedRevision: seeded.revision,
+      patch: { name: "Stale first" },
+    });
+    expect(late.status).toBe("stale");
+    const stored = await harness.drafts.get(seeded.draft.id);
+    expect(stored?.draft.build.name).toBe("Second");
+    expect(stored?.revision).toBe(applied.revision);
+  });
+
+  it("carries the latest name through to the committed record", async () => {
+    const seeded = await seedDraft(completeBuild());
+    const renamed = expectOk<DraftSnapshot>(
+      await harness.drafts.update({
+        draftId: seeded.draft.id,
+        expectedRevision: seeded.revision,
+        patch: { name: "Wren Halloway of the Low Crossing" },
+      }),
+    );
+    const result = expectOk<CommitResult>(
+      await harness.commit.commit({
+        operationId: "op:corrective-name",
+        draftId: seeded.draft.id,
+        expectedDraftRevision: renamed.revision,
+        characterId: "character:corrective-name",
+        intent: "create",
+        acknowledgedIssueCodes: [],
+        expectedContentFingerprint: await harness.query.contentFingerprint(ACCEPTANCE_RULESET_ID),
+      }),
+    );
+    const sheet = await harness.query.sheet(result.characterId);
+    expect(sheet?.name).toBe("Wren Halloway of the Low Crossing");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 10 — a ruleset change is evaluated per value, not per ruleset ID      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A second profile over the same installed content.
+ *
+ * Two profiles scoping the same entries is the case that separates "the ruleset
+ * ID changed" from "this value is no longer valid". Excluding entries from the
+ * sibling makes exactly those values incompatible and leaves the rest resolvable,
+ * which is what lets a test assert that only the incompatible ones are cleared.
+ */
+async function installSiblingRuleset(
+  id: ID,
+  { without = [] as readonly ID[], name = "Acceptance sibling" } = {},
+): Promise<RulesetProfile> {
+  const source = await harness.context.repositories.content.getRuleset(ACCEPTANCE_RULESET_ID);
+  if (!source) throw new Error("The acceptance ruleset was not installed");
+  const excluded = new Set(without);
+  const profile: RulesetProfile = {
+    ...source,
+    id,
+    name,
+    ...(source.allowedEntryIds
+      ? { allowedEntryIds: source.allowedEntryIds.filter(entryId => !excluded.has(entryId)) }
+      : {}),
+    disallowedEntryIds: [...(source.disallowedEntryIds ?? []), ...excluded],
+  };
+  await harness.context.repositories.rulesets.put(profile);
+  return profile;
+}
+
+const pathsOf = (fields: readonly { fieldPath: string }[]) => fields.map(field => field.fieldPath);
+
+describe("a ruleset change is evaluated per value, not per ruleset ID", () => {
+  it("clears nothing when the target ruleset resolves the same content", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:acceptance-sibling");
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:acceptance-sibling"),
+    );
+
+    expect(preview.noop).toBe(false);
+    // The ID changed; not one value became invalid because of it.
+    expect(preview.cleared).toEqual([]);
+    expect(pathsOf(preview.retained)).toEqual(
+      expect.arrayContaining(["classId", "subclassId", "speciesId", "backgroundId"]),
+    );
+  });
+
+  it("keeps the compatible selections through the confirmed write", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:acceptance-sibling");
+
+    const switched = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:acceptance-sibling"),
+    );
+
+    expect(switched.draft.rulesetProfileId).toBe("ruleset:acceptance-sibling");
+    expect(switched.draft.build.classId).toBe(ACCEPTANCE_IDS.class);
+    expect(switched.draft.build.subclassId).toBe(ACCEPTANCE_IDS.subclassWatch);
+    expect(switched.draft.build.speciesId).toBe(ACCEPTANCE_IDS.species);
+    expect(switched.draft.build.backgroundId).toBe(ACCEPTANCE_IDS.background);
+    expect(switched.draft.build.choiceSelections).toEqual(seeded.draft.build.choiceSelections);
+    expect(switched.draft.build.equipmentSelections).toEqual(seeded.draft.build.equipmentSelections);
+    // The origin survived, so the increases it authorised survive with it.
+    expect(switched.draft.build.abilityIncreases).toEqual({ strength: 2, wisdom: 1 });
+    expect(switched.draft.build.abilityScores.strength).toBe(17);
+  });
+
+  it("clears only the value the target ruleset drops", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:no-background", { without: [ACCEPTANCE_IDS.background] });
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:no-background"),
+    );
+
+    expect(pathsOf(preview.cleared)).toContain("backgroundId");
+    expect(pathsOf(preview.cleared)).not.toContain("classId");
+    expect(pathsOf(preview.retained)).toEqual(expect.arrayContaining(["classId", "speciesId"]));
+    // The background authorised the increases, so they are recomputed, not kept.
+    expect(pathsOf(preview.recomputed)).toContain("abilityIncreases");
+
+    const switched = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:no-background"),
+    );
+    expect(switched.draft.build.backgroundId).toBeUndefined();
+    expect(switched.draft.build.classId).toBe(ACCEPTANCE_IDS.class);
+    expect(switched.draft.build.abilityIncreases).toEqual({});
+    // Finals fall back to the base scores rather than keeping the increase.
+    expect(switched.draft.build.abilityScores.strength).toBe(15);
+    expect(switched.draft.build.abilityScores.wisdom).toBe(10);
+  });
+
+  it("clears a subclass whose class the target ruleset drops", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:no-class", { without: [ACCEPTANCE_IDS.class] });
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:no-class"),
+    );
+
+    expect(pathsOf(preview.cleared)).toEqual(expect.arrayContaining(["classId", "subclassId"]));
+    expect(pathsOf(preview.retained)).toContain("speciesId");
+  });
+
+  it("reports a target level the incoming content cannot reach, and does not lower it", async () => {
+    const seeded = await seedDraft(completeBuild());
+    // Only the deliberately short class remains, so level 5 is unreachable.
+    await installSiblingRuleset("ruleset:short-only", { without: [ACCEPTANCE_IDS.class] });
+
+    const preview = expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:short-only"),
+    );
+    expect(pathsOf(preview.conflicts)).toContain("level");
+
+    const switched = expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:short-only"),
+    );
+    // The level the user chose is theirs to change; it is reported, not rewritten.
+    expect(switched.draft.build.level).toBe(5);
+  });
+
+  it("writes nothing when the preview is only read", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:no-background", { without: [ACCEPTANCE_IDS.background] });
+
+    expectOk<RulesetChangePreview>(
+      await harness.drafts.previewRulesetChange(seeded.draft.id, "ruleset:no-background"),
+    );
+
+    const after = await harness.context.repositories.drafts.get(seeded.draft.id);
+    expect(after?.revision).toBe(seeded.revision);
+    expect(after?.rulesetProfileId).toBe(ACCEPTANCE_RULESET_ID);
+    expect(after?.build.backgroundId).toBe(ACCEPTANCE_IDS.background);
+  });
+
+  it("does not repoint the device-wide default ruleset", async () => {
+    const seeded = await seedDraft(completeBuild());
+    await installSiblingRuleset("ruleset:acceptance-sibling");
+    const before = await harness.install.activeRulesetId();
+
+    expectOk<DraftSnapshot>(
+      await harness.drafts.changeRuleset(seeded.draft.id, seeded.revision, "ruleset:acceptance-sibling"),
+    );
+
+    // Which ruleset one build is in is not a decision about future builds.
+    expect(await harness.install.activeRulesetId()).toBe(before);
+    expect(await harness.install.activeRulesetId()).not.toBe("ruleset:acceptance-sibling");
+  });
+});
+
+describe("an origin increase the active pattern does not offer is never effective", () => {
+  /** The acceptance entries with the background offering only other abilities. */
+  function backgroundOffering(abilities: readonly string[]): ContentEntry[] {
+    return ACCEPTANCE_ENTRIES.map(entry => {
+      if (entry.id !== ACCEPTANCE_IDS.background) return entry;
+      const mechanics = entry.mechanics as { abilityScoreChoices: { increasePattern: number[] } };
+      return {
+        ...entry,
+        mechanics: {
+          ...mechanics,
+          abilityScoreChoices: { abilities: [...abilities], increasePattern: [...mechanics.abilityScoreChoices.increasePattern] },
+        },
+      } as ContentEntry;
+    });
+  }
+
+  it("drops a stale Wisdom increase into a background that permits only other abilities", () => {
+    // The draft was built where Wisdom was offered; the active background is not.
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityIncreases: { wisdom: 2 },
+      abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+      abilityScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 12, charisma: 8 },
+    };
+    const entries = backgroundOffering(["intelligence", "charisma", "dexterity"]);
+
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    expect(allocation.invalid.map(item => item.ability)).toEqual(["wisdom"]);
+    expect(allocation.increases.wisdom).toBeUndefined();
+    // The stale increase is gone from the score the sheet actually reads.
+    expect(allocation.final.wisdom).toBe(10);
+
+    const plan = planBuild(build, entries, "guided");
+    expect(plan.issues.map(issue => issue.code)).toContain("ORIGIN_INCREASE_NOT_AVAILABLE");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 11 — deep activation chains settle to a fixpoint, not one pass        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A chain of entries where each one's choice activates the next.
+ *
+ * Depth matters, and so does *why* the parent goes. Removing the root entry
+ * outright proves nothing: the activation walk then never reaches the chain at
+ * all, so one pass clears it as completely as ten would.
+ *
+ * The case that genuinely separates a fixpoint from a single pass is a parent
+ * that still activates its child while being invalid itself. The root choice
+ * here takes two options: one continues the chain, the other the target no
+ * longer offers. In the first round the surviving option still activates the
+ * whole chain, so every descendant is reachable and looks valid — but the root
+ * selection is dropped, because a selection is kept only when *every* option in
+ * it is still offered. Only in the next round does the chain stop being
+ * reachable, and then one level falls per round after that.
+ */
+function chainEntries(depth: number): { entries: ContentEntry[]; narrowedClass: ContentEntry } {
+  const base = (
+    partial: Pick<ContentEntry, "id" | "slug" | "name" | "category" | "mechanics"> & Partial<ContentEntry>,
+  ): ContentEntry =>
+    ({
+      aliases: [],
+      rulesEdition: "homebrew",
+      sourceId: "source:chain",
+      sourceLocator: { sourceId: "source:chain", page: "1" },
+      reviewStatus: "engine-verified",
+      licenseType: "original",
+      visibility: "public-original",
+      prerequisites: [],
+      choices: [],
+      equipmentBundles: [],
+      effects: [],
+      links: [],
+      conflict: { sourcePriority: 30, conflictKey: partial.id, resolution: "source-priority" },
+      tags: ["synthetic", "chain"],
+      version: "1.0.0",
+      revision: 1,
+      editionRelations: [],
+      legacy: false,
+      optional: false,
+      private: false,
+      exportRestricted: false,
+      createdAt: "2026-08-04T00:00:00.000Z",
+      updatedAt: "2026-08-04T00:00:00.000Z",
+      ...partial,
+    }) as ContentEntry;
+
+  const links: ContentEntry[] = [];
+  for (let index = 1; index <= depth; index += 1) {
+    links.push(
+      base({
+        id: `feat:chain-${index}`,
+        slug: `chain-${index}`,
+        name: `Chain link ${index}`,
+        category: "feat",
+        mechanics: { category: "general", repeatable: false },
+        choices:
+          index < depth
+            ? [
+                {
+                  id: `choice:chain-${index}`,
+                  label: `Chain choice ${index}`,
+                  min: 1,
+                  max: 1,
+                  repeatable: false,
+                  options: [{ id: `option:chain-${index}`, label: `Onward ${index}`, entryId: `feat:chain-${index + 1}` }],
+                },
+              ]
+            : [],
+      }),
+    );
+  }
+
+  const klass = base({
+    id: "class:chain",
+    slug: "chain",
+    name: "Chainwalker",
+    category: "class",
+    choices: [
+      {
+        id: "choice:chain-0",
+        label: "Chain root",
+        min: 1,
+        max: 2,
+        repeatable: false,
+        options: [
+          { id: "option:chain-0", label: "Begin", entryId: "feat:chain-1" },
+          // Present here, absent from the target: this is what invalidates the
+          // root while `option:chain-0` still activates everything below it.
+          { id: "option:chain-extra", label: "Also this" },
+        ],
+      },
+    ],
+    mechanics: {
+      hitDie: 8,
+      primaryAbilities: ["strength"],
+      // The schema is strict: exactly two saves, and a declared subclass level.
+      savingThrows: ["proficiency:chain-save-a", "proficiency:chain-save-b"],
+      startingProficiencyIds: [],
+      progression: [{ level: 1, proficiencyBonus: 2, featureIds: [], choiceIds: ["choice:chain-0"], resourceChanges: {} }],
+      subclassLevel: 3,
+      subclassIds: [],
+    },
+  });
+
+  // Identical, except that the root's second option is gone. The option that
+  // continues the chain survives, so round one still activates every link.
+  const narrowedClass = base({
+    ...klass,
+    choices: [
+      { ...klass.choices[0], options: [{ id: "option:chain-0", label: "Begin", entryId: "feat:chain-1" }] },
+    ],
+  } as ContentEntry);
+
+  return { entries: [klass, ...links], narrowedClass };
+}
+
+function chainProfile(id: ID): RulesetProfile {
+  return {
+    id,
+    name: id,
+    activeSourceIds: ["source:chain"],
+    editionPriority: [],
+    allowedCategories: [],
+    allowLegacy: false,
+    allowDuplicateVersions: false,
+    conflictResolution: "source-priority",
+    allowCustomOverrides: true,
+    requirementEnforcement: "soft",
+    createdAt: "2026-08-04T00:00:00.000Z",
+    updatedAt: "2026-08-04T00:00:00.000Z",
+  } as RulesetProfile;
+}
+
+function chainBuild(depth: number, order: "forward" | "reverse"): CharacterDraftBuild {
+  const indices = [...Array(depth).keys()];
+  const ordered = order === "forward" ? indices : [...indices].reverse();
+  const choiceSelections: Record<string, string[]> = {};
+  for (const index of ordered)
+    choiceSelections[`choice:chain-${index}`] =
+      index === 0 ? ["option:chain-0", "option:chain-extra"] : [`option:chain-${index}`];
+  return {
+    ...EMPTY_DRAFT_BUILD,
+    name: "Chainwalker",
+    level: 1,
+    classId: "class:chain",
+    choiceSelections,
+  } as CharacterDraftBuild;
+}
+
+describe("a deep activation chain settles to a fixpoint", () => {
+  const DEPTH = 12;
+
+  const resolve = (build: CharacterDraftBuild, proposedEntries: readonly ContentEntry[], current: readonly ContentEntry[]) =>
+    resolveRulesetChange({
+      draftId: "draft:chain",
+      expectedRevision: 1,
+      build,
+      currentRuleset: chainProfile("ruleset:chain-a"),
+      currentRulesetId: "ruleset:chain-a",
+      currentEntries: current,
+      proposedRuleset: chainProfile("ruleset:chain-b"),
+      proposedEntries,
+    });
+
+  it("keeps every link when the target ruleset still resolves the whole chain", () => {
+    const { entries } = chainEntries(DEPTH);
+    const build = chainBuild(DEPTH, "forward");
+
+    const { preview, nextBuild } = resolve(build, entries, entries);
+
+    expect(Object.keys(nextBuild.choiceSelections).sort()).toEqual(Object.keys(build.choiceSelections).sort());
+    expect(preview.cleared.filter(field => field.fieldPath.startsWith("choiceSelections."))).toEqual([]);
+  });
+
+  /**
+   * The regression proper. A single pass clears only the root, because every
+   * deeper choice was still reachable in the walk that pass measured. Anything
+   * short of a fixpoint therefore leaves stale selections behind, and this
+   * assertion names how many.
+   */
+  it("removes every descendant when the root selection is invalidated, not just the root", () => {
+    const { entries, narrowedClass } = chainEntries(DEPTH);
+    const proposed = [narrowedClass, ...entries.slice(1)];
+    const build = chainBuild(DEPTH, "forward");
+
+    const { preview, nextBuild } = resolve(build, proposed, entries);
+
+    // Not one, not two: the entire chain.
+    expect(Object.keys(nextBuild.choiceSelections)).toEqual([]);
+    const clearedChoices = preview.cleared
+      .filter(field => field.fieldPath.startsWith("choiceSelections."))
+      .map(field => field.fieldPath);
+    expect(clearedChoices).toHaveLength(DEPTH);
+    // The iteration cap must not truncate a chain this schema can express.
+    expect(preview.retained.some(field => field.fieldPath.startsWith("choiceSelections."))).toBe(false);
+  });
+
+  it("produces the same verdict whichever order the selections were stored in", () => {
+    const { entries, narrowedClass } = chainEntries(DEPTH);
+    const proposed = [narrowedClass, ...entries.slice(1)];
+
+    const forward = resolve(chainBuild(DEPTH, "forward"), proposed, entries);
+    const reverse = resolve(chainBuild(DEPTH, "reverse"), proposed, entries);
+
+    expect(Object.keys(forward.nextBuild.choiceSelections)).toEqual([]);
+    expect(Object.keys(reverse.nextBuild.choiceSelections)).toEqual([]);
+    expect(forward.preview.cleared.map(f => f.fieldPath).sort()).toEqual(
+      reverse.preview.cleared.map(f => f.fieldPath).sort(),
+    );
+  });
+
+  it("reports exactly what it writes", () => {
+    const { entries, narrowedClass } = chainEntries(DEPTH);
+    const proposed = [narrowedClass, ...entries.slice(1)];
+    const { preview, nextBuild } = resolve(chainBuild(DEPTH, "forward"), proposed, entries);
+
+    const retainedChoiceIds = new Set(
+      preview.retained
+        .filter(field => field.fieldPath.startsWith("choiceSelections."))
+        .map(field => field.fieldPath.slice("choiceSelections.".length)),
+    );
+    expect(new Set(Object.keys(nextBuild.choiceSelections))).toEqual(retainedChoiceIds);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 12 — a repeated-amount origin pattern is honoured, not refused        */
+/* -------------------------------------------------------------------------- */
+
+describe("an origin pattern whose amounts repeat", () => {
+  /** The acceptance background, re-declared with the pattern under test. */
+  function backgroundWithPattern(abilities: readonly string[], increasePattern: readonly number[]): ContentEntry[] {
+    return ACCEPTANCE_ENTRIES.map(entry => {
+      if (entry.id !== ACCEPTANCE_IDS.background) return entry;
+      return {
+        ...entry,
+        mechanics: {
+          ...(entry.mechanics as object),
+          abilityScoreChoices: { abilities: [...abilities], increasePattern: [...increasePattern] },
+        },
+      } as ContentEntry;
+    });
+  }
+
+  it("accepts three separate +1 slots placed on three different abilities", () => {
+    const entries = backgroundWithPattern(["strength", "wisdom", "constitution"], [1, 1, 1]);
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+      abilityIncreases: { strength: 1, wisdom: 1, constitution: 1 },
+      abilityScores: {},
+    };
+
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    // Slots are consumed as a multiset, so identical amounts do not collide.
+    expect(allocation.invalid).toEqual([]);
+    expect(allocation.increases).toEqual({ strength: 1, wisdom: 1, constitution: 1 });
+    expect(allocation.patternSatisfied).toBe(true);
+    expect(allocation.final.strength).toBe(16);
+    expect(allocation.final.wisdom).toBe(11);
+    expect(allocation.final.constitution).toBe(14);
+  });
+
+  it("still refuses a second +1 when the pattern only declares one", () => {
+    const entries = backgroundWithPattern(["strength", "wisdom", "constitution"], [2, 1]);
+    const build = {
+      ...(completeBuild() as CharacterDraftBuild),
+      abilityBaseScores: { strength: 15, dexterity: 14, constitution: 13, intelligence: 12, wisdom: 10, charisma: 8 },
+      abilityIncreases: { strength: 1, wisdom: 1 },
+      abilityScores: {},
+    };
+
+    const allocation = reconcileAbilityAllocation(build, entries);
+
+    expect(allocation.invalid.map(item => item.reason)).toContain("slot-already-used");
+    expect(Object.keys(allocation.increases)).toHaveLength(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 13 — two profiles are scoped from one read of the entry table         */
+/* -------------------------------------------------------------------------- */
+
+describe("loading several ruleset scopes at once", () => {
+  it("returns exactly what loading each one separately returns", async () => {
+    await installAcceptanceRuleset(harness);
+    const { repositories } = harness.context;
+
+    const separately = [
+      await loadRulesetScope(repositories, ACCEPTANCE_RULESET_ID),
+      await loadRulesetScope(repositories, SYNTHETIC_RULESET_ID),
+    ];
+    const together = await loadRulesetScopes(repositories, [ACCEPTANCE_RULESET_ID, SYNTHETIC_RULESET_ID]);
+
+    expect(together).toHaveLength(2);
+    expect(together[0].ruleset).toEqual(separately[0].ruleset);
+    expect(together[1].ruleset).toEqual(separately[1].ruleset);
+    expect(together[0].entries).toEqual(separately[0].entries);
+    expect(together[1].entries).toEqual(separately[1].entries);
+    // The two profiles really are different, so this is not a vacuous match.
+    expect(together[0].entries).not.toEqual(together[1].entries);
+  });
+
+  it("reads the entry table once however many profiles are asked for", async () => {
+    await installAcceptanceRuleset(harness);
+    const { repositories } = harness.context;
+    let reads = 0;
+    // The read port is a class instance, so it is delegated to rather than
+    // spread: spreading would drop every method that lives on the prototype.
+    const countedContent = new Proxy(repositories.content, {
+      get(target, property, receiver) {
+        if (property === "listEntries")
+          return async () => {
+            reads += 1;
+            return target.listEntries();
+          };
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const counted = { ...repositories, content: countedContent } as typeof repositories;
+
+    await loadRulesetScopes(counted, [ACCEPTANCE_RULESET_ID, SYNTHETIC_RULESET_ID]);
+
+    expect(reads).toBe(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Scope 14 — a legacy profile ID that collides is named as ambiguous          */
+/* -------------------------------------------------------------------------- */
+
+describe("a legacy profile ID that another pack now owns", () => {
+  /** The standalone pack, re-issued under a different pack and source ID. */
+  const reissued = (packId: ID, sourceId: ID) => {
+    const base = standalonePack();
+    return JSON.stringify({
+      ...base,
+      pack: { ...base.pack, id: packId, name: `Pack ${packId.replace(":", "-")}` },
+      sources: [{ ...base.sources[0], id: sourceId }],
+      entries: base.entries.map(entry => ({
+        ...entry,
+        id: `${entry.id}-${sourceId}`,
+        sourceId,
+        sourceLocator: { ...entry.sourceLocator, sourceId },
+        conflict: { ...entry.conflict, conflictKey: `${entry.id}-${sourceId}` },
+      })),
+    });
+  };
+
+  /**
+   * `pack:zeta`'s *legacy* ID is `ruleset:zeta`, which is also the *current* ID
+   * of the unrelated pack `zeta`. From the ID alone the two cases — this pack
+   * installed under the old scheme, and a different pack installed under the new
+   * one — cannot be told apart, so the boundary refuses either way.
+   */
+  it("refuses without overwriting, and does not claim the new pack is installed", async () => {
+    const now = "2026-08-04T08:00:00.000Z";
+    await harness.database.rulesetProfiles.put({
+      id: "ruleset:zeta",
+      name: "Zeta, an unrelated pack",
+      activeSourceIds: ["source:zeta"],
+      editionPriority: [],
+      allowedCategories: [],
+      allowLegacy: false,
+      allowDuplicateVersions: false,
+      conflictResolution: "source-priority",
+      allowCustomOverrides: true,
+      requirementEnforcement: "soft",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const preview = await harness.install.preview([reissued("pack:zeta", "source:packzeta")]);
+    const offer = preview.offers.find(item => item.packId === "pack:zeta");
+    expect(offer?.alreadyInstalled).toBe(true);
+    // The match is legacy-only, and says so rather than asserting an install.
+    expect(offer?.installedMatch).toBe("legacy");
+    expect(offer?.installedRulesetId).toBe("ruleset:zeta");
+
+    const outcome = await harness.install.confirm(preview, { createRulesetForPackIds: ["pack:zeta"] });
+    expect(outcome.status).toBe("invalid");
+    expect(JSON.stringify(outcome)).toContain("RULESET_LEGACY_ID_AMBIGUOUS");
+    expect(JSON.stringify(outcome)).not.toContain("RULESET_ALREADY_INSTALLED");
+
+    // The unrelated profile is untouched, which is the property that matters.
+    const profiles = await harness.context.repositories.content.listRulesets();
+    expect(profiles.find(profile => profile.id === "ruleset:zeta")?.name).toBe("Zeta, an unrelated pack");
+    expect(profiles.some(profile => profile.id === "ruleset:pack:zeta")).toBe(false);
+  });
+
+  it("still calls a pack installed under its own current ID already installed", async () => {
+    await installAcceptanceRuleset(harness);
+    const preview = await harness.install.preview([acceptancePackJson()]);
+    const offer = preview.offers.find(item => item.packId === ACCEPTANCE_PACK_ID);
+    expect(offer?.alreadyInstalled).toBe(true);
+    expect(offer?.installedMatch).toBe("current");
+  });
+});

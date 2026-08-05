@@ -22,13 +22,24 @@ import { EMPTY_DRAFT_BUILD, isAllowedTargetPath, parseOverrideTarget } from "@/s
 import type { ContentEntry, ID } from "@/src/domain/model";
 import type { LedgerDB } from "@/src/storage/db";
 import type { CharacterRepositories } from "@/src/storage/character-repositories";
-import { planBuild, type BuildPlan, type BuilderStepId } from "@/src/services/build-planner";
+import {
+  planBuild,
+  STRUCTURAL_COMMIT_BLOCKERS,
+  type BuildPlan,
+  type BuilderStepId,
+} from "@/src/services/build-planner";
+import { reconcileAbilityAllocation } from "@/src/services/ability-allocation";
+import {
+  applyRulesetChange,
+  planRulesetChange,
+  type RulesetChangePreview,
+} from "@/src/services/ruleset-change";
 import {
   computeContentFingerprint,
   resolveDerivedCharacter,
   type DerivedCharacterSheet,
 } from "@/src/services/derived-resolver";
-import { loadRulesetScope } from "@/src/services/content-scope";
+import { loadRulesetScope, loadRulesetScopes } from "@/src/services/content-scope";
 import {
   invalid,
   noopLogger,
@@ -111,29 +122,152 @@ export class CharacterDraftService {
   async update(command: UpdateDraftCommand): Promise<ServiceOutcome<DraftSnapshot>> {
     const { database, repositories } = this.context;
     const now = this.clock();
-    const outcome = await database.transaction("rw", database.characterDrafts, async (): Promise<ServiceOutcome<CharacterDraftRecord>> => {
-      const current = await repositories.drafts.get(command.draftId);
-      if (!current) return notFound(command.draftId);
-      if (current.revision !== command.expectedRevision)
-        return stale(command.draftId, command.expectedRevision, current.revision);
-      if (current.status !== "in-progress")
-        return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: command.draftId, severity: "error" }]);
-      const next: CharacterDraftRecord = {
-        ...current,
-        revision: current.revision + 1,
-        lastStepId: command.lastStepId ?? current.lastStepId,
-        build: { ...current.build, ...command.patch },
-        updatedAt: now,
-      };
-      const accepted = await repositories.drafts.replace(next, command.expectedRevision);
-      if (!accepted) return stale(command.draftId, command.expectedRevision, null);
-      return ok(next);
-    });
+    const outcome = await database.transaction(
+      "rw",
+      [database.characterDrafts, database.contentEntries, database.rulesetProfiles],
+      async (): Promise<ServiceOutcome<CharacterDraftRecord>> => {
+        const current = await repositories.drafts.get(command.draftId);
+        if (!current) return notFound(command.draftId);
+        if (current.revision !== command.expectedRevision)
+          return stale(command.draftId, command.expectedRevision, current.revision);
+        if (current.status !== "in-progress")
+          return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: command.draftId, severity: "error" }]);
+        const merged: CharacterDraftBuild = { ...current.build, ...command.patch };
+        const next: CharacterDraftRecord = {
+          ...current,
+          revision: current.revision + 1,
+          lastStepId: command.lastStepId ?? current.lastStepId,
+          build: await reconcileOriginChange(current.build, merged, command.patch, () =>
+            loadRulesetScope(repositories, current.rulesetProfileId),
+          ),
+          updatedAt: now,
+        };
+        const accepted = await repositories.drafts.replace(next, command.expectedRevision);
+        if (!accepted) return stale(command.draftId, command.expectedRevision, null);
+        return ok(next);
+      },
+    );
     if (outcome.status !== "ok") {
       this.log({ operation: "draft.update", recordId: command.draftId, expectedRevision: command.expectedRevision });
       return outcome;
     }
     this.log({ operation: "draft.update", recordId: command.draftId, actualRevision: outcome.result.revision });
+    return ok(await this.snapshot(outcome.result));
+  }
+
+  /**
+   * What moving this draft to another installed ruleset would cost.
+   *
+   * Read-only. It opens no write transaction and touches no record, so a user
+   * can look at the consequences of a switch — and walk away from it — without
+   * the draft changing underneath them. The revision it reports is the one a
+   * confirmation must carry, which is how a change accepted on screen cannot be
+   * applied to a draft that has since moved on.
+   */
+  async previewRulesetChange(
+    draftId: ID,
+    rulesetProfileId: ID,
+  ): Promise<ServiceOutcome<RulesetChangePreview>> {
+    const { repositories } = this.context;
+    const current = await repositories.drafts.get(draftId);
+    if (!current) return notFound(draftId);
+    if (current.status !== "in-progress")
+      return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: draftId, severity: "error" }]);
+    const proposed = await repositories.content.getRuleset(rulesetProfileId);
+    if (!proposed) return notFound(rulesetProfileId);
+    // One entry read, scoped twice: the comparison needs both profiles, not two
+    // passes over the whole table.
+    const [scope, proposedScope] = await loadRulesetScopes(repositories, [
+      current.rulesetProfileId,
+      rulesetProfileId,
+    ]);
+    return ok(
+      planRulesetChange({
+        draftId,
+        expectedRevision: current.revision,
+        build: current.build,
+        currentRuleset: scope.ruleset,
+        currentRulesetId: current.rulesetProfileId,
+        currentEntries: scope.entries,
+        proposedRuleset: proposed,
+        proposedEntries: proposedScope.entries,
+      }),
+    );
+  }
+
+  /**
+   * Moves a draft to a different installed ruleset.
+   *
+   * This is the write half of the two-phase change `previewRulesetChange`
+   * describes, and it applies exactly that preview: both are one call into
+   * `resolveRulesetChange`, so what was shown and what is written cannot differ.
+   *
+   * A content-scoped selection is cleared only when the incoming ruleset does
+   * not resolve it. Carrying an ID the new ruleset never activates would leave a
+   * build that looks complete and resolves to nothing; dropping one the new
+   * ruleset does still define would destroy work for no reason. Name, level,
+   * base scores and manual values survive unconditionally, because none of them
+   * depends on which ruleset is active. Origin increases are revalidated against
+   * whichever pattern is in force afterwards, so an increase the incoming origin
+   * does not authorise is excluded from the finals rather than left baked in.
+   *
+   * The expected revision is validated inside the write transaction, so an
+   * autosave that lands between preview and confirmation makes the confirmation
+   * stale rather than silently reviving the values it was going to clear.
+   */
+  async changeRuleset(
+    draftId: ID,
+    expectedRevision: number,
+    rulesetProfileId: ID,
+  ): Promise<ServiceOutcome<DraftSnapshot>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+    const target = await repositories.content.getRuleset(rulesetProfileId);
+    if (!target) return notFound(rulesetProfileId);
+    const existing = await repositories.drafts.get(draftId);
+    if (!existing) return notFound(draftId);
+    // Both scopes are read outside the write, because the resolution the user
+    // confirmed is a function of both. The revision is revalidated inside the
+    // transaction, so a draft that moved on since makes this confirmation stale
+    // rather than letting it apply against content it was not computed from.
+    const [currentScope, nextScope] = await loadRulesetScopes(repositories, [
+      existing.rulesetProfileId,
+      rulesetProfileId,
+    ]);
+
+    const outcome = await database.transaction(
+      "rw",
+      [database.characterDrafts, database.contentEntries, database.rulesetProfiles],
+      async (): Promise<ServiceOutcome<CharacterDraftRecord>> => {
+        const current = await repositories.drafts.get(draftId);
+        if (!current) return notFound(draftId);
+        if (current.revision !== expectedRevision) return stale(draftId, expectedRevision, current.revision);
+        if (current.status !== "in-progress")
+          return invalid([{ code: "DRAFT_NOT_EDITABLE", recordId: draftId, severity: "error" }]);
+        if (current.rulesetProfileId === rulesetProfileId) return ok(current);
+
+        const next: CharacterDraftRecord = {
+          ...current,
+          rulesetProfileId,
+          revision: current.revision + 1,
+          build: applyRulesetChange({
+            draftId,
+            expectedRevision,
+            build: current.build,
+            currentRuleset: currentScope.ruleset,
+            currentRulesetId: current.rulesetProfileId,
+            currentEntries: currentScope.entries,
+            proposedRuleset: target,
+            proposedEntries: nextScope.entries,
+          }),
+          updatedAt: now,
+        };
+        const accepted = await repositories.drafts.replace(next, expectedRevision);
+        return accepted ? ok(next) : stale(draftId, expectedRevision, null);
+      },
+    );
+    if (outcome.status !== "ok") return outcome;
+    this.log({ operation: "draft.ruleset", recordId: draftId, actualRevision: outcome.result.revision });
     return ok(await this.snapshot(outcome.result));
   }
 
@@ -192,6 +326,45 @@ export class CharacterDraftService {
     const { entries } = await loadRulesetScope(this.context.repositories, draft.rulesetProfileId);
     return { draft, plan: planBuild(draft.build, entries, draft.presentation), revision: draft.revision };
   }
+}
+
+/** Patch keys that can change which origin increases are authorised. */
+const ORIGIN_OWNING_KEYS: readonly (keyof CharacterDraftBuild)[] = ["backgroundId", "speciesId"];
+
+/**
+ * Revalidates the origin allocation when the patch changed the origin.
+ *
+ * The increases a user placed were authorised by a specific origin's declared
+ * pattern. Replacing or removing that origin removes the authorisation, and the
+ * finals are what the sheet reads — so leaving them alone means a score keeps
+ * carrying an increase no active content grants. The repair happens on the write
+ * that causes it, in the same transaction, rather than being left for a later
+ * reader to notice.
+ *
+ * A patch that sets the allocation itself is left alone: that is the abilities
+ * step doing its own arithmetic, and second-guessing it here would fight the
+ * user's edit.
+ */
+async function reconcileOriginChange(
+  previous: CharacterDraftBuild,
+  merged: CharacterDraftBuild,
+  patch: Readonly<Partial<CharacterDraftBuild>>,
+  loadScope: () => Promise<{ entries: ContentEntry[] }>,
+): Promise<CharacterDraftBuild> {
+  if ("abilityIncreases" in patch || "abilityScores" in patch) return merged;
+  const changedOrigin = ORIGIN_OWNING_KEYS.some(key => key in patch && patch[key] !== previous[key]);
+  if (!changedOrigin) return merged;
+  if (!Object.keys(merged.abilityIncreases).length) return merged;
+
+  const { entries } = await loadScope();
+  const allocation = reconcileAbilityAllocation(merged, entries);
+  if (!allocation.invalid.length) return merged;
+  return {
+    ...merged,
+    abilityBaseScores: { ...allocation.base },
+    abilityIncreases: { ...allocation.increases },
+    abilityScores: { ...allocation.final },
+  };
 }
 
 export type CommitIntent = "create" | "edit" | "manual-sheet";
@@ -267,6 +440,21 @@ export class CharacterBuildCommitService {
         }
 
         const plan = planBuild(draft.build, entries, draft.presentation);
+
+        /*
+         * The structural floor, checked before anything else and in both modes.
+         *
+         * These are not incomplete decisions, which flexible mode exists to
+         * tolerate — they are records the content cannot describe. Committing a
+         * level the class has no progression row for produces a sheet whose hit
+         * dice and maximum hit points come from different levels, and it stays
+         * wrong for as long as the character exists. It is checked ahead of the
+         * acknowledgement filter deliberately: acknowledging an issue records
+         * that the user accepts a gap, not that the gap has stopped existing.
+         */
+        const structural = plan.issues.filter(issue => STRUCTURAL_COMMIT_BLOCKERS.has(issue.code));
+        if (command.intent !== "manual-sheet" && structural.length) return invalid(structural);
+
         const blocking = plan.issues.filter(
           issue => issue.severity === "error" && !command.acknowledgedIssueCodes.includes(issue.code),
         );
@@ -275,7 +463,7 @@ export class CharacterBuildCommitService {
         if (draft.presentation === "guided" && command.intent !== "manual-sheet" && blocking.length)
           return invalid(blocking);
 
-        const character = characterFromDraft(draft, command, fingerprint, existing, now);
+        const character = characterFromDraft(draft, command, fingerprint, existing, now, plan);
         const overrides = await repositories.overrides.listByCharacter(command.characterId);
         const sheet = resolveDerivedCharacter({ character, overrides, entries, ...(ruleset ? { ruleset } : {}) });
 
@@ -352,6 +540,7 @@ function characterFromDraft(
   fingerprint: string,
   existing: CharacterRecord | undefined,
   now: string,
+  plan: BuildPlan,
 ): CharacterRecord {
   const build = draft.build;
   return {
@@ -363,11 +552,19 @@ function characterFromDraft(
     ...(build.nickname ? { nickname: build.nickname } : {}),
     ...(build.pronouns ? { pronouns: build.pronouns } : {}),
     level: build.level,
-    classLevels: build.classId ? [{ classId: build.classId, level: build.level }] : [],
+    // The subclass travels with the class level it belongs to, so the committed
+    // record carries its identity rather than leaving it only in the draft.
+    classLevels: build.classId
+      ? [{ classId: build.classId, level: build.level, ...(build.subclassId ? { subclassId: build.subclassId } : {}) }]
+      : [],
     ...(build.speciesId ? { speciesId: build.speciesId } : {}),
     ...(build.backgroundId ? { backgroundId: build.backgroundId } : {}),
     abilityMethod: build.abilityMethod,
-    abilityScores: { ...build.abilityScores },
+    // The planner's finals, not the draft's stored ones. They are the base
+    // scores plus only those origin increases the active origin still
+    // authorises, so an increase left over from a replaced origin cannot be
+    // written into a durable score.
+    abilityScores: { ...plan.abilities.final },
     choiceSelections: { ...build.choiceSelections },
     equipmentSelections: { ...build.equipmentSelections },
     manualValues: { ...build.manualValues },

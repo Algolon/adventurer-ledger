@@ -16,8 +16,9 @@ import type {
   CharacterSnapshotRecord,
   CharacterVersionRecord,
 } from "@/src/domain/character-record";
-import type { ContentEntry, ID } from "@/src/domain/model";
+import type { Category, ContentEntry, ID } from "@/src/domain/model";
 import { requiredChoicesFor, type RequiredChoice } from "@/src/services/build-planner";
+import { planActivation, type SubclassRequirement } from "@/src/services/choice-planner";
 import { computeContentFingerprint, resolveDerivedCharacter, type DerivedCharacterSheet } from "@/src/services/derived-resolver";
 import { derivedSnapshotOf, type ServiceContext } from "@/src/services/character-services";
 import { loadRulesetScope } from "@/src/services/content-scope";
@@ -55,6 +56,31 @@ export interface ScalarDiff {
   after: number | string | null;
 }
 
+/** Something the target level adds, named so the level is never silent. */
+export interface GainedEntryView {
+  id: ID;
+  label: string;
+  category: Category;
+  summary?: string;
+}
+
+/**
+ * Whether the class's own content reaches the target level.
+ *
+ * A class whose progression stops at level 3 cannot honestly advance a
+ * character to 4. Without this the preview showed an empty confirmation: no
+ * features, no choices, nothing but a hit die, and a Confirm button that
+ * committed a level the content does not describe.
+ */
+export interface LevelCoverage {
+  classId?: ID;
+  classLabel?: string;
+  /** True when the class defines a progression row for the target level. */
+  supported: boolean;
+  /** Highest level the class's contiguous progression reaches. */
+  progressionMax?: number;
+}
+
 export interface LevelUpPreview {
   characterId: ID;
   characterRevision: number;
@@ -71,6 +97,20 @@ export interface LevelUpPreview {
   scalars: readonly ScalarDiff[];
   /** Only choices that become required at the new level. */
   newChoices: readonly RequiredChoice[];
+  /** Features, traits and other entries the target level activates. */
+  gainedFeatures: readonly GainedEntryView[];
+  /** Actions and attacks the target level makes available. */
+  gainedActions: readonly GainedEntryView[];
+  /** Resources that appear, or whose maximum moves, at the target level. */
+  gainedResources: readonly GainedEntryView[];
+  /** The subclass decision, when the target level is where it is made. */
+  subclass?: SubclassRequirement;
+  coverage: LevelCoverage;
+  /**
+   * True when the level adds no feature, action, resource or choice. It is
+   * stated outright rather than presented as an empty screen.
+   */
+  onlyHitDice: boolean;
   /** Restore point that will be taken before any edit. */
   restorePointLabel: string;
   blocked: boolean;
@@ -89,15 +129,25 @@ export function applyCurrentValuePolicy(
   return Math.max(0, Math.min(maximumAfter, shifted));
 }
 
+export interface LevelUpGains {
+  newChoices: readonly RequiredChoice[];
+  gainedFeatures: readonly GainedEntryView[];
+  gainedActions: readonly GainedEntryView[];
+  gainedResources: readonly GainedEntryView[];
+  subclass?: SubclassRequirement;
+  coverage: LevelCoverage;
+}
+
 /** Pure diff between the resolved sheets at the current and the next level. */
 export function planLevelUp(
   before: DerivedCharacterSheet,
   after: DerivedCharacterSheet,
   runtime: CharacterRuntimeStateRecord,
-  newChoices: readonly RequiredChoice[],
+  gains: LevelUpGains,
   fingerprint: string,
   rulesetProfileId: ID,
 ): LevelUpPreview {
+  const { newChoices, gainedFeatures, gainedActions, gainedResources, coverage } = gains;
   const hitPoints: TrackedValueDiff = {
     id: "hitPoints",
     label: "Hit points",
@@ -133,7 +183,15 @@ export function planLevelUp(
     { id: "armorClass", label: "Armour class", before: before.armorClass.value, after: after.armorClass.value },
   ];
 
-  const blockingCodes = after.issues.filter(issue => issue.severity === "error").map(issue => issue.code);
+  const blockingCodes = [
+    ...new Set([
+      // An uncovered level blocks first: everything downstream would be a
+      // description of content that does not exist.
+      ...(coverage.supported ? [] : ["CLASS_PROGRESSION_LEVEL_MISSING"]),
+      ...(gains.subclass?.unresolved ? ["SUBCLASS_NOT_CHOSEN"] : []),
+      ...after.issues.filter(issue => issue.severity === "error").map(issue => issue.code),
+    ]),
+  ];
   return {
     characterId: after.characterId,
     characterRevision: before.characterRevision,
@@ -148,22 +206,45 @@ export function planLevelUp(
     resources,
     scalars,
     newChoices,
+    gainedFeatures,
+    gainedActions,
+    gainedResources,
+    ...(gains.subclass ? { subclass: gains.subclass } : {}),
+    coverage,
+    onlyHitDice:
+      coverage.supported &&
+      !newChoices.length &&
+      !gainedFeatures.length &&
+      !gainedActions.length &&
+      !gainedResources.length &&
+      resources.every(resource => !resource.maximumDelta),
     restorePointLabel: `Before level ${after.level}`,
     blocked: blockingCodes.length > 0,
     blockingCodes,
   };
 }
 
-/** Projects the durable record onto the next level with the newly made choices. */
+/**
+ * Projects the durable record onto the next level with the newly made choices.
+ *
+ * A subclass chosen during this level-up is written onto the first class level,
+ * the same place creation writes it, so the identity travels with the class
+ * rather than living as a loose selection.
+ */
 export function characterAtNextLevel(
   character: CharacterRecord,
   choiceSelections: Readonly<Record<ID, readonly ID[]>>,
+  subclassId?: ID,
 ): CharacterRecord {
   const nextLevel = character.level + 1;
   return {
     ...character,
     level: nextLevel,
-    classLevels: character.classLevels.map((item, index) => (index === 0 ? { ...item, level: nextLevel } : item)),
+    classLevels: character.classLevels.map((item, index) =>
+      index === 0
+        ? { ...item, level: nextLevel, ...(subclassId ?? item.subclassId ? { subclassId: subclassId ?? item.subclassId } : {}) }
+        : item,
+    ),
     choiceSelections: { ...character.choiceSelections, ...choiceSelections },
   };
 }
@@ -176,6 +257,8 @@ export interface LevelUpConfirmCommand {
   readonly targetLevel: number;
   readonly expectedContentFingerprint: string;
   readonly choiceSelections: Readonly<Record<ID, readonly ID[]>>;
+  /** Set when the target level is where this class's subclass is chosen. */
+  readonly subclassId?: ID;
   /** Optional user adjustment to the proposed current values. */
   readonly currentValueOverrides?: Readonly<Record<string, number>>;
 }
@@ -202,6 +285,7 @@ export class CharacterLevelUpService {
   async preview(
     characterId: ID,
     choiceSelections: Readonly<Record<ID, readonly ID[]>> = {},
+    subclassId?: ID,
   ): Promise<ServiceOutcome<LevelUpPreview>> {
     const { repositories } = this.context;
     const character = await repositories.characters.get(characterId);
@@ -212,7 +296,7 @@ export class CharacterLevelUpService {
       loadRulesetScope(repositories, character.rulesetProfileId),
       repositories.overrides.listByCharacter(characterId),
     ]);
-    return ok(this.buildPreview(character, runtime, scope.entries, overrides, choiceSelections));
+    return ok(this.buildPreview(character, runtime, scope.entries, overrides, choiceSelections, subclassId));
   }
 
   private buildPreview(
@@ -221,19 +305,65 @@ export class CharacterLevelUpService {
     entries: readonly ContentEntry[],
     overrides: Awaited<ReturnType<ServiceContext["repositories"]["overrides"]["listByCharacter"]>>,
     choiceSelections: Readonly<Record<ID, readonly ID[]>>,
+    subclassId?: ID,
   ): LevelUpPreview {
-    const next = characterAtNextLevel(character, choiceSelections);
+    const next = characterAtNextLevel(character, choiceSelections, subclassId);
     const before = resolveDerivedCharacter({ character, runtime, overrides, entries });
     const after = resolveDerivedCharacter({ character: next, runtime, overrides, entries });
     const draftBefore = { ...toBuild(character), level: character.level };
     const draftAfter = { ...toBuild(next), level: next.level };
-    const beforeChoiceIds = new Set(requiredChoicesFor(draftBefore, entries).map(choice => choice.choiceId));
-    const newChoices = requiredChoicesFor(draftAfter, entries).filter(choice => !beforeChoiceIds.has(choice.choiceId));
+    const activationBefore = planActivation(draftBefore, entries);
+    const activationAfter = planActivation(draftAfter, entries);
+
+    const beforeChoiceIds = new Set(activationBefore.choices.map(activated => activated.choice.id));
+    const newChoices = requiredChoicesFor(draftAfter, entries, activationAfter).filter(
+      choice => !beforeChoiceIds.has(choice.choiceId),
+    );
+
+    // What the level adds is the difference between the two activations and the
+    // two resolved sheets, so the preview names real gains rather than asserting
+    // that something must have happened.
+    const beforeEntryIds = new Set(activationBefore.entries.map(item => item.entry.id));
+    const gainedFeatures = activationAfter.entries
+      .filter(item => !beforeEntryIds.has(item.entry.id))
+      .map(item => view(item.entry.id, item.entry.name, item.entry.category, item.entry.summary));
+    const beforeActionIds = new Set(before.actions.map(action => action.id));
+    const gainedActions = after.actions
+      .filter(action => !beforeActionIds.has(action.id))
+      .map(action => view(action.id, action.label, "rule"));
+    const beforeResources = new Map(before.resources.map(resource => [resource.id, resource.maximum.value]));
+    const gainedResources = after.resources
+      .filter(resource => !beforeResources.has(resource.id) || beforeResources.get(resource.id) !== resource.maximum.value)
+      .map(resource => view(resource.id, resource.label, "resource"));
+
+    const classEntry = draftAfter.classId ? entries.find(entry => entry.id === draftAfter.classId) : undefined;
+    const coverage: LevelCoverage = {
+      ...(classEntry ? { classId: classEntry.id, classLabel: classEntry.name } : {}),
+      // Only a class that genuinely stops short blocks a level-up. A character
+      // with no class has no class progression to fall short of, and refusing
+      // one here would block a manual sheet from ever gaining a level.
+      supported: activationAfter.levelCoverage !== "not-covered",
+      ...(activationAfter.classProgressionMax === undefined
+        ? {}
+        : { progressionMax: activationAfter.classProgressionMax }),
+    };
+
     return planLevelUp(
       before,
       after,
       runtime,
-      newChoices,
+      {
+        newChoices,
+        gainedFeatures,
+        gainedActions,
+        gainedResources,
+        ...(activationAfter.subclass && activationAfter.subclass.reached && !activationBefore.subclass?.reached
+          ? { subclass: activationAfter.subclass }
+          : activationAfter.subclass?.unresolved
+            ? { subclass: activationAfter.subclass }
+            : {}),
+        coverage,
+      },
       computeContentFingerprint(entries, character.rulesetProfileId),
       character.rulesetProfileId,
     );
@@ -274,7 +404,29 @@ export class CharacterLevelUpService {
           return { status: "conflict", code: "STALE_PREVIEW", recordId: command.characterId };
 
         const overrides = await repositories.overrides.listByCharacter(command.characterId);
-        const preview = this.buildPreview(character, runtime, entries, overrides, command.choiceSelections);
+        const preview = this.buildPreview(
+          character,
+          runtime,
+          entries,
+          overrides,
+          command.choiceSelections,
+          command.subclassId,
+        );
+        // A level the class does not describe is refused before anything is
+        // written, so the restore point is never taken for a level that cannot
+        // be justified from content.
+        if (!preview.coverage.supported)
+          return invalid([
+            {
+              code: "CLASS_PROGRESSION_LEVEL_MISSING",
+              recordId: preview.coverage.classId ?? command.characterId,
+              severity: "error",
+            },
+          ]);
+        if (preview.subclass?.unresolved)
+          return invalid([
+            { code: "SUBCLASS_NOT_CHOSEN", recordId: preview.subclass.classId, severity: "error" },
+          ]);
         const unresolved = preview.newChoices.filter(choice => !choice.resolved);
         if (unresolved.length)
           return invalid(unresolved.map(choice => ({ code: "CHOICE_UNRESOLVED", recordId: choice.choiceId, severity: "error" as const })));
@@ -306,7 +458,7 @@ export class CharacterLevelUpService {
         await repositories.snapshots.add(restorePoint);
 
         const nextCharacter: CharacterRecord = {
-          ...characterAtNextLevel(character, command.choiceSelections),
+          ...characterAtNextLevel(character, command.choiceSelections, command.subclassId),
           revision: character.revision + 1,
           contentFingerprint: fingerprint,
           updatedAt: now,
@@ -470,12 +622,18 @@ export class CharacterLevelUpService {
   }
 }
 
+/** A gained entry, named for the preview. Labels are content names only. */
+function view(id: ID, label: string, category: Category, summary?: string): GainedEntryView {
+  return { id, label, category, ...(summary ? { summary } : {}) };
+}
+
 /** Minimal draft projection used only for choice planning. */
 function toBuild(character: CharacterRecord) {
   return {
     name: character.name,
     level: character.level,
     ...(character.classLevels[0] ? { classId: character.classLevels[0].classId } : {}),
+    ...(character.classLevels[0]?.subclassId ? { subclassId: character.classLevels[0].subclassId } : {}),
     ...(character.speciesId ? { speciesId: character.speciesId } : {}),
     ...(character.backgroundId ? { backgroundId: character.backgroundId } : {}),
     abilityMethod: character.abilityMethod,
