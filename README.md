@@ -19,6 +19,36 @@ npm run dev
 
 No account, cloud database, API key or external service is required.
 
+### Reviewing a real build
+
+`npm run dev` is for development. To review what actually ships — the static export, served
+from its real base path — use:
+
+```bash
+npm run review:local
+```
+
+It builds the Pages artifact, serves it at `http://127.0.0.1:4180/adventurer-ledger/`, prints
+that URL and the commit being reviewed, and keeps running until you stop it with Ctrl+C.
+
+Open the URL **exactly as printed**. The browser treats `http://localhost:4180` and
+`http://127.0.0.1:4180` as different origins, and characters, drafts and imported rulesets are
+stored per origin, so the other spelling looks like a brand-new device. The port is fixed for
+the same reason: the origin stays stable across restarts, so stopping and starting the command
+keeps everything you have already created.
+
+To review on a clean device without touching any other browser data, either open the URL in a
+private window, or run it on a different port — which is a different origin and therefore starts
+empty:
+
+```bash
+REVIEW_PORT=4181 npm run review:local
+```
+
+Development only. It reads no private content and contacts no external service.
+
+### Building
+
 `npm run build` produces the complete static site in `out/`, including a content-versioned `sw.js`. Serve it over HTTPS and reproduce the service-worker headers in `public/_headers`. Each device has independent IndexedDB storage; transfer data manually with confirmed exports/imports.
 
 For the temporary GitHub Pages project deployment, use `npm run build:pages`; see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the scoped URL, workflow, and host limitations.
