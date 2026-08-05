@@ -141,6 +141,22 @@ function Shell() {
   // A modal task owns the whole surface and supplies its own task footer.
   const modalTask = builderDraftId !== null;
 
+  /**
+   * Leaves for another top-level view, closing any modal task first.
+   *
+   * The builder owns the whole surface while it is open, so a nav button that
+   * only moved `view` changed nothing the user could see: the control was
+   * visible, enabled, and dead, while `aria-current` moved to it and announced
+   * a page that was not on screen. Closing the task is safe — every decision is
+   * already autosaved, and the draft reappears under "Unfinished builds" with a
+   * Resume control — so the honest response to "take me to Characters" is to go
+   * there.
+   */
+  const leaveTo = (destination: View) => {
+    setView(destination);
+    setBuilderDraftId(null);
+  };
+
   return (
     <div className="m2-shell">
       <header className="m2-appbar">
@@ -152,7 +168,7 @@ function Shell() {
         <button
           type="button"
           className={view === "settings" ? "m2-appbar-settings m2-active" : "m2-appbar-settings"}
-          onClick={() => setView("settings")}
+          onClick={() => leaveTo("settings")}
           aria-label="Open Settings"
           aria-current={view === "settings" ? "page" : undefined}
         >
@@ -169,7 +185,7 @@ function Shell() {
                 type="button"
                 className={view === item.id ? "m2-nav-button m2-active" : "m2-nav-button"}
                 aria-current={view === item.id ? "page" : undefined}
-                onClick={() => setView(item.id)}
+                onClick={() => leaveTo(item.id)}
               >
                 {item.icon}
                 <span>{item.label}</span>
@@ -181,7 +197,7 @@ function Shell() {
               type="button"
               className={view === "settings" ? "m2-nav-button m2-active" : "m2-nav-button"}
               aria-current={view === "settings" ? "page" : undefined}
-              onClick={() => setView("settings")}
+              onClick={() => leaveTo("settings")}
             >
               <Settings aria-hidden="true" />
               <span>Settings</span>

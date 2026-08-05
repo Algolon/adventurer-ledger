@@ -137,6 +137,7 @@ test.describe("an action waiting on persistence cannot be double-submitted", () 
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: "New character" }).last().click();
     await page.getByLabel("Character name", { exact: true }).fill("Busy Button");
+    await settled(page);
 
     /*
      * Continue flushes the autosave queue before it judges the step, so there is
@@ -199,6 +200,9 @@ test.describe("an action waiting on persistence cannot be double-submitted", () 
     await next(page); // identity
 
     await expect(page.getByRole("heading", { name: "Review", level: 3 })).toBeVisible();
+    // The control must be idle before this means anything: a press made while
+    // the previous navigation is still writing is refused by design.
+    await settled(page);
 
     /*
      * Two presses in quick succession must produce one character. The service
@@ -221,5 +225,37 @@ test.describe("an action waiting on persistence cannot be double-submitted", () 
     await expect(page.getByRole("button", { name: /Open One Commit/ })).toHaveCount(1);
     // And no half-finished draft was left behind beside it.
     await expect(page.getByRole("button", { name: /Resume building One Commit/ })).toHaveCount(0);
+  });
+});
+
+test.describe("the primary nav is not a dead control while building", () => {
+  test("Characters leaves the builder and lists the draft as resumable", async ({ page }) => {
+    await importAcceptancePack(page);
+    await buildToOrigin(page, "Nav Exit");
+
+    /*
+     * The builder owns the whole surface, so a nav button that only moved the
+     * view left the user looking at exactly what they were looking at before —
+     * a visible, enabled control that did nothing, while the rail marked itself
+     * current for a page that was not on screen.
+     */
+    await page.getByRole("button", { name: "Characters", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Characters", exact: true })).toBeVisible();
+    await expect(stepTitle(page)).toHaveCount(0);
+
+    // Nothing was lost: the draft is listed and resumes where it was left.
+    await expect(page.getByText("Unfinished builds")).toBeVisible();
+    await page.getByRole("button", { name: /Resume building/ }).click();
+    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("Settings leaves the builder too", async ({ page }) => {
+    await importAcceptancePack(page);
+    await buildToOrigin(page, "Settings Exit");
+
+    await page.getByRole("button", { name: /^(Open Settings|Settings)$/ }).first().click();
+    await expect(stepTitle(page)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Imports and exports" })).toBeVisible();
   });
 });
