@@ -158,6 +158,12 @@ test.describe("draft persistence", () => {
     await page.getByRole("button", { name: /^Vanguard/ }).click();
     await continueStep(page);
     await expect(page.getByText("Step 3 of 8")).toBeVisible();
+    /*
+     * The footer re-enables only once the navigation is persisted, so this is
+     * the point at which `lastStepId` is durable. Reloading before it is
+     * testing a torn write rather than the resume contract.
+     */
+    await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
 
     await page.reload();
     await expect(page.getByRole("heading", { name: "Characters", exact: true })).toBeVisible();

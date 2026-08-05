@@ -642,7 +642,13 @@ function ImportExportPanel() {
     [createRuleset, setCreateRuleset] = useState(true),
     [message, setMessage] = useState(""),
     [includeRestricted, setIncludeRestricted] = useState(false),
-    [confirmed, setConfirmed] = useState(false);
+    [confirmed, setConfirmed] = useState(false),
+    /*
+     * An import in flight. The write is one transaction and can take a moment on
+     * a large pack, during which the button looked idle — so a second press was
+     * the natural response, and a second press is a second import attempt.
+     */
+    [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   /**
@@ -692,7 +698,16 @@ function ImportExportPanel() {
    * lands in the same transaction: a rolled-back import leaves no profile behind.
    */
   const commit = async () => {
-    if (!currentPreview) return;
+    if (!currentPreview || importing) return;
+    setImporting(true);
+    try {
+      await runCommit(currentPreview);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const runCommit = async (currentPreview: InstallPreview) => {
     const creatable = currentPreview.offers.filter(offer => offer.usable && !offer.alreadyInstalled);
     const requested = createRuleset ? creatable.map(offer => offer.packId) : [];
     const outcome = await install.confirm(currentPreview, {
@@ -859,11 +874,12 @@ function ImportExportPanel() {
             <div className="actions">
               <button
                 className="btn primary"
-                disabled={!currentPreview.canImport}
+                disabled={!currentPreview.canImport || importing}
+                aria-busy={importing || undefined}
                 onClick={commit}
               >
                 <FileCheck2 />
-                Confirm atomic import
+                {importing ? "Importing…" : "Confirm atomic import"}
               </button>
               <button
                 className="btn secondary"

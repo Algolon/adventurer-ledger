@@ -72,18 +72,28 @@ const titleCase = (value: string) => value[0].toUpperCase() + value.slice(1);
 /**
  * Where reopening a draft should land.
  *
- * A draft that has never been edited opens at the beginning. Otherwise it
- * resumes at whichever is further along: the step the user was last on, or the
- * next unresolved step the library card advertises. Taking the further of the
- * two keeps the resume point stable even if the final navigation autosave had
- * not flushed when the tab closed.
+ * The step the user was last on. `lastStepId` is written on every navigation
+ * and flushed again when the builder unmounts, so it is a reliable record of
+ * where they were.
+ *
+ * This used to resume at whichever was *further along*: the stored step, or the
+ * plan's next unresolved step. That silently moved people. Stepping back to
+ * Origin to check a background and then reloading landed on Abilities, because
+ * Origin was resolved and the plan's idea of "next" had overtaken the user's
+ * idea of "here". Nothing was lost, but the place was — and a builder that
+ * reopens somewhere other than where it was left is the reason a flow feels
+ * unstable even when every value survived.
+ *
+ * The one case that still overrides it is a stored step the current plan does
+ * not contain: a step can stop applying when the build changes underneath it,
+ * and resuming onto a screen the sequence no longer has would show nothing at
+ * all. Then, and only then, the next unresolved step is the honest answer.
  */
 export function resumeStepFor(snapshot: DraftSnapshot): BuilderStepId {
   const stored = snapshot.draft.lastStepId as BuilderStepId;
   if (snapshot.draft.revision <= 1) return stored;
-  const position = (id: BuilderStepId) => BUILDER_STEPS.findIndex(step => step.id === id);
-  const unresolved = snapshot.plan.nextUnresolvedStepId;
-  return position(unresolved) > position(stored) ? unresolved : stored;
+  const applicable = snapshot.plan.steps.some(step => step.id === stored);
+  return applicable ? stored : snapshot.plan.nextUnresolvedStepId;
 }
 
 /**
@@ -116,6 +126,24 @@ export function CharacterBuilder({
   const [showSteps, setShowSteps] = useState(false);
   /** A ruleset change that has been previewed and not yet answered. */
   const [rulesetChange, setRulesetChange] = useState<RulesetChangePreview | null>(null);
+  /**
+   * A navigation or commit that is waiting on persistence.
+   *
+   * Both flush the autosave queue before they judge anything, so there is a real
+   * window where the button has been pressed and nothing has visibly happened.
+   * Without this the only feedback was the absence of feedback, which reads as a
+   * dead control and invites a second press — and a second press during a commit
+   * is a second commit attempt.
+   */
+  const [pendingAction, setPendingAction] = useState<"advance" | "commit" | null>(null);
+  /**
+   * The same flag, readable synchronously.
+   *
+   * React batches state updates, so two clicks dispatched in one tick both see
+   * `pendingAction` as null and both proceed — which is exactly what a double
+   * press is. The ref is written before any await, so the second call sees it.
+   */
+  const inFlightRef = useRef<"advance" | "commit" | null>(null);
   const revisionRef = useRef<number | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   /** Freshest snapshot, readable after awaiting the save queue. */
@@ -260,6 +288,15 @@ export function CharacterBuilder({
   );
   const liveCommitErrors = commitErrors.filter(issue => !issue.fromPlan || liveIssueCodes.has(issue.code));
 
+  /**
+   * Moves to a step and returns when that move is durable.
+   *
+   * The returned promise matters. `lastStepId` is what a reopened draft resumes
+   * at, and firing its write without awaiting it meant the builder could report
+   * a completed navigation while the record still said the previous step — so a
+   * reload taken just afterwards reopened somewhere the user had already left.
+   * Callers that can wait, do.
+   */
   const goTo = (id: BuilderStepId) => {
     void flushPending();
     setStepId(id);
@@ -268,7 +305,7 @@ export function CharacterBuilder({
     // leaves it asserting a problem the user may have just repaired, which is
     // worse than showing nothing: the live per-step issues are still on screen.
     setCommitErrors([]);
-    void save({}, id);
+    return save({}, id);
   };
 
   /**
@@ -277,6 +314,41 @@ export function CharacterBuilder({
    * choice they had just made but whose save had not yet landed.
    */
   const advance = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = "advance";
+    setPendingAction("advance");
+    try {
+      await runAdvance();
+    } finally {
+      inFlightRef.current = null;
+      setPendingAction(null);
+    }
+  };
+
+  /**
+   * Back is a navigation like any other, and persists like one.
+   *
+   * It writes `lastStepId` too, so it takes the same guard: leaving it
+   * unawaited let a reload immediately afterwards reopen at the step the user
+   * had just stepped away from.
+   */
+  const goBack = async () => {
+    if (inFlightRef.current) return;
+    if (index <= 0) {
+      onClose();
+      return;
+    }
+    inFlightRef.current = "advance";
+    setPendingAction("advance");
+    try {
+      await goTo(steps[index - 1].id);
+    } finally {
+      inFlightRef.current = null;
+      setPendingAction(null);
+    }
+  };
+
+  const runAdvance = async () => {
     await flushPending();
     await queueRef.current;
     const latest = snapshotRef.current ?? snapshot;
@@ -295,10 +367,29 @@ export function CharacterBuilder({
     }
     setCommitErrors([]);
     const next = latestSteps[position + 1];
-    if (next) goTo(next.id);
+    // Awaited, so the button stays busy until the new step is persisted rather
+    // than until it is merely rendered.
+    if (next) await goTo(next.id);
   };
 
   const finish = async () => {
+    /*
+     * One commit at a time. `operationId` makes a repeated commit idempotent at
+     * the service, but the button must not invite the second press in the first
+     * place: the user cannot see that the first one is still in flight.
+     */
+    if (inFlightRef.current) return;
+    inFlightRef.current = "commit";
+    setPendingAction("commit");
+    try {
+      await runFinish();
+    } finally {
+      inFlightRef.current = null;
+      setPendingAction(null);
+    }
+  };
+
+  const runFinish = async () => {
     // Let any in-flight autosave land so the commit sends the current revision.
     await flushPending();
     await queueRef.current;
@@ -322,8 +413,28 @@ export function CharacterBuilder({
       onFinished(outcome.result.characterId);
       return;
     }
-    if (outcome.status === "invalid")
-      setCommitErrors(outcome.issues.map(issue => ({ code: issue.code, label: labelFor(issue.code), fromPlan: true })));
+    if (outcome.status === "invalid") {
+      /*
+       * `fromPlan` means "the plan reports this code too, so repairing it will
+       * clear this entry". A commit-boundary refusal the plan cannot express —
+       * a content fingerprint that moved, a draft that is no longer editable —
+       * has no live issue to track and must stay until the user navigates.
+       * Marking those as plan-backed made them vanish on the next render, which
+       * turned a refused commit into a screen where nothing happened at all.
+       */
+      const planCodes = new Set(
+        (snapshotRef.current ?? snapshot).plan.issues
+          .filter(issue => issue.severity === "error")
+          .map(issue => issue.code),
+      );
+      setCommitErrors(
+        outcome.issues.map(issue => ({
+          code: issue.code,
+          label: labelFor(issue.code),
+          fromPlan: planCodes.has(issue.code),
+        })),
+      );
+    }
     else if (outcome.status === "stale" || outcome.status === "conflict")
       setCommitErrors([
         {
@@ -415,7 +526,7 @@ export function CharacterBuilder({
     if (repairAt && repairAt !== stepId) {
       setStepId(repairAt);
       setShowSteps(false);
-      void save({}, repairAt);
+      await save({}, repairAt);
     }
     // Deliberately no `install.activate` here. Which ruleset *this* build is in
     // is a property of this build; the device-wide default decides what future
@@ -509,7 +620,7 @@ export function CharacterBuilder({
           <ol>
             {steps.map((step, position) => (
               <li key={step.id}>
-                <button type="button" onClick={() => goTo(step.id)} aria-current={step.id === stepId ? "step" : undefined}>
+                <button type="button" onClick={() => void goTo(step.id)} aria-current={step.id === stepId ? "step" : undefined}>
                   <span className="m2-step-number" aria-hidden="true">
                     {step.status === "complete" ? <Check /> : position + 1}
                   </span>
@@ -552,23 +663,32 @@ export function CharacterBuilder({
         <button
           type="button"
           className="m2-button m2-button-secondary"
-          onClick={() => {
-            void flushPending();
-            if (index > 0) goTo(steps[index - 1].id);
-            else onClose();
-          }}
+          disabled={pendingAction !== null}
+          onClick={() => void goBack()}
         >
           <ArrowLeft aria-hidden="true" />
           Back
         </button>
         {current.id === "review" ? (
-          <button type="button" className="m2-button m2-button-primary" onClick={() => void finish()}>
-            Finish and open sheet
+          <button
+            type="button"
+            className="m2-button m2-button-primary"
+            onClick={() => void finish()}
+            disabled={pendingAction !== null}
+            aria-busy={pendingAction === "commit" || undefined}
+          >
+            {pendingAction === "commit" ? "Saving…" : "Finish and open sheet"}
             <ArrowRight aria-hidden="true" />
           </button>
         ) : (
-          <button type="button" className="m2-button m2-button-primary" onClick={() => void advance()}>
-            Continue
+          <button
+            type="button"
+            className="m2-button m2-button-primary"
+            onClick={() => void advance()}
+            disabled={pendingAction !== null}
+            aria-busy={pendingAction === "advance" || undefined}
+          >
+            {pendingAction === "advance" ? "Saving…" : "Continue"}
             <ArrowRight aria-hidden="true" />
           </button>
         )}
