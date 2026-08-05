@@ -107,7 +107,12 @@ export function CharacterBuilder({
   const [snapshot, setSnapshot] = useState<DraftSnapshot | null>(null);
   const [stepId, setStepId] = useState<BuilderStepId>("start");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [commitErrors, setCommitErrors] = useState<{ code: string; label: string }[]>([]);
+  /**
+   * Issues from the last submission. `fromPlan` records whether the plan can
+   * still speak to the entry, which is what lets a repaired issue leave the
+   * summary while a commit refusal the plan cannot express stays put.
+   */
+  const [commitErrors, setCommitErrors] = useState<{ code: string; label: string; fromPlan: boolean }[]>([]);
   const [showSteps, setShowSteps] = useState(false);
   /** A ruleset change that has been previewed and not yet answered. */
   const [rulesetChange, setRulesetChange] = useState<RulesetChangePreview | null>(null);
@@ -237,6 +242,24 @@ export function CharacterBuilder({
   const index = steps.findIndex(step => step.id === stepId);
   const current = steps[index] ?? steps[0];
 
+  /**
+   * The submission summary, minus anything the build has since repaired.
+   *
+   * The summary describes one submission, but the user repairs issues in place
+   * and the plan updates underneath it. Rendering the captured list verbatim
+   * left it asserting a problem that had just been fixed — most visibly right
+   * after pressing a repair button, where the fix and the stale complaint sat on
+   * screen together.
+   *
+   * Only entries that came from the plan are re-checked against it. A commit
+   * refusal the plan cannot express — a stale revision, a failed write — has no
+   * live issue to match and must survive until the user navigates.
+   */
+  const liveIssueCodes = new Set(
+    plan.issues.filter(issue => issue.severity === "error").map(issue => issue.code),
+  );
+  const liveCommitErrors = commitErrors.filter(issue => !issue.fromPlan || liveIssueCodes.has(issue.code));
+
   const goTo = (id: BuilderStepId) => {
     void flushPending();
     setStepId(id);
@@ -263,7 +286,11 @@ export function CharacterBuilder({
     if (step.id === "review") return;
     if (latest.draft.presentation === "guided" && step.status === "incomplete") {
       // Guided mode keeps the user at the unresolved dependency.
-      setCommitErrors(step.issues.filter(issue => issue.severity === "error").map(issue => ({ code: issue.code, label: labelFor(issue.code) })));
+      setCommitErrors(
+        step.issues
+          .filter(issue => issue.severity === "error")
+          .map(issue => ({ code: issue.code, label: labelFor(issue.code), fromPlan: true })),
+      );
       return;
     }
     setCommitErrors([]);
@@ -296,9 +323,15 @@ export function CharacterBuilder({
       return;
     }
     if (outcome.status === "invalid")
-      setCommitErrors(outcome.issues.map(issue => ({ code: issue.code, label: labelFor(issue.code) })));
+      setCommitErrors(outcome.issues.map(issue => ({ code: issue.code, label: labelFor(issue.code), fromPlan: true })));
     else if (outcome.status === "stale" || outcome.status === "conflict")
-      setCommitErrors([{ code: "STALE_PREVIEW", label: "Your content changed since Review. Reopen Review to see the current values." }]);
+      setCommitErrors([
+        {
+          code: "STALE_PREVIEW",
+          label: "Your content changed since Review. Reopen Review to see the current values.",
+          fromPlan: false,
+        },
+      ]);
   };
 
   const togglePresentation = async () => {
@@ -362,6 +395,28 @@ export function CharacterBuilder({
     setSnapshot(outcome.result);
     setRulesetChange(null);
     setSaveError(null);
+    setCommitErrors([]);
+    /*
+     * Land on the step that actually needs repairing — and only then.
+     *
+     * A switch usually clears the class, origin and choices that belonged to the
+     * old ruleset, so the build is left with an unresolved step. Staying put put
+     * the user on a screen with nothing wrong on it while the real damage sat
+     * two steps away, discoverable only by opening the step list.
+     *
+     * `nextUnresolvedStepId` falls back to `review` when nothing is open, so it
+     * cannot be followed blindly: a switch that clears nothing would then fling
+     * the user to Review, which is exactly the unexplained navigation this pass
+     * exists to remove. A genuinely unresolved step is required before moving.
+     */
+    const repairAt = outcome.result.plan.steps.find(
+      step => step.status === "incomplete" && step.id !== "review",
+    )?.id;
+    if (repairAt && repairAt !== stepId) {
+      setStepId(repairAt);
+      setShowSteps(false);
+      void save({}, repairAt);
+    }
     // Deliberately no `install.activate` here. Which ruleset *this* build is in
     // is a property of this build; the device-wide default decides what future
     // characters start in. Repointing that from inside one builder made an
@@ -433,15 +488,15 @@ export function CharacterBuilder({
         </div>
       ) : null}
 
-      {commitErrors.length ? (
+      {liveCommitErrors.length ? (
         <div className="m2-error-summary" role="alert" tabIndex={-1} ref={errorSummaryRef}>
           <TriangleAlert aria-hidden="true" />
           <div>
             <strong>
-              {commitErrors.length} issue{commitErrors.length === 1 ? "" : "s"} to resolve
+              {liveCommitErrors.length} issue{liveCommitErrors.length === 1 ? "" : "s"} to resolve
             </strong>
             <ul>
-              {commitErrors.map(issue => (
+              {liveCommitErrors.map(issue => (
                 <li key={issue.code}>{issue.label}</li>
               ))}
             </ul>
@@ -663,7 +718,6 @@ function StepContent({
       return (
         <StartStep
           build={build}
-          plan={plan}
           rulesets={rulesets}
           activeRulesetId={activeRulesetId}
           onChange={onChange}
@@ -680,10 +734,30 @@ function StepContent({
             options={entries.filter(entry => entry.category === "class").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
             selected={build.manualSheet ? [] : build.classId ? [build.classId] : []}
             recommendations={recommendations}
-            // A different class has a different subclass list, so the stored
-            // subclass identity is dropped rather than left pointing elsewhere.
+            /*
+             * A different class has a different subclass list, so the stored
+             * subclass identity is dropped rather than left pointing elsewhere.
+             *
+             * The level is deliberately not touched. A level the incoming class
+             * still covers is a decision the user already made and is entitled
+             * to keep; one it does not cover becomes the inline repair below,
+             * on this same step. Silently lowering it here would discard a
+             * choice without saying so.
+             */
             onSelect={id => onChange({ classId: id, subclassId: undefined, manualSheet: false })}
           />
+          {/*
+           * The level appears once something can validate it. Before a class
+           * exists the control would have no honest range to offer, so the step
+           * says what it is waiting for instead of showing a guess.
+           */}
+          {build.classId || build.manualSheet ? (
+            <StartingLevelField build={build} plan={plan} onChange={onChange} />
+          ) : (
+            <p className="m2-muted">
+              Choose a class to set the starting level. The levels on offer come from that class&apos;s own progression.
+            </p>
+          )}
           <fieldset className="m2-fieldset">
             <legend>Or build a manual sheet</legend>
             <ul className="m2-options">
@@ -762,16 +836,20 @@ function StepContent({
 }
 
 /**
- * Name, ruleset and target level.
+ * Basics: name and ruleset.
  *
- * These three decide what everything after them means: the name is the record's
- * identity, the ruleset fixes which content is even visible, and the level fixes
- * how much of each progression the build has to resolve. They belong together,
- * before any of it.
+ * These two decide what everything after them means: the name is the record's
+ * identity, and the ruleset fixes which content is even visible. Both can be
+ * judged the moment they are entered, which is what makes them a first step.
+ *
+ * The starting level deliberately is not here. It can only be validated against
+ * the selected class's progression, so presenting it before a class exists
+ * produced a decision this step could accept and then, two steps later, report
+ * as wrong — with the repair on a screen the user had already left. It lives on
+ * the class step instead, next to the only thing that can validate it.
  */
 function StartStep({
   build,
-  plan,
   rulesets,
   activeRulesetId,
   onChange,
@@ -779,7 +857,6 @@ function StartStep({
   onSelectRuleset,
 }: {
   build: CharacterDraftBuild;
-  plan: DraftSnapshot["plan"];
   rulesets: readonly InstalledRulesetView[];
   activeRulesetId: string;
   onChange(patch: DraftPatch): void;
@@ -799,19 +876,6 @@ function StartStep({
   useEffect(() => {
     if (!typed.current) setName(build.name);
   }, [build.name]);
-
-  /*
-   * The selector offers exactly the levels the content supports.
-   *
-   * It used to offer `max(supported, stored)`, which quietly made the stored
-   * level look supported: choosing a class that stops at 3 left a level 5 build
-   * showing 5 as a perfectly ordinary option. The supported range is the
-   * content's answer, and a stored level outside it is a conflict to resolve
-   * rather than a range to widen.
-   */
-  const supportedLevels = Array.from({ length: plan.maxLevel }, (_, offset) => offset + 1);
-  const levelUnsupported = build.level > plan.maxLevel;
-  const active = rulesets.find(ruleset => ruleset.id === activeRulesetId);
 
   return (
     <div className="m2-step">
@@ -884,70 +948,99 @@ function StartStep({
         ) : null}
       </fieldset>
 
-      <fieldset className="m2-fieldset">
-        <legend>Starting level</legend>
-        <div className="m2-field">
-          <label htmlFor="start-level">
-            <span>Create this character at level</span>
-          </label>
-          <select
-            id="start-level"
-            value={levelUnsupported ? "" : build.level}
-            aria-invalid={levelUnsupported || undefined}
-            aria-describedby={levelUnsupported ? "start-level-conflict" : undefined}
-            onChange={event => onChange({ level: Number(event.target.value) })}
-          >
-            {/*
-             * The stored level stays visible so the conflict is legible, and
-             * stays unselectable so it cannot be re-confirmed as if it were
-             * supported. Choosing a supported level is the repair.
-             */}
-            {levelUnsupported ? (
-              <option value="" disabled>
-                {build.level} — not supported
-              </option>
-            ) : null}
-            {supportedLevels.map(level => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
-        </div>
-        <p className="m2-muted">
-          {active
-            ? `This ruleset's content covers levels 1 to ${active.maxSupportedLevel}.`
-            : `The installed content covers levels 1 to ${plan.maxLevel}.`}{" "}
-          Everything each level grants is resolved here, in one pass — the character is created at this level, not
-          created at 1 and advanced afterwards.
-        </p>
-        {levelUnsupported || plan.levelCoverage === "not-covered" ? (
-          <div className="m2-inline-issue" role="alert" id="start-level-conflict">
-            <TriangleAlert aria-hidden="true" />
-            <span>
-              {labelFor("LEVEL_NOT_COVERED_BY_CLASS")}
-              {plan.classProgressionMax === undefined ? "" : ` This class stops at level ${plan.classProgressionMax}.`}{" "}
-              This build is set to level {build.level}.
-              <button
-                type="button"
-                className="m2-button"
-                onClick={() => onChange({ level: plan.maxLevel })}
-              >
-                Set the level to {plan.maxLevel}
-              </button>
-            </span>
-          </div>
-        ) : plan.levelCoverage === "no-class" && build.level > 1 ? (
-          // Not an error: nothing is wrong yet. But the level is unverified
-          // until a class exists, and saying so is better than implying it is fine.
-          <p className="m2-inline-issue" role="status">
-            <TriangleAlert aria-hidden="true" />
-            Level {build.level} cannot be confirmed until a class is chosen, because coverage comes from the class&apos;s
-            own progression.
-          </p>
-        ) : null}
-      </fieldset>
     </div>
+  );
+}
+
+/**
+ * The starting level, offered once a class can validate it.
+ *
+ * The range comes from the selected class's own consecutive progression, not
+ * from the widest class in the ruleset and not from the ruleset's advertised
+ * maximum. A ruleset whose best class reaches 5 does not make level 5 available
+ * to a class that stops at 3, and offering it there is what produced a level the
+ * build could hold but never resolve.
+ *
+ * A manual sheet has no progression to read, so it falls back to what the
+ * ruleset as a whole reaches — the honest answer when no class is claiming to
+ * justify the number.
+ */
+function StartingLevelField({
+  build,
+  plan,
+  onChange,
+}: {
+  build: CharacterDraftBuild;
+  plan: DraftSnapshot["plan"];
+  onChange(patch: DraftPatch): void;
+}) {
+  /*
+   * `classProgressionMax` is the class's own contiguous run. `plan.maxLevel`
+   * already narrows to the selected class, so it is the correct fallback for a
+   * manual sheet and for a class whose progression could not be read.
+   */
+  const supportedMax = build.manualSheet ? plan.maxLevel : plan.classProgressionMax ?? plan.maxLevel;
+  const supportedLevels = Array.from({ length: supportedMax }, (_, offset) => offset + 1);
+  /*
+   * The stored level stays visible so the conflict is legible, and stays
+   * unselectable so it cannot be re-confirmed as if it were supported. Choosing
+   * a supported level is the repair — the level is never rewritten for the user.
+   */
+  const levelUnsupported = build.level > supportedMax;
+
+  return (
+    <fieldset className="m2-fieldset">
+      <legend>Starting level</legend>
+      <div className="m2-field">
+        <label htmlFor="start-level">
+          <span>Create this character at level</span>
+        </label>
+        <select
+          id="start-level"
+          value={levelUnsupported ? "" : build.level}
+          aria-invalid={levelUnsupported || undefined}
+          aria-describedby={levelUnsupported ? "start-level-conflict" : undefined}
+          onChange={event => onChange({ level: Number(event.target.value) })}
+        >
+          {levelUnsupported ? (
+            <option value="" disabled>
+              {build.level} — not supported
+            </option>
+          ) : null}
+          {supportedLevels.map(level => (
+            <option key={level} value={level}>
+              {level}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="m2-muted">
+        {build.manualSheet
+          ? `The installed content covers levels 1 to ${supportedMax}.`
+          : `This class's content covers levels 1 to ${supportedMax}.`}{" "}
+        Everything each level grants is resolved here, in one pass — the character is created at this level, not created
+        at 1 and advanced afterwards.
+      </p>
+      {levelUnsupported || plan.levelCoverage === "not-covered" ? (
+        /*
+         * The repair is offered here, on the step that owns both decisions.
+         * Either lower the level, or pick a class that reaches it — and both
+         * controls are on this screen, so neither instruction sends the user
+         * back to a step that cannot act on it.
+         */
+        <div className="m2-inline-issue" role="alert" id="start-level-conflict">
+          <TriangleAlert aria-hidden="true" />
+          <span>
+            {labelFor("LEVEL_NOT_COVERED_BY_CLASS")}
+            {plan.classProgressionMax === undefined ? "" : ` This class stops at level ${plan.classProgressionMax}.`}{" "}
+            This build is set to level {build.level}.
+            <button type="button" className="m2-button" onClick={() => onChange({ level: supportedMax })}>
+              Set the level to {supportedMax}
+            </button>
+          </span>
+        </div>
+      ) : null}
+    </fieldset>
   );
 }
 
@@ -1690,9 +1783,10 @@ function ReviewStep({
       <h3>Review</h3>
 
       {/*
-       * The coverage conflict is stated here as well as on the first step,
+       * The coverage conflict is stated here as well as on the class step,
        * because Review is where a build is committed from and this is the one
-       * issue no mode may commit past. It names the problem and the repair.
+       * issue no mode may commit past. It names the problem and the repair, and
+       * it points at the step that actually holds both controls.
        */}
       {plan.levelCoverage === "not-covered" ? (
         <div className="m2-banner m2-banner-error" role="alert">
@@ -1703,9 +1797,9 @@ function ReviewStep({
             {plan.classProgressionMax === undefined
               ? " does not describe that level"
               : ` describes levels 1 to ${plan.classProgressionMax}`}
-            . Go back to the first step and either lower the level to {plan.maxLevel} or choose a class whose content
-            reaches level {build.level}. This cannot be saved in either mode, because the resulting sheet would take its
-            hit dice from one level and its maximum hit points from another.
+            . Go back to Class &amp; level and either lower the level to {plan.classProgressionMax ?? plan.maxLevel} or
+            choose a class whose content reaches level {build.level}. This cannot be saved in either mode, because the
+            resulting sheet would take its hit dice from one level and its maximum hit points from another.
           </p>
         </div>
       ) : null}

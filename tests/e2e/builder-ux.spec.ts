@@ -30,27 +30,40 @@ async function reachAbilities(page: Page) {
 }
 
 /**
- * Supersedes the earlier requirement that the starting level be a static fact.
- * Creating directly at a higher level is supported now, so the level is a real
- * decision on the first step — offered only as far as the installed content
- * actually covers, rather than up to an arbitrary maximum.
+ * Supersedes the earlier requirement that the starting level be a static fact,
+ * and the later one that put it on the first step.
+ *
+ * Creating directly at a higher level is supported, so the level is a real
+ * decision — but it is only answerable against the selected class's own
+ * progression. Basics therefore holds the name and the ruleset, and the level
+ * sits on Class & level where the thing that validates it lives.
  */
-test.describe("name, ruleset and starting level come first", () => {
-  test("the first step holds all three decisions", async ({ page }) => {
+test.describe("Basics holds the name and the ruleset", () => {
+  test("the first step holds both decisions and not the level", async ({ page }) => {
     await openBuilder(page);
+    await expect(page.getByRole("heading", { name: "Basics", level: 2 })).toBeVisible();
     await expect(page.getByLabel("Character name", { exact: true })).toBeVisible();
     await expect(page.getByRole("group", { name: "Ruleset" })).toBeVisible();
-    await expect(page.getByLabel("Create this character at level")).toBeVisible();
+    // The level cannot be judged here, so it is not offered here.
+    await expect(page.getByLabel("Create this character at level")).toHaveCount(0);
   });
 
-  test("offers only the levels the installed content covers", async ({ page }) => {
+  test("offers only the levels the chosen class covers, and only once it is chosen", async ({ page }) => {
     await openBuilder(page);
-    // This ruleset's class progression defines levels 1 and 2 and no further.
+    await next(page);
+    await expect(page.getByRole("heading", { name: "Class & level", level: 2 })).toBeVisible();
+    // Before a class exists there is no honest range, so there is no control.
+    await expect(page.getByLabel("Create this character at level")).toHaveCount(0);
+
+    await page.getByRole("button", { name: /^Vanguard/ }).click();
+    // This class's progression defines levels 1 and 2 and no further.
     await expect(page.getByLabel("Create this character at level").locator("option")).toHaveText(["1", "2"]);
   });
 
   test("the review reports the level that was chosen", async ({ page }) => {
     await openBuilder(page);
+    await next(page);
+    await page.getByRole("button", { name: /^Vanguard/ }).click();
     await page.getByLabel("Create this character at level").selectOption("2");
     await page.getByRole("button", { name: "All steps" }).click();
     await page.getByRole("button", { name: /Review/ }).click();
@@ -69,7 +82,7 @@ test.describe("name, ruleset and starting level come first", () => {
     await page.reload();
     await page.getByRole("button", { name: /Resume building/ }).click();
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Brammel Voss");
   });
 });

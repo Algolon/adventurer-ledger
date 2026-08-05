@@ -70,10 +70,11 @@ const levelSelect = (page: Page) => page.getByLabel("Create this character at le
 /** Walks a level 5 Beaconkeeper from the first step to Review. */
 async function buildLevelFive(page: Page, name: string, { feat = "Attentive Clerk" } = {}) {
   await startBuild(page, name);
-  await levelSelect(page).selectOption("5");
   await next(page);
 
+  // Class first, then the level its progression justifies.
   await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
+  await levelSelect(page).selectOption("5");
   await next(page);
 
   await page.getByRole("button", { name: /^Cairnfolk/ }).click();
@@ -114,16 +115,16 @@ test.describe("switching ruleset is previewed before it is written", () => {
   test("cancel leaves the whole draft exactly as it was", async ({ page }) => {
     await importAcceptancePack(page);
     await startBuild(page, "Cancelled Switch");
-    await levelSelect(page).selectOption("5");
     await next(page);
     await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
+    await levelSelect(page).selectOption("5");
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
     await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
 
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
 
     // The consequence is stated before anything is written.
@@ -147,7 +148,7 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: /Cancelled Switch/ }).first().click();
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /^Class (Incomplete|Complete)$/ }).click();
+    await page.getByRole("button", { name: /^Class & level (Incomplete|Complete)$/ }).click();
     await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: "All steps" }).click();
     await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
@@ -158,9 +159,9 @@ test.describe("switching ruleset is previewed before it is written", () => {
   test("confirm clears only what belonged to the old ruleset", async ({ page }) => {
     await importAcceptancePack(page);
     await startBuild(page, "Confirmed Switch");
-    await levelSelect(page).selectOption("5");
     await next(page);
     await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
+    await levelSelect(page).selectOption("5");
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
     await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
@@ -179,7 +180,7 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await expect(page.getByLabel("Strength final")).toContainText("17");
 
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
     const dialog = page.getByRole("alertdialog");
     // The origin increase is named as recalculated, not silently retained.
@@ -189,18 +190,23 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await dialog.getByRole("button", { name: "Switch ruleset" }).click();
     await expect(dialog).toHaveCount(0);
 
+    /*
+     * The switch cleared the class, so the confirmation lands on Class & level:
+     * the first step that genuinely needs repairing. The old ruleset's content
+     * is gone from it.
+     */
+    await expect(page.getByRole("heading", { name: "Class & level", level: 2 })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Vanguard/ })).toBeVisible();
+
+    // Ruleset-independent values survive, and Basics records the new ruleset.
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await expect(page.getByRole("button", { name: /^Runefolio 2024 synthetic/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    // Ruleset-independent values survive.
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Confirmed Switch");
-
-    // The old ruleset's content is gone from the class step.
-    await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /^Class (Incomplete|Complete)$/ }).click();
-    await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /^Vanguard/ })).toBeVisible();
 
     // The base score is kept; the increase the removed origin authorised is not.
     await page.getByRole("button", { name: "All steps" }).click();
@@ -286,7 +292,7 @@ test.describe("a rapidly typed name survives whatever happens next", () => {
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: new RegExp(NAME) }).first().click();
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue(NAME);
   });
 
@@ -510,13 +516,13 @@ test.describe("the coverage guard blocks confirmation in the UI", () => {
   test("offers no unsupported level and names the repair", async ({ page }) => {
     await importAcceptancePack(page);
     await startBuild(page, "Overreach");
-    await levelSelect(page).selectOption("5");
     await next(page);
+    await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
+    await levelSelect(page).selectOption("5");
 
-    // The second class stops at level 3.
+    // The second class stops at level 3. Everything below happens on this same
+    // step: the conflict is reported where both controls that repair it live.
     await page.getByRole("button", { name: /^Lamplighter/ }).click();
-    await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
 
     // The selector no longer offers 4 or 5 just because the draft stored 5.
     await expect(levelSelect(page).locator("option:not([disabled])")).toHaveText(["1", "2", "3"]);
@@ -535,7 +541,7 @@ test.describe("the coverage guard blocks confirmation in the UI", () => {
 
     // The offered repair resolves it.
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Class & level/ }).click();
     await page.getByRole("button", { name: /^Set the level to 3$/ }).click();
     await expect(page.getByText(/does not reach the chosen level/)).toHaveCount(0);
     await expect(levelSelect(page)).toHaveValue("3");
@@ -617,6 +623,8 @@ test.describe("a build's ruleset is not the device's default", () => {
     const dialog = page.getByRole("alertdialog");
     await dialog.getByRole("button", { name: "Switch ruleset" }).click();
     await expect(dialog).toHaveCount(0);
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await expect(page.getByRole("button", { name: /^Runefolio 2024 synthetic/ })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -696,7 +704,7 @@ test.describe("the first step is accessible in either colour preference", () => 
     });
   }
 
-  test("reaches name, ruleset and level in that order with the keyboard alone", async ({ page }) => {
+  test("reaches name then ruleset in that order with the keyboard alone", async ({ page }) => {
     await importAcceptancePack(page);
     await startBuild(page, "Tab Order");
 
@@ -725,11 +733,12 @@ test.describe("the first step is accessible in either colour preference", () => 
     const at = (pattern: RegExp) => stops.findIndex(stop => pattern.test(stop));
     const name = at(/Character name/);
     const ruleset = at(/Emberline acceptance slice/);
-    const level = at(/Create this character at level/);
 
     expect(name).toBeGreaterThanOrEqual(0);
     expect(ruleset).toBeGreaterThan(name);
-    expect(level).toBeGreaterThan(ruleset);
+    // The level belongs to the class step, so it is deliberately not reachable
+    // from this one — there is nothing here that could validate it.
+    expect(at(/Create this character at level/)).toBe(-1);
   });
 });
 
@@ -844,7 +853,7 @@ test.describe("switching between rulesets that share content", () => {
     await buildLevelFive(page, "Shared Content");
 
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await page.getByRole("button", { name: /^Emberline overlap addition/ }).click();
 
     const dialog = page.getByRole("alertdialog");
@@ -872,13 +881,18 @@ test.describe("switching between rulesets that share content", () => {
       "true",
     );
 
-    // The identity survived the switch.
+    /*
+     * Nothing became invalid, so there is no repair to land on and the user is
+     * left exactly where they were rather than being moved for no reason.
+     */
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Shared Content");
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Class & level/ }).click();
     await expect(levelSelect(page)).toHaveValue("5");
 
     const stillChosen = async () => {
       await page.getByRole("button", { name: "All steps" }).click();
-      await page.getByRole("button", { name: /^Class (Incomplete|Complete)$/ }).click();
+      await page.getByRole("button", { name: /^Class & level (Incomplete|Complete)$/ }).click();
       await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveAttribute("aria-pressed", "true");
       await page.getByRole("button", { name: "All steps" }).click();
       await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
@@ -918,7 +932,7 @@ test.describe("a switch that strands the target level says so", () => {
     await buildLevelFive(page, "Stranded Level");
 
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     // The built-in synthetic ruleset's content stops well short of level 5.
     await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
 
@@ -933,8 +947,22 @@ test.describe("a switch that strands the target level says so", () => {
     await dialog.getByRole("button", { name: "Switch ruleset" }).click();
     await expect(dialog).toHaveCount(0);
 
-    // The draft is still open, still at 5, and still says what is wrong.
-    await expect(page.getByText(/^Step 1 of/)).toBeVisible();
+    /*
+     * The confirmation lands on the first step that needs repairing rather than
+     * leaving the user on a screen with nothing wrong on it. The switch cleared
+     * the class, so that is Class & level.
+     */
+    await expect(page.getByRole("heading", { name: "Class & level", level: 2 })).toBeVisible();
+
+    /*
+     * The stranded level is not asserted yet, and that is the honest position:
+     * coverage is a property of a class, and the switch cleared the class. The
+     * level the user chose is still held — it is not rewritten to something they
+     * never picked — but nothing can judge it until a class exists again.
+     */
+    await page.getByRole("button", { name: /^Vanguard/ }).click();
+
+    // Now it can be judged, and it is — on this step, with the repair beside it.
     const stranded = page.getByRole("alert").filter({ hasText: /does not reach the chosen level/ });
     await expect(stranded).toBeVisible();
     await expect(stranded).toContainText("This build is set to level 5");
@@ -951,7 +979,7 @@ test.describe("a switch that strands the target level says so", () => {
 
     // Choosing a level the incoming content supports resolves it.
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Class & level/ }).click();
     await levelSelect(page).selectOption("1");
     await expect(page.getByText(/does not reach the chosen level/)).toHaveCount(0);
     await expect(levelSelect(page).locator("option[disabled]")).toHaveCount(0);

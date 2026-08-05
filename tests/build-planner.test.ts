@@ -65,7 +65,7 @@ describe("step list", () => {
       "start", "class", "origin", "abilities", "class-choices", "spells-resources", "equipment", "identity", "review",
     ]);
     expect(BUILDER_STEPS.map(step => step.label)).toEqual([
-      "Name, ruleset and level", "Class", "Origin", "Abilities", "Class choices", "Spells & resources", "Equipment", "Identity", "Review",
+      "Basics", "Class & level", "Origin", "Abilities", "Class choices", "Spells & resources", "Equipment", "Identity", "Review",
     ]);
   });
 

@@ -535,13 +535,23 @@ export function planBuild(
     else if (!byId.has(build.backgroundId))
       stepIssues.origin.push({ code: "BACKGROUND_SOURCE_MISSING", recordId: build.backgroundId, severity: "error" });
 
-    // The level is a decision on the first step, so its repair belongs there:
-    // either lower the target level or choose a class whose content reaches it.
-    // Only a class that genuinely stops short is reported here. With no class
-    // selected there is nothing to check the level against, and `CLASS_NOT_CHOSEN`
-    // above already says so — reporting both would name the same gap twice.
+    /*
+     * The level is judged where it is chosen, which is the class step.
+     *
+     * Coverage is a property of the selected class's own progression, so it
+     * cannot be evaluated before a class exists. Reporting it against the first
+     * step — where the level used to be picked — marked Basics incomplete for a
+     * decision taken two steps later, and pointed the repair at a screen that
+     * had no control capable of making it. The class step owns both the level
+     * selector and this issue, so the report and the repair are in one place.
+     *
+     * Only a class that genuinely stops short is reported. With no class
+     * selected there is nothing to check the level against, and
+     * `CLASS_NOT_CHOSEN` above already says so — reporting both would name the
+     * same gap twice.
+     */
     if (activation.levelCoverage === "not-covered")
-      stepIssues.start.push({ code: "LEVEL_NOT_COVERED_BY_CLASS", fieldPath: "level", severity: "error" });
+      stepIssues.class.push({ code: "LEVEL_NOT_COVERED_BY_CLASS", fieldPath: "level", severity: "error" });
 
     // A progression that names a choice or feature the pack does not define is a
     // content defect, not a user decision. It is reported against the missing

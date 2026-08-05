@@ -43,8 +43,8 @@ async function importEnginePack(page: Page) {
   await expect(page.getByText(/ruleset profile\(s\) created and ready to select/)).toBeVisible();
 }
 
-/** Opens the builder against the imported ruleset at the requested level. */
-async function startBuild(page: Page, name: string, level: string) {
+/** Opens the builder against the imported ruleset and names the character. */
+async function startBuild(page: Page, name: string) {
   await page.getByRole("button", { name: "Characters", exact: true }).click();
   await page.getByRole("button", { name: "New character" }).last().click();
   await expect(page.getByText(/^Step 1 of/)).toBeVisible();
@@ -53,6 +53,19 @@ async function startBuild(page: Page, name: string, level: string) {
     "true",
   );
   await page.getByLabel("Character name", { exact: true }).fill(name);
+  await next(page);
+}
+
+/**
+ * Picks the class and then the level, which is the order the step imposes.
+ *
+ * The level control only exists once a class does, because its range is that
+ * class's own progression. Selecting the class first is not an incidental
+ * ordering in the test; it is the contract.
+ */
+async function chooseClassAtLevel(page: Page, className: RegExp, level: string) {
+  await expect(page.getByText(/^Step 2 of/)).toBeVisible();
+  await page.getByRole("button", { name: className }).click();
   await page.getByLabel("Create this character at level").selectOption(level);
   await next(page);
 }
@@ -87,10 +100,8 @@ async function openCommitted(page: Page, name: string) {
 test.describe("hit points and armour resolve from content", () => {
   test("a level 5 build reaches 44 hit points and an armour-dependent 17 armour class", async ({ page }) => {
     await importEnginePack(page);
-    await startBuild(page, "Perrin Sallow", "5");
-
-    await page.getByRole("button", { name: /^Bulwark/ }).click();
-    await next(page);
+    await startBuild(page, "Perrin Sallow");
+    await chooseClassAtLevel(page, /^Bulwark/, "5");
     await chooseOrigin(page);
     await next(page);
     await fillAbilities(page);
@@ -136,10 +147,8 @@ test.describe("hit points and armour resolve from content", () => {
 test.describe("a redundantly declared subclass is one decision", () => {
   test("direct creation at level 5 presents it once and persists it", async ({ page }) => {
     await importEnginePack(page);
-    await startBuild(page, "Mirror Direct", "5");
-
-    await page.getByRole("button", { name: /^Mirrored Tide/ }).click();
-    await next(page);
+    await startBuild(page, "Mirror Direct");
+    await chooseClassAtLevel(page, /^Mirrored Tide/, "5");
     await chooseOrigin(page);
     await next(page);
     await fillAbilities(page);
@@ -169,10 +178,8 @@ test.describe("a redundantly declared subclass is one decision", () => {
 
   test("levelling into it presents it once and blocks confirmation until it is answered", async ({ page }) => {
     await importEnginePack(page);
-    await startBuild(page, "Mirror Climb", "2");
-
-    await page.getByRole("button", { name: /^Mirrored Tide/ }).click();
-    await next(page);
+    await startBuild(page, "Mirror Climb");
+    await chooseClassAtLevel(page, /^Mirrored Tide/, "2");
     await chooseOrigin(page);
     await next(page);
     await fillAbilities(page);

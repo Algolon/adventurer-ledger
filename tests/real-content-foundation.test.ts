@@ -336,7 +336,15 @@ describe("direct creation at a target level", () => {
     expect(plan.levelCovered).toBe(false);
     expect(plan.classProgressionMax).toBe(3);
     expect(plan.issues.map(issue => issue.code)).toContain("LEVEL_NOT_COVERED_BY_CLASS");
-    expect(plan.steps.find(step => step.id === "start")?.status).toBe("incomplete");
+    /*
+     * The conflict belongs to the step that owns both controls.
+     *
+     * The level is chosen on the class step, against the class's own
+     * progression, so that is where it is reported. Basics stays complete: it
+     * holds the name and the ruleset, and neither of those is wrong.
+     */
+    expect(plan.steps.find(step => step.id === "class")?.status).toBe("incomplete");
+    expect(plan.steps.find(step => step.id === "start")?.status).toBe("complete");
   });
 
   it("keeps the name across an update, a reload and a mode switch", async () => {

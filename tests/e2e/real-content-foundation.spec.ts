@@ -48,8 +48,8 @@ async function importAcceptancePack(page: Page) {
   await expect(page.getByText(/ruleset profile\(s\) created and ready to select/)).toBeVisible();
 }
 
-/** Opens the builder in the imported ruleset and targets level 5. */
-async function startAtLevelFive(page: Page, name: string) {
+/** Opens the builder in the imported ruleset and names the character. */
+async function startBasics(page: Page, name: string) {
   await page.getByRole("button", { name: "Characters", exact: true }).click();
   await page.getByRole("button", { name: "New character" }).last().click();
   await expect(page.getByText(/^Step 1 of/)).toBeVisible();
@@ -64,6 +64,21 @@ async function startAtLevelFive(page: Page, name: string) {
   );
 
   await page.getByLabel("Character name", { exact: true }).fill(name);
+}
+
+/**
+ * Names the character, then takes Beaconkeeper at level 5.
+ *
+ * The level range is asserted after the class is chosen because that is where
+ * it comes from: Beaconkeeper's own progression runs 1 to 5. The ruleset also
+ * holds a class that stops at 3, and the fact that this selector does not offer
+ * its ceiling — or the ruleset's — is the point.
+ */
+async function startAtLevelFive(page: Page, name: string) {
+  await startBasics(page, name);
+  await next(page);
+  await expect(page.getByText(/^Step 2 of/)).toBeVisible();
+  await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
   await expect(page.getByLabel("Create this character at level").locator("option")).toHaveText([
     "1",
     "2",
@@ -90,10 +105,7 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
   test("creates a level 5 character directly, resolving every level's choices", async ({ page }) => {
     await importAcceptancePack(page);
     await startAtLevelFive(page, "Wren Halloway");
-    await next(page);
-
-    // ---- class ------------------------------------------------------------
-    await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
+    // ---- class & level are one step; both are already chosen ---------------
     await next(page);
 
     // ---- origin, including a choice the species trait declares -------------
@@ -187,14 +199,21 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
   test("blocks a level the chosen class does not cover, and says so", async ({ page }) => {
     await importAcceptancePack(page);
     await startAtLevelFive(page, "Overreach");
-    await next(page);
 
-    // The second class stops at level 3; the first step names the repair.
+    /*
+     * Switching to a class that stops at 3 does not silently rewrite the level,
+     * and does not send the user anywhere. The repair is stated and offered on
+     * this same step, next to both controls that can perform it.
+     */
     await page.getByRole("button", { name: /^Lamplighter/ }).click();
-    await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await expect(page.getByRole("heading", { name: "Class & level", level: 2 })).toBeVisible();
     await expect(page.getByText(/does not reach the chosen level/)).toBeVisible();
     await expect(page.getByText(/This class stops at level 3/)).toBeVisible();
+    // The level the user chose is still what the build holds; it is shown as
+    // unsupported rather than replaced.
+    await expect(page.getByLabel("Create this character at level").locator("option[disabled]")).toHaveText(
+      "5 — not supported",
+    );
 
     // Lowering the level clears it without touching anything else.
     await page.getByLabel("Create this character at level").selectOption("3");
@@ -205,31 +224,32 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
     await importAcceptancePack(page);
     await startAtLevelFive(page, "Switcher");
     await next(page);
-    await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
-    await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
 
-    // Back to the first step and across to the other installed ruleset. The
-    // switch is a two-phase decision, so selecting it previews the change and
-    // the write only happens on an explicit confirmation.
+    // Back to Basics and across to the other installed ruleset. The switch is a
+    // two-phase decision, so selecting it previews the change and the write only
+    // happens on an explicit confirmation.
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await page.getByRole("button", { name: /^Runefolio 2024 synthetic/ }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Switch ruleset" }).click();
+
+    /*
+     * The confirmation lands on the first step that actually needs repairing.
+     * A switch clears the class, so that is Class & level — and it offers the
+     * new ruleset's content with nothing carried over from the old one.
+     */
+    await expect(page.getByRole("heading", { name: "Class & level", level: 2 })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Vanguard/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveCount(0);
+
+    // Basics records the new ruleset, and the name is not ruleset-scoped.
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /Basics/ }).click();
     await expect(page.getByRole("button", { name: /^Runefolio 2024 synthetic/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-
-    // The class step now offers the other ruleset's content, with nothing
-    // carried over from the ruleset that defined the old selection.
-    await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /^Class (Incomplete|Complete)$/ }).click();
-    await expect(page.getByRole("button", { name: /^Vanguard/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveCount(0);
-    // The name is not ruleset-scoped, so it survives.
-    await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /Name, ruleset and level/ }).click();
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Switcher");
   });
 });
@@ -238,8 +258,6 @@ test.describe("the standard array is the ruleset's own", () => {
   test("offers exactly the imported ruleset's base scores", async ({ page }) => {
     await importAcceptancePack(page);
     await startAtLevelFive(page, "Array check");
-    await next(page);
-    await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
     await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
