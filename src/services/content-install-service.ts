@@ -72,12 +72,48 @@ export interface RulesetOffer extends RulesetProposal {
   installedMatch?: "current" | "legacy";
 }
 
+/**
+ * What this import would actually do, as a single presentable answer.
+ *
+ * The issue list is the machine contract and stays as it is. This is the
+ * headline the user reads, and it exists because "blocked" was doing the work of
+ * four different outcomes: a first install, an upgrade, a re-import of what is
+ * already there, and an attempt to install something older. The middle two are
+ * not failures, and describing them as a blocked import — under a raw issue code
+ * — is what made an ordinary re-import look like a broken app.
+ */
+export type InstallVerdict =
+  /** Nothing installed under this pack ID yet. */
+  | "install"
+  /** A newer version of an installed pack. */
+  | "update"
+  /** Byte-for-byte the version already installed. Nothing to do. */
+  | "already-current"
+  /** Older than what is installed. Refused; the installed content is kept. */
+  | "older-than-installed"
+  /** Entry revisions are not ahead of the installed ones. Refused. */
+  | "revision-conflict"
+  /** Refused for a reason unrelated to versioning. */
+  | "blocked";
+
 export interface InstallPreview {
   set: ImportSetPreview;
   /** One offer per pack in the set, in the order the set declares them. */
   offers: readonly RulesetOffer[];
   issues: readonly ImportIssue[];
   canImport: boolean;
+  /** The presentable outcome, derived from the issues this preview produced. */
+  verdict: InstallVerdict;
+  /**
+   * Rulesets that already exist for the packs in this set and can still be
+   * selected right now.
+   *
+   * A refused import must not imply that no usable content is present. When the
+   * refusal is precisely that something newer is already installed, the thing
+   * the user should do next is use it — so the preview names it and the UI can
+   * offer it as an action rather than leaving a dead end.
+   */
+  usableExistingRulesets: readonly InstalledRulesetView[];
 }
 
 export interface InstallResult {
@@ -133,7 +169,26 @@ export class ContentInstallService {
       );
       return { ...proposal, ...describeInstallation(proposal.packId, installed) };
     });
-    return { set, offers, issues: set.issues, canImport: set.canImport };
+    /*
+     * Which existing rulesets this set's packs already have, and can still be
+     * used. Read from the installed profiles rather than from the incoming
+     * document, so a refusal reports what the device actually holds.
+     */
+    const installedViews = await this.installedRulesets();
+    const offeredRulesetIds = new Set(
+      offers.flatMap(offer => (offer.installedRulesetId ? [offer.installedRulesetId] : [])),
+    );
+    const usableExistingRulesets = installedViews.filter(
+      view => view.usable && offeredRulesetIds.has(view.id),
+    );
+    return {
+      set,
+      offers,
+      issues: set.issues,
+      canImport: set.canImport,
+      verdict: verdictFor(set.issues, set.canImport, set.plan),
+      usableExistingRulesets,
+    };
   }
 
   /**
@@ -317,6 +372,47 @@ export class ContentInstallService {
     if (usable.length === 1) return { kind: "resolved", rulesetId: usable[0].id, reason: "only-usable" };
     return { kind: "ambiguous", options: usable.length ? usable : views };
   }
+}
+
+/**
+ * The presentable outcome of a preview.
+ *
+ * Derived from the issues rather than stored, so it cannot drift from what the
+ * pipeline actually decided. Order matters: a genuine downgrade is the most
+ * important thing to say, and "already current" must not be reported when
+ * something older is also present in the same set.
+ */
+function verdictFor(
+  issues: readonly ImportIssue[],
+  canImport: boolean,
+  plan: ImportSetPreview["plan"],
+): InstallVerdict {
+  if (canImport) return plan.packs.update.length ? "update" : "install";
+
+  const versionIssues = issues.filter(issue => issue.code === "PACK_VERSION_CONFLICT");
+  const older = versionIssues.some(
+    issue => issue.installedVersion !== undefined && issue.incomingVersion !== issue.installedVersion,
+  );
+  if (older) return "older-than-installed";
+
+  const revisionIssues = issues.filter(issue => issue.code === "ENTRY_REVISION_CONFLICT");
+  const otherErrors = issues.some(
+    issue =>
+      issue.severity === "error" &&
+      issue.code !== "PACK_VERSION_CONFLICT" &&
+      issue.code !== "ENTRY_REVISION_CONFLICT",
+  );
+  if (otherErrors) return "blocked";
+
+  // Every version present is the installed one. Whether entry revisions are
+  // equal or behind decides which of the two benign refusals this is.
+  if (versionIssues.length)
+    return revisionIssues.some(
+      issue => issue.incomingRevision !== undefined && issue.incomingRevision < (issue.installedRevision ?? 0),
+    )
+      ? "revision-conflict"
+      : "already-current";
+  return revisionIssues.length ? "revision-conflict" : "blocked";
 }
 
 /** Whether this pack already has a profile, under any ID it maps to. */

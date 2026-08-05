@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   BookOpen,
@@ -23,8 +23,8 @@ import {
   createContentExport,
   RestrictedExportConfirmationError,
 } from "@/src/export/content-export";
-import type { InstallPreview } from "@/src/services/content-install-service";
-import { useServices } from "@/src/ui/services-context";
+import type { InstallPreview, InstallVerdict } from "@/src/services/content-install-service";
+import { useAsync, useServices } from "@/src/ui/services-context";
 import { db } from "@/src/storage/db";
 import {
   ContentEntryRepository,
@@ -83,8 +83,20 @@ function Boundary() {
 }
 
 function SourcesPanel() {
-  const [list, setList] = useState<Source[]>([]),
-    [editing, setEditing] = useState<string>(),
+  /*
+   * One invalidation contract.
+   *
+   * This panel used to hold its own list and its own private `refresh`, which
+   * shadowed the service-wide one. Content installed anywhere else therefore
+   * left it showing yesterday's answer until it happened to remount, and each
+   * screen had to be re-derived by hand. Reading through `useAsync` puts it on
+   * the same revision every other reader uses, so one `refresh()` after a write
+   * updates all of them at once.
+   */
+  const { refresh } = useServices();
+  const listState = useAsync(() => sources.list(), []);
+  const list = listState.status === "ready" ? listState.value : [];
+  const [editing, setEditing] = useState<string>(),
     [message, setMessage] = useState("");
   const [form, setForm] = useState({
     id: "source:synthetic-local",
@@ -92,10 +104,6 @@ function SourcesPanel() {
     abbreviation: "SYN",
     version: "1.0.0",
   });
-  const refresh = useCallback(() => sources.list().then(setList), []);
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setMessage("");
@@ -129,7 +137,7 @@ function SourcesPanel() {
         version: "1.0.0",
       });
       setMessage("Source saved locally.");
-      await refresh();
+      refresh();
     } catch (error) {
       setMessage(safeMessage(error));
     }
@@ -224,7 +232,7 @@ function SourcesPanel() {
                 onClick={async () => {
                   try {
                     await sources.delete(source.id);
-                    await refresh();
+                    refresh();
                   } catch (error) {
                     setMessage(safeMessage(error));
                   }
@@ -305,14 +313,14 @@ function isEffect(value: unknown): value is Effect {
   return effectSchema.safeParse(value).success;
 }
 function PackEditor() {
-  const [list, setList] = useState<ContentPack[]>([]),
-    [form, setForm] = useState(initialPack),
+  // Same one invalidation contract as every other reader: an import elsewhere
+  // must be visible here without this panel being remounted.
+  const { refresh } = useServices();
+  const listState = useAsync(() => packs.list(), []);
+  const list = listState.status === "ready" ? listState.value : [];
+  const [form, setForm] = useState(initialPack),
     [editing, setEditing] = useState<string>(),
     [message, setMessage] = useState("");
-  const refresh = useCallback(() => packs.list().then(setList), []);
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setMessage("");
@@ -373,7 +381,7 @@ function PackEditor() {
       await savePackEntry(db, { editingPackId: editing, entry, pack });
       setMessage("Pack and entry saved locally.");
       setEditing(undefined);
-      await refresh();
+      refresh();
     } catch {
       setMessage(
         "Save failed. Verify the source ID, unique IDs, category, version, and effects JSON structure.",
@@ -583,7 +591,7 @@ function PackEditor() {
                 aria-label={`Delete ${pack.name}`}
                 onClick={async () => {
                   await packs.delete(pack.id);
-                  await refresh();
+                  refresh();
                 }}
               >
                 <Trash2 />
@@ -596,6 +604,35 @@ function PackEditor() {
     </section>
   );
 }
+
+/**
+ * What the user is told an import would do.
+ *
+ * "Import blocked" used to cover a first install, an upgrade, a re-import of
+ * what was already installed, and an attempt to install something older. The
+ * middle two are ordinary and not failures; presenting them as a block, above a
+ * list of raw issue codes, is what made a repeat import read as a broken app.
+ */
+const VERDICT_HEADINGS: Record<InstallVerdict, string> = {
+  install: "Ready to import",
+  update: "Ready to update",
+  "already-current": "Already installed — nothing to update",
+  "older-than-installed": "Not imported: a newer version is already installed",
+  "revision-conflict": "Not imported: the installed records are newer",
+  blocked: "Import blocked",
+};
+
+const VERDICT_EXPLANATIONS: Record<InstallVerdict, string> = {
+  install: "Nothing here is installed yet. Confirming writes it in one transaction.",
+  update: "This is a newer version of content already on this device. Confirming replaces it in one transaction.",
+  "already-current":
+    "This is the version already on this device, so there is nothing to write. Your installed content is unchanged and remains usable.",
+  "older-than-installed":
+    "This file is older than what is installed, so it was not applied. The newer installed content is kept and stays usable.",
+  "revision-conflict":
+    "One or more records on this device are at a newer revision than the ones in this file, so nothing was written. The installed content is kept and stays usable.",
+  blocked: "This file cannot be applied as it stands. Nothing was written. The details below say why.",
+};
 
 function ImportExportPanel() {
   const { install, refresh } = useServices();
@@ -737,7 +774,46 @@ function ImportExportPanel() {
         </button>
         {currentPreview && (
           <div className="preview" aria-label="Import preview">
-            <h4>{currentPreview.canImport ? "Ready to import" : "Import blocked"}</h4>
+            <h4>{VERDICT_HEADINGS[currentPreview.verdict]}</h4>
+            <p>{VERDICT_EXPLANATIONS[currentPreview.verdict]}</p>
+            {/*
+             * A refusal must not imply that nothing usable is installed. When
+             * the reason for refusing is that something newer is already here,
+             * the next action is to use it, so it is offered directly.
+             */}
+            {!currentPreview.canImport && currentPreview.usableExistingRulesets.length ? (
+              <div className="issue">
+                <p>
+                  {currentPreview.usableExistingRulesets.length === 1
+                    ? "This ruleset is installed and can be selected right now:"
+                    : "These rulesets are installed and can be selected right now:"}
+                </p>
+                <ul>
+                  {currentPreview.usableExistingRulesets.map(ruleset => (
+                    <li key={ruleset.id}>
+                      <b>{ruleset.name}</b> — {ruleset.entryCount} entries, creation levels 1 to{" "}
+                      {ruleset.maxSupportedLevel}{" "}
+                      <button
+                        className="btn secondary"
+                        onClick={async () => {
+                          const outcome = await install.activate(ruleset.id);
+                          setMessage(
+                            outcome.status === "ok"
+                              ? `${ruleset.name} is now the ruleset new characters start in. Nothing was imported.`
+                              : "That ruleset could not be selected on this device.",
+                          );
+                          // One contract: every dependent read re-runs, so the
+                          // builder's picker and the ruleset list agree at once.
+                          refresh();
+                        }}
+                      >
+                        Use {ruleset.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <p>
               {currentPreview.set.plan.sources.add.length} sources,{" "}
               {currentPreview.set.plan.packs.add.length} packs, and{" "}
@@ -770,9 +846,14 @@ function ImportExportPanel() {
                 Create a ruleset profile so this content can be selected in the builder
               </label>
             )}
+            {/*
+             * The message leads and the code follows in the small print. The
+             * code is still needed to report a problem precisely, but a user
+             * reading `ENTRY_REVISION_CONFLICT` first learns nothing from it.
+             */}
             {currentPreview.issues.map((issue, index) => (
               <p className="issue" key={`${issue.code}-${index}`}>
-                <b>{issue.code}</b> {issue.message}
+                {issue.message} <small className="m2-muted">{issue.code}</small>
               </p>
             ))}
             <div className="actions">
