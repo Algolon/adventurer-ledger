@@ -135,7 +135,7 @@ export function CharacterBuilder({
    * dead control and invites a second press — and a second press during a commit
    * is a second commit attempt.
    */
-  const [pendingAction, setPendingAction] = useState<"advance" | "commit" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"advance" | "commit" | "close" | null>(null);
   /**
    * The same flag, readable synchronously.
    *
@@ -143,7 +143,7 @@ export function CharacterBuilder({
    * `pendingAction` as null and both proceed — which is exactly what a double
    * press is. The ref is written before any await, so the second call sees it.
    */
-  const inFlightRef = useRef<"advance" | "commit" | null>(null);
+  const inFlightRef = useRef<"advance" | "commit" | "close" | null>(null);
   const revisionRef = useRef<number | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   /** Freshest snapshot, readable after awaiting the save queue. */
@@ -323,6 +323,35 @@ export function CharacterBuilder({
       inFlightRef.current = null;
       setPendingAction(null);
     }
+  };
+
+  /**
+   * Leaves the task with everything written.
+   *
+   * On mobile this is the only way out: the primary navigation is hidden while
+   * the task owns the surface, because painting the task's action row over it
+   * left navigation that could be seen and not pressed.
+   *
+   * It waits for two distinct writes before closing, and both matter. The
+   * debounced edit queue holds whatever was typed but not yet sent — a name
+   * finished a moment ago. The step-position write records where to come back
+   * to. Closing before either lands is how a draft reopens missing its last
+   * edit, or at a step the user had already left.
+   */
+  const saveAndClose = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = "close";
+    setPendingAction("close");
+    try {
+      await flushPending();
+      // Sends the current step explicitly rather than trusting that the
+      // navigation which brought us here has already settled.
+      await save({}, stepId);
+    } finally {
+      inFlightRef.current = null;
+      setPendingAction(null);
+    }
+    onClose();
   };
 
   /**
@@ -546,14 +575,25 @@ export function CharacterBuilder({
           </p>
           <h2>{current.label}</h2>
         </div>
-        <button
-          type="button"
-          className="m2-mode-toggle"
-          onClick={togglePresentation}
-          aria-pressed={draft.presentation === "flexible"}
-        >
-          {draft.presentation === "guided" ? "Guided mode" : "Flexible mode"}
-        </button>
+        <div className="m2-builder-actions">
+          <button
+            type="button"
+            className="m2-mode-toggle"
+            onClick={togglePresentation}
+            aria-pressed={draft.presentation === "flexible"}
+          >
+            {draft.presentation === "guided" ? "Guided mode" : "Flexible mode"}
+          </button>
+          <button
+            type="button"
+            className="m2-save-close"
+            onClick={() => void saveAndClose()}
+            disabled={pendingAction !== null}
+            aria-busy={pendingAction === "close" || undefined}
+          >
+            {pendingAction === "close" ? "Saving…" : "Save & close"}
+          </button>
+        </div>
       </header>
 
       {/*

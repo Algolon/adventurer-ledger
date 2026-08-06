@@ -158,7 +158,16 @@ function Shell() {
   };
 
   return (
-    <div className="m2-shell">
+    /*
+     * `m2-shell-task` tells the layout that a modal task owns the surface.
+     *
+     * On mobile the primary navigation and the task's action row are both
+     * pinned to the bottom edge, and the task row is painted over the top of
+     * the navigation. The result was navigation that looked available,
+     * announced itself as available, and could not be pressed at all. The task
+     * now hides it rather than covering it, and supplies its own way out.
+     */
+    <div className={modalTask ? "m2-shell m2-shell-task" : "m2-shell"}>
       <header className="m2-appbar">
         <div className="m2-appbar-brand">
           <BrandMark decorative variant="inverse" />

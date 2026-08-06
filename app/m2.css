@@ -31,11 +31,21 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * The app bar's own height, shared with anything that has to sit below it.
+ * Its content renders taller than the 56 px floor, so a second sticky element
+ * offset by the floor would tuck under it by the difference.
+ */
+.m2-shell {
+  --appbar-height: 60px;
+}
+
 .m2-appbar {
   position: sticky;
   top: 0;
   z-index: 20;
   min-height: 56px;
+  height: var(--appbar-height);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -112,6 +122,21 @@
 }
 
 .m2-rail-only {
+  display: none;
+}
+
+/*
+ * A modal task owns the bottom edge on mobile.
+ *
+ * The bottom bar and the task's action row are both `position: fixed` to the
+ * bottom, and the action row sits above it, so every navigation button was
+ * covered: visible, focusable, announced by `aria-current`, and impossible to
+ * press because the hit test landed on Back. Hiding it is the honest response —
+ * a control that cannot be operated should not be on screen — and the task
+ * supplies its own Save & close instead. The desktop rail is a side rail that
+ * nothing overlaps, so it is restored at the same breakpoint that creates it.
+ */
+.m2-shell-task .m2-rail {
   display: none;
 }
 
@@ -730,12 +755,49 @@
   padding-bottom: 90px;
 }
 
+/*
+ * Sticky on mobile because it carries Save & close, which is the only way out
+ * of the task once the bottom bar is hidden. A long step would otherwise scroll
+ * the exit off screen and strand the user inside the builder.
+ */
 .m2-builder-head {
+  position: sticky;
+  /*
+   * Below the app bar, which is itself sticky at the top. Sticking at 0 would
+   * have put this over it — the same "one fixed thing on top of another" defect
+   * being fixed here, reintroduced one element up. The z-index stays under the
+   * app bar's 20 so any rounding difference resolves in its favour rather than
+   * hiding it.
+   */
+  top: var(--appbar-height);
+  z-index: 19;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  padding: 8px 0;
+  background: var(--bg);
+}
+
+.m2-builder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.m2-save-close {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 650;
+}
+
+.m2-save-close[disabled] {
+  opacity: 0.6;
 }
 
 .m2-builder-head h2 {
@@ -1324,6 +1386,10 @@
   }
   .m2-task-footer {
     left: 200px;
+  }
+  /* The side rail is beside the task, not beneath it, so it stays. */
+  .m2-shell-task .m2-rail {
+    display: block;
   }
 }
 
