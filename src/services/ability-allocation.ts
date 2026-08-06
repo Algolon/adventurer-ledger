@@ -158,6 +158,86 @@ export function reconcileAbilityAllocation(
   };
 }
 
+/**
+ * Splits committed final scores back into base scores and origin increases.
+ *
+ * A committed character stores only the finals, because the finals are the only
+ * thing the sheet reads. The builder needs both halves — the Abilities step
+ * shows the array assignment and the placed increases separately — so reopening
+ * a character has to recover the split rather than pretend no increase was ever
+ * placed. Pretending would be visible and wrong twice over: the origin's slots
+ * would look unspent, and re-committing would add them a second time.
+ *
+ * The recovery is the exact inverse of how the finals were produced. Every
+ * assignment of the origin's declared slots to distinct offered abilities is
+ * tried, and one is accepted only when the base scores it implies are a
+ * legitimate starting assignment — the declared standard array, when the
+ * character was built with it. Nothing here names an ability set, a pattern or a
+ * background; all of it is read from the origin's own declaration.
+ *
+ * `recovered` is false when no assignment fits. The finals are then kept as the
+ * base with no increases, which preserves every committed score exactly and
+ * leaves the planner to report the mismatch against the step that owns it. That
+ * is deliberately not silent: a build whose origin changed under it should be
+ * repaired by the user on the Abilities step, not guessed at here.
+ *
+ * A tie between two assignments cannot change a committed score — both produce
+ * the same finals — so the first in canonical ability order is taken.
+ */
+export function recoverAbilityAllocation(input: {
+  readonly finals: Readonly<Partial<Record<Ability, number>>>;
+  readonly pattern: OriginIncreasePattern | undefined;
+  readonly standardArray: readonly number[] | undefined;
+  readonly abilityMethod: "standard-array" | "manual";
+}): { base: Partial<Record<Ability, number>>; increases: Partial<Record<Ability, number>>; recovered: boolean } {
+  const finals: Partial<Record<Ability, number>> = { ...input.finals };
+  const asBase = () => ({ base: { ...finals }, increases: {}, recovered: false });
+
+  const { pattern } = input;
+  if (!pattern || !pattern.increasePattern.length) return { ...asBase(), recovered: true };
+  // Recovery compares a candidate base against the declared starting assignment.
+  // Without one there is nothing to test a candidate against, so no split can be
+  // claimed and the finals stand as the base.
+  if (input.abilityMethod !== "standard-array" || !input.standardArray?.length) return asBase();
+  if (ABILITIES.some(ability => typeof finals[ability] !== "number")) return asBase();
+
+  const offered = pattern.abilities.filter(ability => ABILITIES.includes(ability));
+  const target = input.standardArray;
+
+  const search = (
+    remaining: readonly number[],
+    used: ReadonlySet<Ability>,
+    placed: Partial<Record<Ability, number>>,
+  ): Partial<Record<Ability, number>> | undefined => {
+    if (!remaining.length) {
+      const base = ABILITIES.map(ability => (finals[ability] as number) - (placed[ability] ?? 0));
+      return sameMultiset(base, target) ? { ...placed } : undefined;
+    }
+    const [amount, ...rest] = remaining;
+    for (const ability of ABILITIES) {
+      if (!offered.includes(ability) || used.has(ability)) continue;
+      const found = search(rest, new Set([...used, ability]), { ...placed, [ability]: amount });
+      if (found) return found;
+    }
+    return undefined;
+  };
+
+  const increases = search(pattern.increasePattern, new Set(), {});
+  if (!increases) return asBase();
+
+  const base: Partial<Record<Ability, number>> = {};
+  for (const ability of ABILITIES) base[ability] = (finals[ability] as number) - (increases[ability] ?? 0);
+  return { base, increases, recovered: true };
+}
+
+/** Order-insensitive numeric equality. */
+function sameMultiset(left: readonly number[], right: readonly number[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort((a, b) => a - b);
+  const sortedRight = [...right].sort((a, b) => a - b);
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
 /** The allocation fields of a draft patch, for a service that has to repair one. */
 export function allocationPatch(allocation: AbilityAllocation): Pick<
   CharacterDraftBuild,

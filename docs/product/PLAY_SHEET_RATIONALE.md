@@ -119,18 +119,25 @@ for a phone: fewer borders, larger numerals, more space between groups.
 Captured by `node scripts/capture-sheet-screens.mjs` against a running dev
 server, driving the real builder to create both fixtures — no seeded state.
 
-| Screenshot | What it shows |
+Six screens are captured at each of four review contexts — 360 px light, 390 px
+light, 390 px dark and 412 px dark — as `<screen>-<theme>-<width>.png`. The same
+two characters and the same mid-session state run through every one, so a
+difference between two files is a difference in the surface and not in the data.
+
+| Screen | What it shows |
 | --- | --- |
-| [`fighter-overview-light-390.png`](play-sheet/fighter-overview-light-390.png) | Fighter fixture mid-session: 7/10 hit points, Winded, inspiration held, Overview |
-| [`fighter-actions-light-390.png`](play-sheet/fighter-actions-light-390.png) | Attacks and the limited-use resource with its steppers |
-| [`fighter-hp-drawer-light-390.png`](play-sheet/fighter-hp-drawer-light-390.png) | The hit-point drawer: amount, preview, hit dice, rests, Undo |
-| [`caster-spells-light-390.png`](play-sheet/caster-spells-light-390.png) | Casting facts, rune slots after one is spent, spells by level |
-| [`caster-character-light-390.png`](play-sheet/caster-character-light-390.png) | Features, proficiencies and the single Edit character route |
-| [`caster-overview-dark-390.png`](play-sheet/caster-overview-dark-390.png) | The same caster in dark mode |
-| [`caster-spells-dark-390.png`](play-sheet/caster-spells-dark-390.png) | Spells in dark mode |
-| [`fighter-overview-dark-390.png`](play-sheet/fighter-overview-dark-390.png) | Fighter in dark mode |
-| [`fighter-overview-dark-360.png`](play-sheet/fighter-overview-dark-360.png) | The narrowest supported width, 360 px |
+| `fighter-overview-<theme>-<width>.png` | Fighter fixture mid-session: 7/10 hit points, Winded, inspiration held, Overview |
+| `fighter-actions-<theme>-<width>.png` | Attacks and the limited-use resource with its steppers |
+| `fighter-hp-drawer-<theme>-<width>.png` | The hit-point drawer: amount, preview, hit dice, rests, Undo |
+| `fighter-character-<theme>-<width>.png` | Features, proficiencies, and Edit character beside Level up |
+| `caster-spells-<theme>-<width>.png` | Casting facts, rune slots after one is spent, spells by level |
+| `edit-character-<theme>-<width>.png` | Edit character opened from the sheet: the committed name prefilled, the character's own ruleset selected, **0 issues** |
 | [`library-light-360.png`](play-sheet/library-light-360.png) | The library with no ruleset ID and no always-on state badge |
+
+The Edit character screens are the evidence for this iteration's fix. They are
+reached by pressing the real control on a character that was built through the
+builder minutes earlier, so a prefilled field in them is prefilling actually
+happening — not a fixture drawn to look like it.
 
 The two fixtures are original synthetic content written for this repository: a
 martial **Vanguard** (Brammel Voss) and a **Runecaller** caster (Sereth Marsh).

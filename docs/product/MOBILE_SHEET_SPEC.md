@@ -34,6 +34,35 @@ expression control, no manual calculation editing and no ruleset switching. Wher
 a user might reasonably look for one, the surface says where it lives instead —
 "Changing the hit point maximum is part of Edit character."
 
+## Edit character
+
+Edit character opens the builder on the character itself, not on a blank form
+that happens to carry its ID. One draft exists per character, and pressing Edit:
+
+- **hydrates** it from the committed record through a single conversion — name,
+  nickname, class, level, subclass, species, background, ability scores and the
+  origin split they were built from, every choice and equipment selection, manual
+  values and actions, and the presentation mode;
+- **scopes** it to the character's own ruleset, never the device-wide default;
+- **resumes** an unfinished edit rather than replacing it, however many times the
+  control is pressed;
+- **records** the character revision it read, so a commit that would overwrite
+  newer work is refused rather than applied.
+
+Save & close keeps the draft and writes nothing to the character. Discard changes
+throws the draft away and writes nothing either; the next Edit press hydrates
+from the commit again. Completing Review updates the existing character in place:
+the same ID, a new revision and version, no duplicate in the library.
+
+A saved value the installed content can no longer confirm — an uninstalled class,
+an option a pack stopped offering — is **kept and reported**, never cleared. The
+builder names the step that can confirm it and says the value is still stored.
+
+Play state is untouched by all of this. Opening, saving, discarding and
+committing an edit leave hit points, temporary hit points, hit dice, inspiration,
+exhaustion, death saves, conditions and spent resources exactly as they were,
+except where a changed maximum moves a current value by the same delta.
+
 ## Technical presentation
 
 The character library and the sheet never display an active ruleset, an internal
@@ -114,6 +143,38 @@ Rows show name, current over maximum, and recharge cadence in words ("Back on a
 long rest"). A − / + stepper spends and recovers one at a time and is disabled at
 its bound rather than clamping silently. Slot resources declared by the
 spellcasting content render in Spells; everything else renders in Actions.
+
+### Rests
+
+This is the whole rest contract. It is written down because "what a rest does"
+is the sort of thing that otherwise gets filled in from memory of a published
+edition, and the sheet applies only what this document states.
+
+A **short rest** restores every resource whose content declares a `short-rest`
+recharge, to its maximum. It changes nothing else: not hit points, not hit dice,
+not exhaustion, not the death-save tally.
+
+A **long rest**:
+
+- restores every resource whose declared recharge is anything other than `none`;
+- sets current hit points to the maximum and temporary hit points to zero;
+- restores hit dice to the character's level;
+- reduces exhaustion by exactly one level, never below zero;
+- clears the death-save tally.
+
+Both are one runtime action with an exact undo, so a rest taken by accident is
+reversed to the state before it rather than approximated.
+
+A **permanent edit is not a rest.** Committing a build change re-synchronises
+runtime state against the new maxima using the preserve-expenditure policy in
+D-08: current values move by the same delta as their maxima, and hit dice are
+clamped to the character's level rather than refilled or emptied.
+
+**Level up and Edit character treat hit dice differently, on purpose.** Level up
+grants one hit die (`hitDiceRemaining + 1`) — D-08's preserve-expenditure policy
+applied to the pool, matching how it moves hit points and resources when their
+maxima rise. Edit character grants none: a build correction is not advancement,
+so it only clamps. Neither path refills a spent pool, and neither empties one.
 
 ### Conditions, exhaustion and inspiration
 

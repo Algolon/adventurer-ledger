@@ -86,6 +86,31 @@ A second synthetic fixture, the **Runecaller** caster (Sereth Marsh), joins
 Vanguard so the Spells section and the conditional builder step are exercised by
 something real. Both fixtures are original synthetic content.
 
+### The Edit character boundary
+
+Making the sheet Play mode put every permanent change behind one route, so that
+route has to be complete. It now is.
+
+`CharacterDraftService.openForCharacter` is the single entry point, and
+`draftBuildFromCharacter` is the single conversion from a committed character to
+an editable build — used by the service and by nothing else, so the page cannot
+reconstruct its own partial version. It hydrates every persisted permanent field,
+scopes the draft to the character's own ruleset, resumes an unfinished edit
+rather than replacing it, and records the character revision it read as the
+compare-and-swap token the commit must send. `CreateDraftCommand` no longer
+accepts an `editingCharacterId`, so an unhydrated edit draft cannot be created at
+all.
+
+A saved value the installed content can no longer confirm is kept and reported,
+never cleared: the hydration returns typed repair notes, and a choice is
+"resolved" only when every stored option is still offered — counting selections
+alone had let an unresolvable build pass Review and commit.
+
+Committing an edit re-synchronises runtime state through the existing D-08
+policy and touches nothing else. Hit points, temporary hit points, hit dice,
+inspiration, exhaustion, death saves, conditions and spent resources survive
+opening, saving, discarding and committing an edit.
+
 This iteration deliberately does not close attack derivation from carried
 equipment, Extra Attack, prepared-versus-known spells, upcasting, concentration
 tracking, currency, attunement, senses, defences, notes or creatures. Sections

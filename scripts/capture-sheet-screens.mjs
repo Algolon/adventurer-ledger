@@ -1,10 +1,14 @@
 /**
- * Captures the play-first sheet review screenshots.
+ * Captures the play-first review screenshots.
  *
  * Drives a real browser through the actual builder against a running dev or
- * preview server (SHEET_CAPTURE_URL, default http://localhost:3000), creates
- * the two synthetic fixture characters, applies a little session state, and
- * writes phone-width screenshots (light and dark) to docs/product/play-sheet/.
+ * preview server (SHEET_CAPTURE_URL, default http://localhost:3000), creates the
+ * two synthetic fixture characters, applies a little session state, and writes
+ * every review screen at each reviewed width and theme.
+ *
+ * The characters are built, never seeded, and the Edit character screen is
+ * reached by pressing the real control — so a screenshot of a prefilled builder
+ * is evidence that it prefills, not a picture of a fixture.
  *
  * Usage: node scripts/capture-sheet-screens.mjs
  */
@@ -13,6 +17,14 @@ import { chromium } from "@playwright/test";
 
 const BASE_URL = process.env.SHEET_CAPTURE_URL ?? "http://localhost:3000";
 const OUT_DIR = "docs/product/play-sheet";
+
+/** The review contexts: the phone widths and themes this iteration is judged at. */
+const CONTEXTS = [
+  { theme: "light", width: 360, height: 780 },
+  { theme: "light", width: 390, height: 844 },
+  { theme: "dark", width: 390, height: 844 },
+  { theme: "dark", width: 412, height: 892 },
+];
 
 const ABILITIES_FIGHTER = [
   ["Strength", "14"],
@@ -32,9 +44,7 @@ const ABILITIES_CASTER = [
   ["Charisma", "8"],
 ];
 
-async function continueStep(page) {
-  await page.getByRole("button", { name: "Continue" }).click();
-}
+const continueStep = page => page.getByRole("button", { name: "Continue" }).click();
 
 async function buildCharacter(page, options) {
   await page.getByRole("button", { name: "New character" }).last().click();
@@ -66,8 +76,7 @@ async function buildCharacter(page, options) {
   await page.getByRole("button", { name: options.gearPattern }).click();
   await continueStep(page);
 
-  // Identity step adds nothing mechanical; skip straight to review.
-  await continueStep(page);
+  await continueStep(page); // Identity adds nothing mechanical here.
   await page.getByRole("button", { name: "Finish and open sheet" }).click();
   await page.getByRole("heading", { name: options.name, level: 2 }).waitFor();
 }
@@ -78,6 +87,79 @@ async function openCharacter(page, name) {
   await page.getByRole("heading", { name, level: 2 }).waitFor();
 }
 
+/** A little mid-session state, so the sheet reads as played rather than mocked. */
+async function applySessionState(page) {
+  await page.getByRole("button", { name: /Open hit point actions/ }).click();
+  await page.getByRole("spinbutton", { name: "Amount" }).fill("3");
+  await page.getByRole("button", { name: /Apply 3 damage/ }).click();
+  await page.getByRole("button", { name: /Close Hit points/ }).click();
+  await page.getByRole("button", { name: /^Condition$/ }).click();
+  await page.getByRole("button", { name: /Add the Winded condition/ }).click();
+  await page.getByRole("button", { name: "Inspiration" }).click();
+}
+
+/**
+ * The review screens, each described as how to reach it from the library.
+ *
+ * Edit character is reached through the sheet's own control and captured on the
+ * Basics step, which is where the prefilled name is visible; Save & close then
+ * leaves the draft exactly as it was for the next context.
+ */
+const SCREENS = [
+  {
+    id: "fighter-overview",
+    async open(page) {
+      await openCharacter(page, "Brammel Voss");
+      await page.getByRole("tab", { name: "Overview" }).click();
+    },
+  },
+  {
+    id: "fighter-actions",
+    async open(page) {
+      await openCharacter(page, "Brammel Voss");
+      await page.getByRole("tab", { name: "Actions" }).click();
+    },
+  },
+  {
+    id: "fighter-hp-drawer",
+    async open(page) {
+      await openCharacter(page, "Brammel Voss");
+      await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    },
+    async close(page) {
+      await page.getByRole("button", { name: /Close Hit points/ }).click();
+    },
+  },
+  {
+    id: "fighter-character",
+    async open(page) {
+      await openCharacter(page, "Brammel Voss");
+      await page.getByRole("tab", { name: "Character" }).click();
+    },
+  },
+  {
+    id: "caster-spells",
+    async open(page) {
+      await openCharacter(page, "Sereth Marsh");
+      await page.getByRole("tab", { name: "Spells" }).click();
+    },
+  },
+  {
+    id: "edit-character",
+    async open(page) {
+      await openCharacter(page, "Brammel Voss");
+      await page.getByRole("tab", { name: "Character" }).click();
+      await page.getByRole("button", { name: "Edit character", exact: true }).click();
+      // The prefilled name is the whole point of this screen.
+      await page.getByLabel("Character name", { exact: true }).waitFor();
+    },
+    async close(page) {
+      await page.getByRole("button", { name: "Save & close" }).click();
+      await page.getByRole("heading", { name: "Brammel Voss", level: 2 }).waitFor();
+    },
+  },
+];
+
 async function shoot(page, file) {
   await page.waitForTimeout(350);
   await page.screenshot({ path: `${OUT_DIR}/${file}`, fullPage: false });
@@ -87,6 +169,8 @@ async function shoot(page, file) {
 const run = async () => {
   mkdirSync(OUT_DIR, { recursive: true });
   const browser = await chromium.launch();
+  // One context for the whole run, so every screenshot is of the same two
+  // characters in the same session state.
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2,
@@ -109,22 +193,7 @@ const run = async () => {
     hasSpellsStep: false,
     gearPattern: /^Warden pack/,
   });
-
-  // A little session state so the sheet reads as mid-session, not a mockup.
-  await page.getByRole("button", { name: /Open hit point actions/ }).click();
-  await page.getByRole("spinbutton", { name: "Amount" }).fill("3");
-  await page.getByRole("button", { name: /Apply 3 damage/ }).click();
-  await page.getByRole("button", { name: /Close Hit points/ }).click();
-  await page.getByRole("button", { name: /^Condition$/ }).click();
-  await page.getByRole("button", { name: /Add the Winded condition/ }).click();
-  await page.getByRole("button", { name: "Inspiration" }).click();
-
-  await shoot(page, "fighter-overview-light-390.png");
-  await page.getByRole("tab", { name: "Actions" }).click();
-  await shoot(page, "fighter-actions-light-390.png");
-  await page.getByRole("button", { name: /Open hit point actions/ }).click();
-  await shoot(page, "fighter-hp-drawer-light-390.png");
-  await page.keyboard.press("Escape");
+  await applySessionState(page);
 
   await page.getByRole("button", { name: "Characters", exact: true }).click();
   await buildCharacter(page, {
@@ -138,28 +207,22 @@ const run = async () => {
     hasSpellsStep: true,
     gearPattern: /^River kit/,
   });
-
   await page.getByRole("tab", { name: "Spells" }).click();
   await page.getByRole("button", { name: /Spend one Rune slots/ }).click();
-  await shoot(page, "caster-spells-light-390.png");
-  await page.getByRole("tab", { name: "Character" }).click();
-  await shoot(page, "caster-character-light-390.png");
 
-  // Same storage, dark scheme.
-  await page.emulateMedia({ colorScheme: "dark" });
-  await page.getByRole("tab", { name: "Overview" }).click();
-  await shoot(page, "caster-overview-dark-390.png");
-  await page.getByRole("tab", { name: "Spells" }).click();
-  await shoot(page, "caster-spells-dark-390.png");
+  for (const { theme, width, height } of CONTEXTS) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.setViewportSize({ width, height });
+    for (const screen of SCREENS) {
+      await screen.open(page);
+      await shoot(page, `${screen.id}-${theme}-${width}.png`);
+      if (screen.close) await screen.close(page);
+    }
+  }
 
-  await openCharacter(page, "Brammel Voss");
-  await shoot(page, "fighter-overview-dark-390.png");
-
-  // Narrowest supported width.
-  await page.setViewportSize({ width: 360, height: 780 });
-  await shoot(page, "fighter-overview-dark-360.png");
-
+  // The library, at the narrowest supported width.
   await page.emulateMedia({ colorScheme: "light" });
+  await page.setViewportSize({ width: 360, height: 780 });
   await page.getByRole("button", { name: "Characters", exact: true }).click();
   await shoot(page, "library-light-360.png");
 

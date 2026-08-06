@@ -72,6 +72,8 @@ export interface CharacterActionLogRepository {
 export interface CharacterDraftRepository {
   get(id: ID): Promise<CharacterDraftRecord | undefined>;
   list(): Promise<CharacterDraftRecord[]>;
+  /** Drafts bound to one committed character, newest first. */
+  listByEditingCharacter(characterId: ID): Promise<CharacterDraftRecord[]>;
   add(draft: CharacterDraftRecord): Promise<void>;
   /** Compare-and-swap on the draft revision. */
   replace(draft: CharacterDraftRecord, expectedRevision: number): Promise<boolean>;
@@ -221,6 +223,10 @@ export class DexieCharacterDraftRepository implements CharacterDraftRepository {
   }
   list() {
     return this.database.characterDrafts.orderBy("updatedAt").reverse().toArray();
+  }
+  async listByEditingCharacter(characterId: ID) {
+    const drafts = await this.database.characterDrafts.where("editingCharacterId").equals(characterId).toArray();
+    return drafts.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
   async add(draft: CharacterDraftRecord) {
     await this.database.characterDrafts.add(draft);

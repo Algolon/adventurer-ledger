@@ -266,10 +266,23 @@ export function requiredChoicesFor(
         };
       }),
       selected,
+      /*
+       * Resolved means the selection can actually be satisfied, not merely that
+       * the right number of IDs are stored.
+       *
+       * Counting alone let a saved option the content had stopped offering read
+       * as a finished step: no issue was raised, Review accepted it, and the
+       * commit wrote a selection nothing could resolve. Requiring each selected
+       * ID to still be one of this choice's options turns that into an ordinary
+       * unresolved choice, reported against the step that owns it — and the
+       * stored ID is left alone, so reinstalling the content resolves it again
+       * without the user re-choosing anything.
+       */
       resolved:
         selected.length >= choice.min &&
         selected.length <= choice.max &&
-        new Set(selected).size === selected.length,
+        new Set(selected).size === selected.length &&
+        selected.every(optionId => choice.options.some(option => option.id === optionId)),
       incompatibleOptions: incompatibleOptionsFor(choice, build, entries, index),
       sourceEntryId: activated.sourceEntryId,
       sourceLabel: activated.sourceLabel,
