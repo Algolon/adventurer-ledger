@@ -162,7 +162,9 @@ test.describe("dark browser preference keeps typed text readable", () => {
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
 
-    const amount = page.getByLabel("Amount", { exact: true });
+    // The amount control lives in the hit-point drawer on the play-first sheet.
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    const amount = page.getByRole("spinbutton", { name: "Amount" });
     await amount.fill("3");
     await expect(amount).toHaveValue("3");
     await expectReadable(amount, "the play-sheet Amount input");

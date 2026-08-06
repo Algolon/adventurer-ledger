@@ -249,10 +249,11 @@ describe("required choices", () => {
 
 describe("guided recommendations", () => {
   it("ranks a context-valid class recommendation with Why this copy", () => {
+    // Both fixture classes are context-valid for an empty draft; each carries
+    // its own Why this copy and none of them is auto-applied.
     const recommendations = recommendationsFor("class", EMPTY_DRAFT_BUILD, SYNTHETIC_ENTRIES);
-    expect(recommendations).toHaveLength(1);
-    expect(recommendations[0].optionId).toBe(SYNTHETIC_IDS.class);
-    expect(recommendations[0].why.length).toBeGreaterThan(0);
+    expect(recommendations.map(recommendation => recommendation.optionId)).toContain(SYNTHETIC_IDS.class);
+    expect(recommendations.every(recommendation => recommendation.why.length > 0)).toBe(true);
   });
 
   it("explains the ability method against the class's primary ability", () => {

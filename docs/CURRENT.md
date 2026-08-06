@@ -59,6 +59,64 @@ These are **open**, not delivered. A pilot will meet them.
   not evidence of handset behaviour: install, relaunch, offline operation and
   storage eviction on a real device are untested.
 
+## Play-first character sheet, first iteration
+
+The character sheet is now **Play mode**, not a rules console. Its rationale and
+phone screenshots are in
+[`product/PLAY_SHEET_RATIONALE.md`](product/PLAY_SHEET_RATIONALE.md); the
+specification it produced is
+[`product/MOBILE_SHEET_SPEC.md`](product/MOBILE_SHEET_SPEC.md).
+
+The sheet writes only session state — current and temporary hit points, hit
+dice, death saves, conditions, exhaustion, inspiration, spell slots and
+limited-use resources — and every permanent change goes through one **Edit
+character** action that opens the builder. The Override editor, the
+`Copy expression` control, the roll expressions, the `Active ruleset` footer and
+the contributor rows tagged with engine kinds and source IDs are gone from the
+sheet and from the library. Content management is unchanged under Settings.
+Explanations remain, as plain-words breakdowns in a details drawer.
+
+The information architecture is a glance header over five sections — Overview,
+Actions, Spells, Inventory, Character — with Spells present only when installed
+content declares spellcasting for one of the character's classes. Runtime state
+gained inspiration, exhaustion, death saves and hit-dice spend/recover, each with
+exact undo.
+
+A second synthetic fixture, the **Runecaller** caster (Sereth Marsh), joins
+Vanguard so the Spells section and the conditional builder step are exercised by
+something real. Both fixtures are original synthetic content.
+
+### The Edit character boundary
+
+Making the sheet Play mode put every permanent change behind one route, so that
+route has to be complete. It now is.
+
+`CharacterDraftService.openForCharacter` is the single entry point, and
+`draftBuildFromCharacter` is the single conversion from a committed character to
+an editable build — used by the service and by nothing else, so the page cannot
+reconstruct its own partial version. It hydrates every persisted permanent field,
+scopes the draft to the character's own ruleset, resumes an unfinished edit
+rather than replacing it, and records the character revision it read as the
+compare-and-swap token the commit must send. `CreateDraftCommand` no longer
+accepts an `editingCharacterId`, so an unhydrated edit draft cannot be created at
+all.
+
+A saved value the installed content can no longer confirm is kept and reported,
+never cleared: the hydration returns typed repair notes, and a choice is
+"resolved" only when every stored option is still offered — counting selections
+alone had let an unresolvable build pass Review and commit.
+
+Committing an edit re-synchronises runtime state through the existing D-08
+policy and touches nothing else. Hit points, temporary hit points, hit dice,
+inspiration, exhaustion, death saves, conditions and spent resources survive
+opening, saving, discarding and committing an edit.
+
+This iteration deliberately does not close attack derivation from carried
+equipment, Extra Attack, prepared-versus-known spells, upcasting, concentration
+tracking, currency, attunement, senses, defences, notes or creatures. Sections
+without trustworthy data are hidden rather than filled with invented values; the
+full list is at the end of the rationale.
+
 ## Baseline before M1
 
 - Next.js 16/React 19 PWA shell with responsive navigation;

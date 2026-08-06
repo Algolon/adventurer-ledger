@@ -8,8 +8,8 @@
  * every state carries a text or icon indicator so colour is never the only
  * signal. Touch targets are at least 44 CSS px, and play actions are 48.
  */
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Check, ClipboardCopy, TriangleAlert, X } from "lucide-react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { TriangleAlert, X } from "lucide-react";
 import type { DerivedValue, Contributor, RecoveryAction } from "@/src/services/derived-resolver";
 import { UNKNOWN_DISPLAY } from "@/src/services/derived-resolver";
 
@@ -39,6 +39,12 @@ export interface DialogProps {
    * destructive path is never what Enter reaches by habit.
    */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * `sheet` presents the surface as a bottom drawer on phones, which keeps a
+   * details panel thumb-reachable. The modal contract — trap, Escape, focus
+   * restoration — is identical; only the geometry changes.
+   */
+  presentation?: "center" | "sheet";
 }
 
 /** Modal surface with a focus trap and focus restoration. */
@@ -51,6 +57,7 @@ export function Dialog({
   role = "dialog",
   describedBy,
   initialFocusRef,
+  presentation = "center",
 }: DialogProps) {
   const container = useRef<HTMLElement>(null);
   const restoreTo = useRef<HTMLElement | null>(null);
@@ -97,9 +104,12 @@ export function Dialog({
   };
 
   return (
-    <div className="m2-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+    <div
+      className={presentation === "sheet" ? "m2-backdrop m2-backdrop-sheet" : "m2-backdrop"}
+      onMouseDown={event => event.target === event.currentTarget && onClose()}
+    >
       <section
-        className="m2-dialog"
+        className={presentation === "sheet" ? "m2-dialog m2-dialog-sheet" : "m2-dialog"}
         role={role}
         aria-modal="true"
         aria-labelledby={titleId}
@@ -189,53 +199,25 @@ export function DerivedNumber({
   );
 }
 
-/** Explanation trace: base inputs, applied contributors, and source provenance. */
-export function ContributorList({ contributors }: { contributors: readonly Contributor[] }) {
-  if (!contributors.length) return <p className="m2-muted">No contributors are available for this value.</p>;
+/**
+ * Human-readable calculation breakdown for a details drawer.
+ *
+ * It names each input in plain words with its signed amount. Engine vocabulary
+ * — contributor kinds, source IDs, target paths, expressions — never renders
+ * here; the drawer explains a number the way a person would at the table.
+ */
+export function Breakdown({ contributors }: { contributors: readonly Contributor[] }) {
+  const rows = contributors.filter(contributor => contributor.label);
+  if (!rows.length) return <p className="m2-muted">There is nothing to break down for this value.</p>;
   return (
-    <ul className="m2-contributors">
-      {contributors.map((contributor, index) => (
+    <ul className="sheet-breakdown">
+      {rows.map((contributor, index) => (
         <li key={`${contributor.label}-${index}`}>
-          <span className="m2-contributor-kind">{contributor.kind}</span>
           <span>{contributor.label}</span>
           {contributor.amount !== undefined ? <b>{signed(contributor.amount)}</b> : null}
-          {contributor.sourceId ? <small className="m2-muted">{contributor.sourceId}</small> : null}
         </li>
       ))}
     </ul>
-  );
-}
-
-/**
- * Copy expression. M2.1 has no Roll control, no random result and no roll
- * history: the expression itself is the actionable output (D-08).
- */
-export function CopyExpression({ expression, label }: { expression: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(expression);
-      setCopied(true);
-    } catch {
-      // Clipboard permission may be refused; the expression stays selectable.
-      setCopied(false);
-    }
-  };
-
-  return (
-    <span className="m2-expression">
-      <code>{expression}</code>
-      <button type="button" className="m2-play-action" onClick={copy} aria-label={`Copy ${label} expression ${expression}`}>
-        {copied ? <Check aria-hidden="true" /> : <ClipboardCopy aria-hidden="true" />}
-        <span>{copied ? "Copied" : "Copy expression"}</span>
-      </button>
-    </span>
   );
 }
 

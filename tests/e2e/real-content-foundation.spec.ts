@@ -190,8 +190,10 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
     // level 5 hit-point base plus the Constitution modifier on each of the five
     // levels, and the level 5 resource maximum. A character created at 1 would
     // show none of them.
-    await expect(page.getByRole("button", { name: /Explain Proficiency, \+3/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Proficiency bonus \+3/ })).toBeVisible();
     await expect(page.getByText("27 / 27")).toBeVisible();
+    // Limited-use resources are part of the Actions section.
+    await page.getByRole("tab", { name: "Actions" }).click();
     await expect(page.getByText("Emberlight")).toBeVisible();
     await expect(page.getByText("4 / 4")).toBeVisible();
   });

@@ -92,16 +92,17 @@ test("the play sheet and its details surface have no serious or critical violati
   await buildBrammel(page);
   await scan(page, "play sheet");
 
-  await page.getByRole("button", { name: /Explain Armour class/ }).click();
+  await page.getByRole("button", { name: /Armour class 18\. Open details/ }).click();
   await expect(page.getByRole("dialog", { name: "Armour class" })).toBeVisible();
-  await scan(page, "value details dialog");
+  await scan(page, "value details drawer");
 });
 
 test("the level-up dialog has no serious or critical violations", async ({ page }) => {
   await page.goto(APP_ROOT);
   await page.getByRole("button", { name: "New character" }).last().click();
   await buildBrammel(page);
-  await page.getByRole("button", { name: "Level up" }).click();
+  await page.getByRole("tab", { name: "Character" }).click();
+  await page.getByRole("button", { name: /^Level up/ }).click();
   await expect(page.getByRole("dialog", { name: "Level 1 to 2" })).toBeVisible();
   await scan(page, "level-up dialog");
 });

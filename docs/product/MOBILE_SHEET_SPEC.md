@@ -1,186 +1,261 @@
-# Runefolio active mobile character sheet
+# Runefolio play-first character sheet
 
-M2.1 runtime, dice-expression, and renderability decisions follow [M2_DECISIONS.md](M2_DECISIONS.md).
+The reasoning behind this specification, with screenshot evidence, is in
+[`PLAY_SHEET_RATIONALE.md`](PLAY_SHEET_RATIONALE.md). Runtime, dice-expression
+and renderability decisions follow [`M2_DECISIONS.md`](M2_DECISIONS.md).
 
 ## Purpose
 
-The active sheet is an instrument panel for play, not a paper sheet squeezed onto a phone. It prioritizes “what can I do now?” and “what changed?” while keeping every number explainable.
+The sheet is a clean, flexible paper sheet for play, not a rules-engine console.
+It answers "what is true right now?" and "what can I change this session?" while
+keeping every number explainable in plain words.
 
-## Sheet navigation
+D&D Beyond is reference for **information grouping only**. Minimal Character
+Sheet is reference for **restraint and glanceability only**. Neither is imitated
+visually; the visual language is the existing Runefolio identity, simplified for
+phone use.
 
-Five destinations are available inside a character:
+## The interaction boundary
 
-1. **Play** — headline state, defenses, checks, favorite actions, resources;
-2. **Actions** — attacks, actions, bonus actions, reactions, other;
-3. **Spells** — prepared/known spells, slots and casting details when relevant;
-4. **Inventory** — equipped state, items, currency, carrying information;
-5. **More** — features, proficiencies, conditions, notes, build, history, export.
+The sheet is **Play mode**. It may directly change only transient session state:
 
-On compact phones, use a bottom tab bar with Play, Actions, Spells (conditional), Inventory, and More. If Spells is not relevant, keep four evenly spaced destinations; do not leave an empty slot. On desktop these become sections in a left/secondary rail and can compose into a dashboard.
+- current and temporary hit points;
+- hit dice;
+- death saves;
+- conditions and exhaustion;
+- inspiration;
+- spell slots;
+- limited-use resources;
+- item quantities, where the runtime service supports them.
 
-## Play home
+Permanent character data changes through exactly one **Edit character** action,
+which opens the builder. The sheet carries no Override control, no Copy
+expression control, no manual calculation editing and no ruleset switching. Where
+a user might reasonably look for one, the surface says where it lives instead —
+"Changing the hit point maximum is part of Edit character."
+
+## Edit character
+
+Edit character opens the builder on the character itself, not on a blank form
+that happens to carry its ID. One draft exists per character, and pressing Edit:
+
+- **hydrates** it from the committed record through a single conversion — name,
+  nickname, class, level, subclass, species, background, ability scores and the
+  origin split they were built from, every choice and equipment selection, manual
+  values and actions, and the presentation mode;
+- **scopes** it to the character's own ruleset, never the device-wide default;
+- **resumes** an unfinished edit rather than replacing it, however many times the
+  control is pressed;
+- **records** the character revision it read, so a commit that would overwrite
+  newer work is refused rather than applied.
+
+Save & close keeps the draft and writes nothing to the character. Discard changes
+throws the draft away and writes nothing either; the next Edit press hydrates
+from the commit again. Completing Review updates the existing character in place:
+the same ID, a new revision and version, no duplicate in the library.
+
+A saved value the installed content can no longer confirm — an uninstalled class,
+an option a pack stopped offering — is **kept and reported**, never cleared. The
+builder names the step that can confirm it and says the value is still stored.
+
+Play state is untouched by all of this. Opening, saving, discarding and
+committing an edit leave hit points, temporary hit points, hit dice, inspiration,
+exhaustion, death saves, conditions and spent resources exactly as they were,
+except where a changed maximum moves a current value by the same delta.
+
+## Technical presentation
+
+The character library and the sheet never display an active ruleset, an internal
+ruleset, source or pack ID, an issue code, a raw expression,
+calculation-engine terminology, or a technical provenance string. Content
+management stays available under Settings.
+
+Human-readable calculation breakdowns are shown in the details drawer: named
+inputs with signed amounts, never console output.
+
+A state badge appears on a library row only when it carries information —
+`Manual`, `Incomplete`, `Missing source`. The nominal automatic state is
+unlabelled.
+
+## Structure
+
+### Glance header
+
+Always visible without scrolling: name; class, subclass and level; hit points
+and temporary hit points; armour class; initiative; speed; proficiency bonus;
+conditions and exhaustion; inspiration.
 
 ```text
 ┌──────────────────────────────────┐
-│ ‹ Characters       Brammel   ⋯  │
-│ Vanguard 1 · Synthetic Offline ✓│
-│                                  │
-│  AC 16    Speed 30    Init +2   │
-│                                  │
-│ Hit points                       │
-│  11 / 11   [Damage] [Heal]       │
-│                                  │
-│ Saves & checks                   │
-│ STR +5  DEX +2  CON +4  [All ›] │
-│                                  │
-│ Favorite actions                 │
-│ Longsword       +5 · 1d8+3   ›  │
-│ Rallying Breath 1 / 1         ›  │
-│                                  │
-│ Conditions                  [＋] │
+│ Brammel Voss              [Edit] │
+│ Vanguard 1 · Riverborn           │
+│ ♡ HIT POINTS   7 / 10            │
+│ [AC 18][INIT +2][SPEED 30][+2]   │
+│ (✦ Inspiration)(Winded)(＋Cond.) │
+│ Inspiration gained.       [Undo]  │
 ├──────────────────────────────────┤
-│ Play  Actions  Inventory  More   │
+│ Overview Actions Inventory Char.  │
 └──────────────────────────────────┘
 ```
 
-The top app bar remains compact. Offline-ready is a quiet icon/label, not a persistent toast. Missing-source or save-risk banners replace the secondary metadata row because they are more important.
+Hit points take a full-width tile and the largest numeral on the sheet. The
+other four values sit in one row of equal tiles. Transient state is a chip row
+below them, so a condition is read in the same glance as the hit points it
+affects.
+
+### Primary sections
+
+The section count stays small. There is no long section menu.
+
+1. **Overview** — abilities, saving throws, skills, and (when content models
+   them) senses and defences.
+2. **Actions** — attacks, actions, bonus actions, reactions, and limited-use
+   resources.
+3. **Spells** — present only when installed content declares spellcasting for one
+   of the character's classes. When absent, the strip is four sections wide; no
+   empty slot is left.
+4. **Inventory** — equipped gear first, then carried, and (when stored) currency
+   and attunement.
+5. **Character** — identity, features, traits, proficiencies, restore points,
+   and the Edit character and Level up actions. Notes and creatures join this
+   section when durable fields exist for them.
+
+The strip is a tab list: arrow keys, Home and End move between sections, and
+each panel is labelled by its tab.
 
 ## High-frequency interactions
 
-### Checks, saves, initiative, and attacks
-
-Tapping a rollable row opens a bottom sheet with:
-
-- roll label and expression;
-- advantage/normal/disadvantage segmented choice if relevant;
-- situational modifiers;
-- a Copy expression action;
-- compact breakdown and source link.
-
-M2.1 displays the roll expression and offers Copy expression. It has no random result, animation, or roll history, and therefore no control labelled Roll.
-
 ### Hit points
 
-Damage and Heal open numeric keypads with amount, optional note, and preview. Damage previews temporary HP consumption before current HP loss. Confirm shows the resulting value and an Undo snackbar. Raw Edit current/max HP is under Manage, not beside Damage.
+Tapping hit points opens a drawer with an amount stepper, a live preview of both
+outcomes, and Damage, Heal and Set temp. Damage consumes temporary hit points
+before current. Hit dice spend and recover from the same drawer, as do Short rest
+and Long rest. Undo sits beside them. Editing the maximum is not here; it is
+Edit character.
 
-At 0 HP, the play home replaces normal HP actions with death-save controls and Stabilize, according to the active ruleset. This is beyond the first Brammel implementation but the information architecture must reserve the state.
+At 0 hit points the sheet grows a Death saves card with three-pip success and
+failure tallies and a Reset control. Regaining hit points above 0 clears the
+tally in the same transaction.
 
-### Resources
+### Resources and spell slots
 
-Resource rows show name, current/maximum, reset cadence, and spend/recover buttons. Tapping the row opens description and history. A spend action that would go below zero asks for explicit override; it does not clamp silently.
+Rows show name, current over maximum, and recharge cadence in words ("Back on a
+long rest"). A − / + stepper spends and recovers one at a time and is disabled at
+its bound rather than clamping silently. Slot resources declared by the
+spellcasting content render in Spells; everything else renders in Actions.
 
-### Rest
+### Rests
 
-Rest is opened from the More/action menu. Choose Short rest or Long rest, review affected resources/HP/hit dice, then Apply. The preview lists changes and exceptions. Completion offers Undo. A rest is one transaction.
+This is the whole rest contract. It is written down because "what a rest does"
+is the sort of thing that otherwise gets filled in from memory of a published
+edition, and the sheet applies only what this document states.
 
-### Conditions
+A **short rest** restores every resource whose content declares a `short-rest`
+recharge, to its maximum. It changes nothing else: not hit points, not hit dice,
+not exhaustion, not the death-save tally.
 
-Add condition opens a searchable local list. Active conditions show source/ruleset and optional duration/note. Missing full text does not prevent tracking the condition label. Removing a condition is immediate with Undo.
+A **long rest**:
 
-## Action list
+- restores every resource whose declared recharge is anything other than `none`;
+- sets current hit points to the maximum and temporary hit points to zero;
+- restores hit dice to the character's level;
+- reduces exhaustion by exactly one level, never below zero;
+- clears the death-save tally.
 
-Group by action economy in the current ruleset. Each row contains:
+Both are one runtime action with an exact undo, so a rest taken by accident is
+reversed to the state before it rather than approximated.
 
-- action name;
-- attack/check/save expression;
-- damage/effect summary;
-- range/reach;
-- resource or ammunition cost;
-- source/manual/override indicator only when useful.
+A **permanent edit is not a rest.** Committing a build change re-synchronises
+runtime state against the new maxima using the preserve-expenditure policy in
+D-08: current values move by the same delta as their maxima, and hit dice are
+clamped to the character's level rather than refilled or emptied.
 
-Default row tap opens detail; a dedicated roll/use button performs the high-frequency action. This avoids accidental resource expenditure when seeking rules text. Spending a limited resource is a separate confirmable step or an explicit combined “Use and spend” action.
+**Level up and Edit character treat hit dice differently, on purpose.** Level up
+grants one hit die (`hitDiceRemaining + 1`) — D-08's preserve-expenditure policy
+applied to the pool, matching how it moves hit points and resources when their
+maxima rise. Edit character grants none: a build correction is not advancement,
+so it only clamps. Neither path refills a spent pool, and neither empties one.
 
-Favorite actions can be pinned to Play. Pinning changes presentation only, not character mechanics.
+### Conditions, exhaustion and inspiration
 
-## Spells
+Inspiration is a toggle chip in the header carrying `aria-pressed`. Active
+conditions are chips that open their description and a Remove control.
+`＋ Condition` opens a drawer listing exhaustion with a stepper and the
+conditions the ruleset can track. Missing full text never prevents tracking a
+condition label.
 
-Spells are not part of M2.1. When a later class path makes them relevant, the Spells tab contains:
+### Rollable values
 
-- casting summary and save DC/attack modifier;
-- slot/resource trackers;
-- prepared/known filter;
-- search and filters for level, casting time/action, concentration, ritual, and source;
-- spell rows with essential play summary;
-- detail drawer with full locally available text and provenance.
+Tapping a value or an action opens its details drawer. M2.1 shows no random
+result, no roll history and no roll expression, and therefore no control
+labelled Roll and no Copy expression control. The drawer explains the number.
 
-Prepared state is a build/session configuration distinct from slot expenditure. Changing prepared spells uses Edit mode and may create a character version according to ruleset policy. Casting a spell may spend a slot/resource but never toggles preparation.
+## Details drawer
 
-## Inventory
-
-Inventory prioritizes equipped items and consumables. Equip/unequip previews affected AC, attacks, speed, or other derived values. Quantity changes have Undo. Custom items remain usable when their source entry is absent; show the saved manual/snapshot fields and missing-source state.
-
-## Details and explanations
-
-Every headline value supports “Why this value?” with the same structure:
+Every headline value opens the same structure — a bottom sheet on phone, a
+centred modal from 960 px:
 
 ```text
-Initiative +2
-Base                    Dexterity modifier +2
-Other modifiers                            +0
-Override                                    —
-Calculated under                   2024 core
+Armour class            18
+Travel Mail                            +14
+Dexterity modifier (capped at +2)       +2
+Round Guard                             +2
 ```
 
-Use a bottom sheet on phone and a dockable side panel on desktop. The browser Back action closes detail and returns to the prior scroll position. Full private text may be rendered to the user but must not be echoed into URLs, diagnostics, or accessibility labels beyond the visible user-authored title.
+Named inputs, signed amounts, no IDs, no ruleset, no paths. Drawers trap focus,
+close on Escape, and restore focus to the invoker. Unknown values render `—`
+with the action that would resolve them.
 
-## Play versus edit affordances
-
-| Intent | Play surface | Edit surface |
-| --- | --- | --- |
-| Take damage | Damage action | Edit current/max HP |
-| Spend Rallying Breath | Spend/use | Change resource definition/override maximum |
-| Equip shield | Equip toggle with preview | Add/delete/edit inventory item |
-| Use an attack | Roll/use action | Edit manual attack or build choice |
-| Read feature | Detail | Replace/manual/override feature choice |
-
-Edit mode has a persistent “Editing character” indicator and exits through Review changes or Cancel. Runtime actions never open the full builder.
-
-## Offline behavior
-
-The active sheet, local details, mutable play state, and local history work offline after shell readiness. If a referenced full-text asset is not cached or a source is missing, show the compact saved summary and a Missing source state. Network loss during play is informational unless a requested action truly requires network.
-
-Do not display an “Offline” error on every interaction. The global state should read:
-
-- **Ready offline** — shell and local records available;
-- **Offline** — currently disconnected, local functions active;
-- **Not ready offline** — user should keep the app open online before relying on it.
+Full private text may be rendered to the user but must not be echoed into URLs,
+diagnostics, or accessibility labels beyond the visible user-authored title.
 
 ## Save receipts and undo
 
-Session mutations optimistically update only after the local transaction succeeds. The user sees a brief, non-obscuring receipt such as “3 damage applied · Undo.” If the write fails, restore the prior display, keep the intended mutation available for Retry, and announce the failure.
+A session mutation updates the display only after the local transaction
+succeeds, then posts a short receipt — "Took 4 damage. Now 6 hit points." — with
+Undo beside it. If the write fails, the prior display is restored and the failure
+is announced. History records action type and timestamp; user notes stay private
+and are never copied into diagnostics.
 
-History records action type and timestamp without copying sensitive notes or full text into diagnostics. User-entered action notes remain private content.
+## Incomplete and missing-source sheets
 
-## Incomplete and missing-source sheet
+An incomplete but renderable character opens with a banner in plain words and
+`—` for what cannot be calculated, never zero. A missing-source character uses
+its last safe resolved snapshot where available, says that affected values are
+uncertain, and points to Settings. No alternate source is matched by display name
+alone, and nothing is substituted silently.
 
-An incomplete but renderable character opens in Play with an issue banner and clearly unknown values. Unknown is displayed as `—`, not zero. Tapping it opens the missing inputs and Resume build action.
+## Responsive behaviour
 
-A missing-source character uses its last safe resolved snapshot where available and marks affected fields. It offers:
-
-- Find/import source;
-- Re-enable installed source;
-- Preserve snapshot as manual value;
-- Replace choice in Edit;
-- Continue read-only where calculation safety is unknown.
-
-No alternate source is matched by display name alone.
-
-## Responsive behavior
-
-| Width | Sheet composition |
+| Width | Composition |
 | ---: | --- |
-| 360 / 390 / 412 | One column; bottom tabs; full-width sheets; no horizontal document scroll |
-| 768 | One or two columns by content; bottom tabs or compact rail; detail sheet up to readable width |
-| 1024 | Two-column play dashboard with compact persistent rail when effective CSS width permits; off-canvas fallback under zoom/width pressure |
-| 1440 | Three-region composition possible: nav, sheet dashboard, docked detail |
+| 360 / 390 / 412 | One column; abilities three-across; sticky section strip; drawers as bottom sheets; no horizontal document scroll |
+| 600+ | Abilities six-across; hit points and the four tiles share one row |
+| 960+ | Section strip static; drawers become centred modals; primary navigation becomes a side rail |
 
-All widths preserve the same task order. Long names wrap to two lines or truncate with accessible full name; numeric values never shrink below readable size. Cards and grid children use `min-width: 0`.
+All widths preserve the same task order. Long names wrap or truncate with an
+accessible full name; numeric values never shrink below readable size. Cards and
+grid children use `min-width: 0`.
 
-## Keyboard and screen-reader behavior
+## Keyboard, screen reader and colour
 
-- Each roll/use control has an explicit verb and target, e.g. “Roll Longsword attack,” not “+5.”
+- Every action names its verb and target: "Apply 4 damage to Brammel Voss", not
+  "−".
 - Resource controls announce current and maximum before the action.
-- Changes use polite live regions; urgent save failure uses `role="alert"`.
-- Bottom sheets trap focus, have a labelled heading, close on Escape, and restore focus to the invoker.
-- Tab order follows visual task order; roving tab patterns are used only for true composite widgets.
-- Keyboard users can perform every touch action; hover is never required.
+- Proficiency is a filled dot *and* part of the accessible name, so it survives
+  forced-colors mode.
+- Receipts use a polite live region; missing-source and incomplete banners use
+  `role="alert"`.
+- Touch targets are at least 44 CSS px; play actions and steppers are 48.
+- Tab order follows visual task order. Keyboard users can perform every touch
+  action; hover is never required.
+- The sheet ships a real dark scheme. All sheet colour resolves through
+  sheet-scoped custom properties, and the dark block restates every one, so no
+  dark surface inherits a light-assuming foreground.
+
+## Offline behaviour
+
+The sheet, local details, session state and local history work offline after
+shell readiness. Global state reads as **Ready offline**, **Offline**, or **Not
+ready offline**. Network loss during play is informational; no interaction shows
+an offline error unless it truly requires the network.

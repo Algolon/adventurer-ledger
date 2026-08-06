@@ -29,6 +29,7 @@ import {
   type BuilderStepId,
 } from "@/src/services/build-planner";
 import { reconcileAbilityAllocation } from "@/src/services/ability-allocation";
+import { draftBuildFromCharacter, type EditDraftRepairNote } from "@/src/services/edit-draft";
 import {
   applyRulesetChange,
   planRulesetChange,
@@ -60,12 +61,20 @@ export interface ServiceContext {
   logger?: ServiceLogger;
 }
 
+/**
+ * Starts a new build. It cannot start an edit.
+ *
+ * `editingCharacterId` used to be accepted here, and that was the whole defect:
+ * the command bound a draft to a character without carrying any of that
+ * character's data, so Edit character opened an empty builder wearing the
+ * character's ID. Editing now has one entry point — `openForCharacter` — which
+ * cannot be called without hydrating.
+ */
 export interface CreateDraftCommand {
   readonly draftId: ID;
   readonly rulesetProfileId: ID;
   readonly level: number;
   readonly presentation: CharacterPresentationMode;
-  readonly editingCharacterId?: ID;
 }
 
 export interface UpdateDraftCommand {
@@ -81,6 +90,17 @@ export interface DraftSnapshot {
   plan: BuildPlan;
   /** Save receipt: the revision the caller must send with its next command. */
   revision: number;
+}
+
+/** A draft opened against a committed character, with how it was opened. */
+export interface EditDraftSnapshot extends DraftSnapshot {
+  /** True when an unfinished edit draft was resumed instead of hydrated afresh. */
+  resumed: boolean;
+  /**
+   * Values carried across that the installed content cannot currently confirm.
+   * Empty for the ordinary case. Never populated by dropping anything.
+   */
+  repairs: readonly EditDraftRepairNote[];
 }
 
 export class CharacterDraftService {
@@ -102,7 +122,6 @@ export class CharacterDraftService {
       presentation: command.presentation,
       status: "in-progress",
       lastStepId: "start",
-      ...(command.editingCharacterId ? { editingCharacterId: command.editingCharacterId } : {}),
       build: { ...EMPTY_DRAFT_BUILD, level: command.level },
       createdAt: now,
       updatedAt: now,
@@ -153,6 +172,103 @@ export class CharacterDraftService {
     }
     this.log({ operation: "draft.update", recordId: command.draftId, actualRevision: outcome.result.revision });
     return ok(await this.snapshot(outcome.result));
+  }
+
+  /**
+   * Opens the one edit draft for a committed character.
+   *
+   * Three properties make this a boundary rather than a convenience wrapper.
+   *
+   * It resumes. An unfinished edit draft already bound to this character is
+   * returned as it stands. Replacing it with a fresh hydration would throw away
+   * work the user had explicitly saved and closed, and there is no way for them
+   * to know that pressing Edit again is the thing that discards it.
+   *
+   * It uses the character's own ruleset, never the device-wide default. A build
+   * rescoped to whichever ruleset happens to be active now is a different build.
+   *
+   * It hydrates through `draftBuildFromCharacter` — the single conversion — so
+   * the draft the builder edits is the committed aggregate, and the revision it
+   * was taken from is recorded on the draft as the token the commit must send.
+   *
+   * The whole thing is one transaction, so two presses in the same tick cannot
+   * both observe "no draft yet" and both create one.
+   */
+  async openForCharacter(
+    characterId: ID,
+    draftId?: ID,
+  ): Promise<ServiceOutcome<EditDraftSnapshot>> {
+    const { database, repositories } = this.context;
+    const now = this.clock();
+
+    const character = await repositories.characters.get(characterId);
+    if (!character) return notFound(characterId);
+    const { entries } = await loadRulesetScope(repositories, character.rulesetProfileId);
+
+    const outcome = await database.transaction(
+      "rw",
+      [database.characters, database.characterDrafts],
+      async (): Promise<ServiceOutcome<{ draft: CharacterDraftRecord; resumed: boolean; notes: readonly EditDraftRepairNote[] }>> => {
+        // Re-read inside the transaction: the revision recorded on the draft has
+        // to be the one that was current when the draft was written.
+        const current = await repositories.characters.get(characterId);
+        if (!current) return notFound(characterId);
+
+        const existing = (await repositories.drafts.listByEditingCharacter(characterId)).find(
+          item => item.status === "in-progress",
+        );
+        const hydration = draftBuildFromCharacter(current, entries);
+        if (existing) return ok({ draft: existing, resumed: true, notes: hydration.notes });
+
+        /*
+         * A free ID, not simply the obvious one.
+         *
+         * `draft:edit:<characterId>` is taken for good after the first
+         * discarded edit — the abandoned record keeps the ID, and history is
+         * never deleted — so reusing it blindly made the second edit of a
+         * character fail permanently. The suffix is a count of what is already
+         * there rather than a timestamp, so the ID stays deterministic.
+         */
+        const base = draftId ?? `draft:edit:${characterId}`;
+        let id = base;
+        for (let attempt = 2; await repositories.drafts.get(id); attempt += 1) id = `${base}:${attempt}`;
+
+        const draft: CharacterDraftRecord = {
+          id,
+          revision: 1,
+          rulesetProfileId: current.rulesetProfileId,
+          presentation: current.presentation,
+          status: "in-progress",
+          // The builder resumes where the user left it; a fresh edit draft has
+          // no such place, and Basics is where the sequence starts.
+          lastStepId: "start",
+          editingCharacterId: characterId,
+          editingCharacterRevision: current.revision,
+          build: hydration.build,
+          createdAt: now,
+          updatedAt: now,
+        };
+        try {
+          await repositories.drafts.add(draft);
+        } catch {
+          return { status: "conflict", code: "DRAFT_ALREADY_EXISTS", recordId: draft.id };
+        }
+        return ok({ draft, resumed: false, notes: hydration.notes });
+      },
+    );
+
+    if (outcome.status !== "ok") return outcome;
+    this.log({
+      operation: outcome.result.resumed ? "draft.edit.resume" : "draft.edit.open",
+      recordId: outcome.result.draft.id,
+      actualRevision: outcome.result.draft.revision,
+      ...(outcome.result.notes.length ? { issueCodes: outcome.result.notes.map(note => note.code) } : {}),
+    });
+    return ok({
+      ...(await this.snapshot(outcome.result.draft)),
+      resumed: outcome.result.resumed,
+      repairs: outcome.result.notes,
+    });
   }
 
   /**

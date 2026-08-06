@@ -22,6 +22,7 @@ import {
   BUILDER_STEPS,
   recommendationsFor,
   remainingArraySlots,
+  resourceIdsFor,
   type BuilderStepId,
   type PlannedStep,
   type RequiredChoice,
@@ -33,6 +34,7 @@ import { abilityModifier } from "@/src/rules/engine";
 import { Dialog, signed } from "@/src/ui/primitives";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import type { DraftSnapshot } from "@/src/services/character-services";
+import type { EditDraftRepairNote } from "@/src/services/edit-draft";
 import type { RulesetChangePreview } from "@/src/services/ruleset-change";
 import type { InstalledRulesetView } from "@/src/services/content-install-service";
 
@@ -63,6 +65,24 @@ const ISSUE_LABELS: Record<string, string> = {
   PROFICIENCY_DUPLICATE_SELECTION: "A selected option grants a proficiency you already have",
   ORIGIN_INCREASE_NOT_AVAILABLE:
     "An ability increase is not offered by your current origin. Place it again on the Abilities step.",
+};
+
+/**
+ * What a preserved-but-unconfirmable value means, in the user's words.
+ *
+ * Each one says the same two things: the saved value is still here, and this is
+ * the step that can confirm it. Neither sentence would be true if the hydration
+ * had cleared the value, which is why it does not.
+ */
+const REPAIR_LABELS: Record<EditDraftRepairNote["code"], string> = {
+  CLASS_SOURCE_MISSING: "The saved class is not installed right now. It is still stored — check Class & level.",
+  SUBCLASS_SOURCE_MISSING: "The saved subclass is not installed right now. It is still stored — check Class & level.",
+  SPECIES_SOURCE_MISSING: "The saved species is not installed right now. It is still stored — check Origin.",
+  BACKGROUND_SOURCE_MISSING: "The saved background is not installed right now. It is still stored — check Origin.",
+  CHOICE_OPTION_NO_LONGER_OFFERED: "A saved choice is no longer offered by this content — check Class choices.",
+  EQUIPMENT_OPTION_NO_LONGER_OFFERED: "A saved equipment choice is no longer offered by this content — check Equipment.",
+  ORIGIN_ALLOCATION_NOT_RECOVERED:
+    "The saved ability scores are kept exactly, but how the origin increases were placed could not be read back — check Abilities.",
 };
 
 const labelFor = (code: string) => ISSUE_LABELS[code] ?? code;
@@ -106,10 +126,17 @@ export type DraftPatch =
 
 export function CharacterBuilder({
   draftId,
+  repairs = [],
   onFinished,
   onClose,
 }: {
   draftId: string;
+  /**
+   * Values the edit hydration carried across but the installed content cannot
+   * confirm. They are reported, never applied: the saved selection is still in
+   * the draft, and this only says which step can confirm it again.
+   */
+  repairs?: readonly EditDraftRepairNote[];
   onFinished(characterId: string): void;
   onClose(): void;
 }) {
@@ -126,6 +153,8 @@ export function CharacterBuilder({
   const [showSteps, setShowSteps] = useState(false);
   /** A ruleset change that has been previewed and not yet answered. */
   const [rulesetChange, setRulesetChange] = useState<RulesetChangePreview | null>(null);
+  /** True while the discard confirmation is open. Discarding is not one press. */
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   /**
    * A navigation or commit that is waiting on persistence.
    *
@@ -355,6 +384,35 @@ export function CharacterBuilder({
   };
 
   /**
+   * Throws this edit away and leaves the committed character untouched.
+   *
+   * It exists because resuming is the right default and would otherwise be a
+   * one-way door. An edit draft is kept and reopened rather than replaced, so a
+   * user who changed their mind halfway through had no route back to the values
+   * that are actually committed — every later Edit press would return them to
+   * the abandoned attempt. Abandoning the draft is the way back, and it writes
+   * nothing to the character: the next Edit press hydrates from the commit
+   * again.
+   */
+  const discardEdit = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = "close";
+    setPendingAction("close");
+    try {
+      // The queue is drained first so an autosave in flight cannot land after
+      // the abandon and revive the draft as in-progress.
+      await flushPending();
+      await queueRef.current;
+      await drafts.abandon(draftId, revisionRef.current ?? snapshot.revision);
+    } finally {
+      inFlightRef.current = null;
+      setPendingAction(null);
+      setConfirmDiscard(false);
+    }
+    onClose();
+  };
+
+  /**
    * Back is a navigation like any other, and persists like one.
    *
    * It writes `lastStepId` too, so it takes the same guard: leaving it
@@ -424,13 +482,23 @@ export function CharacterBuilder({
     await queueRef.current;
     const fingerprint = await query.contentFingerprint(draft.rulesetProfileId);
     const characterId = draft.editingCharacterId ?? `character:${draftId.replace(/^draft:/, "")}`;
-    const existing = draft.editingCharacterId ? await query.sheet(draft.editingCharacterId) : undefined;
+    /*
+     * The revision the draft was hydrated from, not one read fresh now.
+     *
+     * Reading it here would assert whatever the character had just become,
+     * which makes staleness undetectable by construction: a level-up applied in
+     * another tab while this builder was open would be quietly overwritten by a
+     * build that never saw it. Sending the recorded token means that case comes
+     * back as a refusal the user can act on.
+     */
     const outcome = await commit.commit({
       operationId: `commit:${draftId}:${revisionRef.current ?? snapshot.revision}`,
       draftId,
       expectedDraftRevision: revisionRef.current ?? snapshot.revision,
       characterId,
-      ...(existing ? { expectedCharacterRevision: existing.characterRevision } : {}),
+      ...(draft.editingCharacterRevision !== undefined
+        ? { expectedCharacterRevision: draft.editingCharacterRevision }
+        : {}),
       intent: draft.editingCharacterId ? "edit" : build.manualSheet ? "manual-sheet" : "create",
       acknowledgedIssueCodes: [...build.acknowledgedIssueCodes],
       expectedContentFingerprint: fingerprint,
@@ -464,6 +532,22 @@ export function CharacterBuilder({
         })),
       );
     }
+    else if (outcome.status === "stale" && outcome.recordId === characterId)
+      /*
+       * A refusal, stated as one. The newer work is intact and this build is
+       * intact; what cannot be done is write one over the other without the
+       * user knowing which they are keeping. Naming the character rather than
+       * "your content" is the difference between a message that explains and a
+       * message that only says something went wrong.
+       */
+      setCommitErrors([
+        {
+          code: "CHARACTER_CHANGED_ELSEWHERE",
+          label:
+            "This character was changed somewhere else after this edit was opened. Nothing has been overwritten. Close this edit and open it again to work from the current version.",
+          fromPlan: false,
+        },
+      ]);
     else if (outcome.status === "stale" || outcome.status === "conflict")
       setCommitErrors([
         {
@@ -584,6 +668,16 @@ export function CharacterBuilder({
           >
             {draft.presentation === "guided" ? "Guided mode" : "Flexible mode"}
           </button>
+          {draft.editingCharacterId ? (
+            <button
+              type="button"
+              className="m2-save-close"
+              onClick={() => setConfirmDiscard(true)}
+              disabled={pendingAction !== null}
+            >
+              Discard changes
+            </button>
+          ) : null}
           <button
             type="button"
             className="m2-save-close"
@@ -636,6 +730,18 @@ export function CharacterBuilder({
           <button type="button" className="m2-button" onClick={() => void save({})}>
             Retry save
           </button>
+        </div>
+      ) : null}
+
+      {repairs.length ? (
+        <div className="m2-banner m2-banner-warning" role="status">
+          <strong>Some saved values need confirming</strong>
+          <p>Nothing has been cleared. These are still stored exactly as they were committed.</p>
+          <ul className="m2-plain-list">
+            {[...new Set(repairs.map(note => note.code))].map(code => (
+              <li key={code}>{REPAIR_LABELS[code]}</li>
+            ))}
+          </ul>
         </div>
       ) : null}
 
@@ -698,6 +804,10 @@ export function CharacterBuilder({
         />
       ) : null}
 
+      {confirmDiscard ? (
+        <DiscardEditConfirmation onCancel={() => setConfirmDiscard(false)} onConfirm={() => void discardEdit()} />
+      ) : null}
+
       {/* Exactly two actions, one row, equal height: Back secondary, Continue primary. */}
       <footer className="m2-task-footer">
         <button
@@ -717,7 +827,11 @@ export function CharacterBuilder({
             disabled={pendingAction !== null}
             aria-busy={pendingAction === "commit" || undefined}
           >
-            {pendingAction === "commit" ? "Saving…" : "Finish and open sheet"}
+            {pendingAction === "commit"
+              ? "Saving…"
+              : draft.editingCharacterId
+                ? "Save changes and open sheet"
+                : "Finish and open sheet"}
             <ArrowRight aria-hidden="true" />
           </button>
         ) : (
@@ -734,6 +848,47 @@ export function CharacterBuilder({
         )}
       </footer>
     </div>
+  );
+}
+
+/**
+ * The discard confirmation.
+ *
+ * Keeping the edit is the default action: it holds focus on open and Escape
+ * does the same thing, so the destructive path is never the one reached by
+ * pressing Enter out of habit. `alertdialog`, because it interrupts to state a
+ * consequence.
+ */
+function DiscardEditConfirmation({ onCancel, onConfirm }: { onCancel(): void; onConfirm(): void }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const bodyId = useId();
+
+  return (
+    <Dialog
+      role="alertdialog"
+      title="Discard these changes?"
+      onClose={onCancel}
+      describedBy={bodyId}
+      initialFocusRef={cancelRef}
+      footer={
+        <>
+          <button type="button" className="m2-button m2-button-secondary" ref={cancelRef} onClick={onCancel}>
+            Keep editing
+          </button>
+          <button type="button" className="m2-button m2-button-primary" onClick={onConfirm}>
+            Discard changes
+          </button>
+        </>
+      }
+    >
+      <div id={bodyId} className="m2-confirm-body">
+        <p>
+          The character keeps the values it already has. Nothing you changed here has been written to it, and discarding
+          throws away only this unfinished edit.
+        </p>
+        <p className="m2-muted">Your play state — hit points, conditions, spent resources — is not affected either way.</p>
+      </div>
+    </Dialog>
   );
 }
 
@@ -980,6 +1135,9 @@ function StepContent({
           <ChoiceGroups build={build} plan={plan} stepId="class-choices" onChange={onChange} />
         </div>
       );
+
+    case "spells-resources":
+      return <SpellsResourcesStep build={build} entries={entries} plan={plan} onChange={onChange} />;
 
     case "equipment":
       return <EquipmentStep build={build} entries={entries} plan={plan} onChange={onChange} />;
@@ -1822,6 +1980,81 @@ function ManualSheetStep({
  * chosen. A package presented only by its name asks the user to choose between
  * two labels they cannot read the contents of.
  */
+/**
+ * Spells & resources: what the class grants at this level.
+ *
+ * The first fixture caster knows a fixed repertoire, so this step is a
+ * read-only statement of what the build grants — spells by level and the
+ * limited-use resources that power them. When content later models spell
+ * selection as choices, its choice groups render here through the same
+ * ChoiceGroups path every other step uses.
+ */
+function SpellsResourcesStep({
+  build,
+  entries,
+  plan,
+  onChange,
+}: {
+  build: CharacterDraftBuild;
+  entries: readonly ContentEntry[];
+  plan: DraftSnapshot["plan"];
+  onChange(patch: DraftPatch): void;
+}) {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const classEntry = build.classId ? byId.get(build.classId) : undefined;
+  const spellIds = (classEntry?.effects ?? [])
+    .filter(effect => effect.type === "addSpell")
+    .map(effect => (effect as { spellId: string }).spellId);
+  const spells = spellIds
+    .map(id => byId.get(id))
+    .filter((entry): entry is ContentEntry => entry !== undefined)
+    .map(entry => {
+      const level = (entry.mechanics as { level?: unknown }).level;
+      return { entry, level: typeof level === "number" ? level : null };
+    })
+    .sort((left, right) => (left.level ?? 0) - (right.level ?? 0) || left.entry.name.localeCompare(right.entry.name));
+  const resources = resourceIdsFor(build, entries)
+    .map(id => byId.get(id))
+    .filter((entry): entry is ContentEntry => entry !== undefined);
+
+  return (
+    <div className="m2-step">
+      {spells.length ? (
+        <section className="m2-fieldset">
+          <h3>Known spells</h3>
+          <p className="m2-muted">Granted by {classEntry?.name ?? "the class"}. Nothing here needs choosing at this level.</p>
+          <ul className="m2-plain-list">
+            {spells.map(({ entry, level }) => (
+              <li key={entry.id}>
+                <b>{entry.name}</b>
+                {level !== null ? <small className="m2-muted"> · {level === 0 ? "cantrip" : `level ${level}`}</small> : null}
+                {entry.summary ? <small className="m2-muted"> — {entry.summary}</small> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {resources.length ? (
+        <section className="m2-fieldset">
+          <h3>Resources</h3>
+          <ul className="m2-plain-list">
+            {resources.map(entry => (
+              <li key={entry.id}>
+                <b>{entry.name}</b>
+                {entry.summary ? <small className="m2-muted"> — {entry.summary}</small> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {!spells.length && !resources.length ? (
+        <p className="m2-muted">This class grants no spells or resources at the chosen level.</p>
+      ) : null}
+      <ChoiceGroups build={build} plan={plan} stepId="spells-resources" onChange={onChange} />
+    </div>
+  );
+}
+
 function EquipmentStep({
   build,
   entries,

@@ -11,7 +11,7 @@
  * which falls back to the bottom bar under zoom or width pressure because the
  * query is expressed in CSS pixels.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { BookOpen, Settings, Swords, UserRound } from "lucide-react";
 import { BrandMark } from "@/src/ui/brand-mark";
 import { PwaIndicator } from "@/src/ui/pwa-status";
@@ -24,7 +24,9 @@ import { LevelUpDialog } from "@/src/ui/level-up-dialog";
 import { SettingsView } from "@/src/ui/settings-view";
 import { TransferPanel } from "@/src/ui/transfer-panel";
 import type { RulesetSelection } from "@/src/services/content-install-service";
+import type { EditDraftRepairNote } from "@/src/services/edit-draft";
 import "./m2.css";
+import "./sheet.css";
 
 type View = "characters" | "sheet" | "compendium" | "settings" | "transfer";
 
@@ -43,13 +45,18 @@ export default function Home() {
 }
 
 function Shell() {
-  const { drafts, query, library, install, refresh } = useServices();
+  const { drafts, library, install, refresh } = useServices();
   const [view, setView] = useState<View>("characters");
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
   const [levelUpFor, setLevelUpFor] = useState<string | null>(null);
   /** Set when more than one usable ruleset exists and none has been activated. */
   const [rulesetChoice, setRulesetChoice] = useState<RulesetSelection | null>(null);
+  /** Saved values the installed content cannot confirm, reported by the hydration. */
+  const [editRepairs, setEditRepairs] = useState<readonly EditDraftRepairNote[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+  /** The character an Edit press is currently opening, so a second press is a no-op. */
+  const openingEditRef = useRef<string | null>(null);
 
   const createDraft = useCallback(
     async (rulesetProfileId: string) => {
@@ -95,21 +102,30 @@ function Shell() {
           setView("sheet");
           return;
         case "edit": {
-          // Editing a committed character opens a draft bound to it, in that
-          // character's own ruleset — never in whichever ruleset happens to be
-          // active now, which would rescope the build it is editing.
-          const draftId = `draft:edit:${destination.characterId}`;
-          void query.sheet(destination.characterId).then(async sheet => {
-            if (!sheet) return;
-            await drafts.create({
-              draftId,
-              rulesetProfileId: sheet.activeRulesetId,
-              level: sheet.level,
-              presentation: "guided",
-              editingCharacterId: destination.characterId,
+          /*
+           * One service call, and the ref is what makes a second press harmless.
+           *
+           * `openForCharacter` is already idempotent — it resumes the existing
+           * edit draft rather than creating a second one — but the call is
+           * asynchronous, and two presses dispatched before the first resolves
+           * would both run. The guard is released only when the builder has the
+           * draft, so the second press finds the door already open.
+           */
+          if (openingEditRef.current === destination.characterId) return;
+          openingEditRef.current = destination.characterId;
+          void drafts
+            .openForCharacter(destination.characterId)
+            .then(outcome => {
+              if (outcome.status === "ok") {
+                setEditRepairs(outcome.result.repairs);
+                setBuilderDraftId(outcome.result.draft.id);
+              } else {
+                setEditError("That character could not be opened for editing on this device.");
+              }
+            })
+            .finally(() => {
+              openingEditRef.current = null;
             });
-            setBuilderDraftId(draftId);
-          });
           return;
         }
         case "level-up":
@@ -135,7 +151,7 @@ function Shell() {
           return;
       }
     },
-    [drafts, library, query, refresh, startNewCharacter],
+    [drafts, library, refresh, startNewCharacter],
   );
 
   // A modal task owns the whole surface and supplies its own task footer.
@@ -155,6 +171,8 @@ function Shell() {
   const leaveTo = (destination: View) => {
     setView(destination);
     setBuilderDraftId(null);
+    setEditRepairs([]);
+    setEditError(null);
   };
 
   return (
@@ -216,6 +234,12 @@ function Shell() {
       </nav>
 
       <main className="m2-main" id="main">
+        {editError && !modalTask ? (
+          <div className="m2-banner m2-banner-error" role="alert">
+            <strong>Edit character could not be opened</strong>
+            <p>{editError}</p>
+          </div>
+        ) : null}
         {rulesetChoice ? (
           <RulesetChoice
             selection={rulesetChoice}
@@ -231,12 +255,15 @@ function Shell() {
         ) : modalTask && builderDraftId ? (
           <CharacterBuilder
             draftId={builderDraftId}
+            repairs={editRepairs}
             onClose={() => {
               setBuilderDraftId(null);
+              setEditRepairs([]);
               refresh();
             }}
             onFinished={characterId => {
               setBuilderDraftId(null);
+              setEditRepairs([]);
               setActiveCharacterId(characterId);
               setView("sheet");
             }}

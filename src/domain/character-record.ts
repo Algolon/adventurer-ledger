@@ -220,6 +220,12 @@ export interface CharacterRuntimeStateRecord extends Audit {
   hitDiceRemaining: number;
   exhaustion: number;
   deathSaves: { readonly successes: number; readonly failures: number };
+  /**
+   * Heroic inspiration. Optional because records written before it existed do
+   * not carry it; an absent value reads as false and is only ever written back
+   * as an explicit boolean.
+   */
+  inspiration?: boolean;
 }
 
 export type RuntimeActionKind =
@@ -230,6 +236,12 @@ export type RuntimeActionKind =
   | "resource-recover"
   | "condition-add"
   | "condition-remove"
+  | "inspiration-set"
+  | "exhaustion-set"
+  | "death-save"
+  | "death-saves-clear"
+  | "hit-dice-spend"
+  | "hit-dice-recover"
   | "short-rest"
   | "long-rest"
   | "undo";
@@ -262,6 +274,14 @@ export interface RuntimeFragment {
   resourceUsesRemoved?: readonly ID[];
   /** The whole condition list, when it changed. */
   conditions?: readonly ConditionStateRecord[];
+  /**
+   * Inspiration on this side of the change. `false` and "absent from the
+   * fragment" differ, so the field is present exactly when the action changed
+   * it — the same discipline the resource keys follow.
+   */
+  inspiration?: boolean;
+  /** The whole death-save tally, when it changed. */
+  deathSaves?: { readonly successes: number; readonly failures: number };
 }
 
 /**
@@ -354,6 +374,16 @@ export interface CharacterDraftRecord extends Audit {
   lastStepId: string;
   /** Set when the draft edits an existing character rather than creating one. */
   editingCharacterId?: ID;
+  /**
+   * The committed character revision this draft was hydrated from.
+   *
+   * It is the compare-and-swap token the eventual commit sends. Reading the
+   * character's revision fresh at commit time instead would make every edit
+   * succeed: a level-up applied in another tab while the builder was open would
+   * be silently overwritten, because the commit would assert the revision it had
+   * just observed rather than the one the user actually reviewed against.
+   */
+  editingCharacterRevision?: number;
   build: CharacterDraftBuild;
 }
 

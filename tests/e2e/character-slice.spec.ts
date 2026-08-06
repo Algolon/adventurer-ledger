@@ -27,6 +27,15 @@ async function continueStep(page: Page) {
 }
 
 /**
+ * Level up is a permanent change, so it lives with Edit character in the sheet's
+ * Character section rather than on the glance header.
+ */
+async function openLevelUp(page: Page) {
+  await page.getByRole("tab", { name: "Character" }).click();
+  await page.getByRole("button", { name: /^Level up/ }).click();
+}
+
+/**
  * Opens Settings from whichever control is showing: the app-bar button on
  * mobile, or the persistent rail entry once the compact rail appears.
  */
@@ -96,53 +105,130 @@ async function buildBrammel(page: Page, { name = "Brammel Voss" }: { name?: stri
   await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible();
 }
 
+/** Walks the nine caster steps and commits Sereth at level 1. */
+async function buildSereth(page: Page, { name = "Sereth Marsh" }: { name?: string } = {}) {
+  await page.getByLabel("Character name", { exact: true }).fill(name);
+  await continueStep(page);
+
+  await page.getByRole("button", { name: /^Runecaller/ }).click();
+  await continueStep(page);
+
+  await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await page.getByRole("button", { name: /^Caravan Warden/ }).click();
+  await page.getByRole("button", { name: /^River Signs/ }).click();
+  await continueStep(page);
+
+  const abilities: readonly [string, string][] = [
+    ["Strength", "10"],
+    ["Dexterity", "14"],
+    ["Constitution", "13"],
+    ["Intelligence", "12"],
+    ["Wisdom", "15"],
+    ["Charisma", "8"],
+  ];
+  for (const [ability, value] of abilities) await page.getByLabel(ability, { exact: true }).selectOption(value);
+  await page.getByLabel("+2 to").selectOption("dexterity");
+  await page.getByLabel("+1 to").selectOption("constitution");
+  await continueStep(page);
+
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
+  await continueStep(page);
+
+  // The Spells & resources step joins the sequence for a casting class.
+  await expect(page.getByText("Known spells")).toBeVisible();
+  await continueStep(page);
+
+  await page.getByRole("button", { name: /^River kit/ }).click();
+  await continueStep(page);
+
+  await continueStep(page); // Identity
+  await page.getByRole("button", { name: "Finish and open sheet" }).click();
+  await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible();
+}
+
 test.describe("blank device to a playable character", () => {
   test("creates Brammel through the nine-step builder and opens the sheet", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
     // The derived values match the accepted synthetic reference numbers.
-    await expect(page.getByRole("button", { name: /Explain Armour class, 18/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Initiative, \+2/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Speed, 30/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Proficiency, \+2/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Armour class 18\. Open details/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Initiative \+2\. Open details/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Speed 30\. Open details/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Proficiency bonus \+2\. Open details/ })).toBeVisible();
     await expect(page.getByText("10 / 10")).toBeVisible();
-    await expect(page.getByText("Rallying Breath")).toBeVisible();
     await expect(page.getByText("Vanguard 1")).toBeVisible();
+
+    // Resources live in the Actions section.
+    await page.getByRole("tab", { name: "Actions" }).click();
+    await expect(page.getByText("Rallying Breath")).toBeVisible();
+
+    // A class without spellcasting gets no Spells section at all.
+    await expect(page.getByRole("tab", { name: "Spells" })).toHaveCount(0);
   });
 
-  test("explains a derived value with its contributors and source", async ({ page }) => {
+  test("creates the spellcaster fixture and plays a spell slot", async ({ page }) => {
+    await startNewCharacter(page);
+    await buildSereth(page);
+
+    // The reference numbers for the caster fixture.
+    await expect(page.getByRole("button", { name: /Armour class 14\. Open details/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Initiative \+3\. Open details/ })).toBeVisible();
+    await expect(page.getByText("8 / 8")).toBeVisible();
+
+    // Spells is a real section for a caster, with declared casting facts.
+    await page.getByRole("tab", { name: "Spells" }).click();
+    await expect(page.getByRole("button", { name: /Spell attack \+4\. Open details/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Save DC 12\. Open details/ })).toBeVisible();
+    await expect(page.getByText("Wisdom")).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Emberline,.*Open details/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Ward of Reeds,.*concentration.*Open details/ })).toBeVisible();
+
+    // Slots are session state: spend one, then a long rest brings it back.
+    await page.getByRole("button", { name: /Spend one Rune slots/ }).click();
+    await expect(page.getByText("1 / 2")).toBeVisible();
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    await page.getByRole("button", { name: /Apply a long rest/ }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByText("2 / 2")).toBeVisible();
+  });
+
+  test("explains a derived value in plain words, without engine vocabulary", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    await page.getByRole("button", { name: /Armour class 18\. Open details/ }).click();
     const dialog = page.getByRole("dialog", { name: "Armour class" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("Travel Mail")).toBeVisible();
     await expect(dialog.getByText("Round Guard")).toBeVisible();
     await expect(dialog.getByText("Dexterity modifier (capped at +2)")).toBeVisible();
-    await expect(dialog.getByText("source:runefolio-synthetic").first()).toBeVisible();
-    await expect(dialog.getByText("Runefolio 2024 synthetic")).toBeVisible();
+    // The breakdown is human-readable: no stable IDs, rulesets or paths.
+    await expect(dialog.getByText(/source:/)).toHaveCount(0);
+    await expect(dialog.getByText(/ruleset/i)).toHaveCount(0);
   });
 
-  test("offers Copy expression and never a Roll control", async ({ page }) => {
+  test("shows action details without a Roll control, an expression or a copy affordance", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    await page.getByRole("button", { name: /Open details for Longblade Strike/ }).click();
+    await page.getByRole("tab", { name: "Actions" }).click();
+    await page.getByRole("button", { name: /^Longblade Strike,.*Open details/ }).click();
     const dialog = page.getByRole("dialog", { name: "Longblade Strike" });
-    await expect(dialog.getByText("1d20 + 5")).toBeVisible();
+    await expect(dialog.getByText("+5")).toBeVisible();
     await expect(dialog.getByText("1d8 + 4")).toBeVisible();
-    await expect(dialog.getByRole("button", { name: /Copy Longblade Strike attack expression/ })).toBeVisible();
-    // D-08: expression only.
+    // The sheet is a paper sheet, not a console: no Roll, no raw d20
+    // expression, no Copy expression control.
     await expect(page.getByRole("button", { name: /^Roll/ })).toHaveCount(0);
+    await expect(dialog.getByText("1d20")).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: /Copy/ })).toHaveCount(0);
   });
 
   test("returns focus to the control that opened a details surface", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    const trigger = page.getByRole("button", { name: /Explain Armour class/ });
+    const trigger = page.getByRole("button", { name: /Armour class 18\. Open details/ });
     await trigger.click();
     await expect(page.getByRole("dialog", { name: "Armour class" })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -217,9 +303,10 @@ test.describe("draft persistence", () => {
     await continueStep(page);
     const vanguard = page.getByRole("button", { name: /^Vanguard/ });
     await expect(vanguard).toHaveAttribute("aria-pressed", "false");
-    await expect(page.getByText("Recommended")).toBeVisible();
+    await expect(page.getByText("Recommended").first()).toBeVisible();
 
-    await page.getByRole("button", { name: /Why this/ }).click();
+    // Each recommended class carries its own explanation.
+    await page.getByRole("button", { name: "Why this? Vanguard" }).click();
     await expect(page.getByText(/front rank/i)).toBeVisible();
     // Reading the explanation still does not select the option.
     await expect(vanguard).toHaveAttribute("aria-pressed", "false");
@@ -231,20 +318,22 @@ test.describe("runtime play", () => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    await page.getByLabel("Amount").fill("5");
-    await expect(page.getByText("Preview: 5 after damage, 10 after healing")).toBeVisible();
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    await page.getByRole("spinbutton", { name: "Amount" }).fill("5");
+    await expect(page.getByText("5 after damage · 10 after healing")).toBeVisible();
     await page.getByRole("button", { name: /Apply 5 damage/ }).click();
-    await expect(page.getByText("5 / 10")).toBeVisible();
+    await expect(page.getByText("5 / 10").first()).toBeVisible();
 
     await page.getByRole("button", { name: /Undo the last play action/ }).click();
-    await expect(page.getByText("10 / 10")).toBeVisible();
+    await expect(page.getByText("10 / 10").first()).toBeVisible();
   });
 
   test("keeps a limited resource inside its bounds", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    const spend = page.getByRole("button", { name: "Spend one Rallying Breath" });
+    await page.getByRole("tab", { name: "Actions" }).click();
+    const spend = page.getByRole("button", { name: /Spend one Rallying Breath/ });
     // One spend per render round-trip: see the note in the level-up test.
     for (const remaining of ["2 / 3", "1 / 3", "0 / 3"]) {
       await spend.click();
@@ -257,64 +346,83 @@ test.describe("runtime play", () => {
   test("survives a reload with the runtime state intact", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
-    await page.getByLabel("Amount").fill("4");
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    await page.getByRole("spinbutton", { name: "Amount" }).fill("4");
     await page.getByRole("button", { name: /Apply 4 damage/ }).click();
-    await expect(page.getByText("6 / 10")).toBeVisible();
+    await expect(page.getByText("6 / 10").first()).toBeVisible();
+    await page.keyboard.press("Escape");
 
     await page.reload();
     await page.getByRole("button", { name: /Open Brammel Voss/ }).click();
     await expect(page.getByText("6 / 10")).toBeVisible();
   });
+
+  test("tracks inspiration from the glance header", async ({ page }) => {
+    await startNewCharacter(page);
+    await buildBrammel(page);
+
+    const inspiration = page.getByRole("button", { name: "Inspiration" });
+    await expect(inspiration).toHaveAttribute("aria-pressed", "false");
+    await inspiration.click();
+    await expect(inspiration).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText("Inspiration gained.")).toBeVisible();
+    await inspiration.click();
+    await expect(inspiration).toHaveAttribute("aria-pressed", "false");
+  });
 });
 
-test.describe("overrides, conditions and restore points", () => {
-  test("overrides a value, keeps the baseline visible, then removes it", async ({ page }) => {
+test.describe("play and edit stay separate surfaces", () => {
+  test("keeps rules-console controls off the sheet", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    // One clear route to permanent changes...
+    await expect(page.getByRole("button", { name: /Edit character Brammel Voss/ })).toBeVisible();
+    // ...and none of the console affordances the sheet used to carry.
+    await expect(page.getByRole("button", { name: /Override/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Copy/ })).toHaveCount(0);
+    await expect(page.getByText(/Active ruleset/)).toHaveCount(0);
+    await expect(page.getByText(/ruleset:/)).toHaveCount(0);
+    await expect(page.getByText(/source:/)).toHaveCount(0);
+
+    // The details drawer offers no override editor either.
+    await page.getByRole("button", { name: /Armour class 18\. Open details/ }).click();
     const dialog = page.getByRole("dialog", { name: "Armour class" });
-    await dialog.getByRole("button", { name: "Override Armour class" }).click();
-    await dialog.getByLabel("Operation").selectOption("replace");
-    await dialog.getByLabel("Value", { exact: true }).fill("20");
-    await dialog.getByLabel(/Reason/).fill("table ruling kept on this device");
-    await dialog.getByRole("button", { name: /Save override for Armour class/ }).click();
-
-    // The overridden value renders and is marked as an override.
-    await expect(page.getByRole("button", { name: /Explain Armour class, 20/ })).toBeVisible();
-
-    await page.getByRole("button", { name: /Explain Armour class/ }).click();
-    const reopened = page.getByRole("dialog", { name: "Armour class" });
-    // The automatic baseline is retained and shown.
-    await expect(reopened.getByText(/The automatic value was 18/)).toBeVisible();
-    await reopened.getByRole("button", { name: /Remove override, returning Armour class to 18/ }).click();
-    await expect(page.getByRole("button", { name: /Explain Armour class, 18/ })).toBeVisible();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /Override/ })).toHaveCount(0);
   });
 
-  test("adds and removes a condition through the sheet", async ({ page }) => {
+  test("adds and removes a condition through the header chips", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
+    await page.getByRole("button", { name: /^Condition$/ }).click();
     await expect(page.getByText("No conditions are active.")).toBeVisible();
     await page.getByRole("button", { name: /Add the Winded condition/ }).click();
-    await expect(page.getByRole("button", { name: /Remove the Winded condition/ })).toBeVisible();
-    await page.getByRole("button", { name: /Remove the Winded condition/ }).click();
-    await expect(page.getByText("No conditions are active.")).toBeVisible();
+
+    const chip = page.getByRole("button", { name: /Winded condition\. Open details/ });
+    await expect(chip).toBeVisible();
+    await chip.click();
+    await page.getByRole("button", { name: "Remove Winded" }).click();
+    await expect(page.getByRole("button", { name: /Winded condition/ })).toHaveCount(0);
   });
 
   test("restores the pre-level snapshot without deleting the level-up", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
+    await page.getByRole("tab", { name: "Character" }).click();
     await page.getByRole("button", { name: "Level up" }).click();
     const levelDialog = page.getByRole("dialog", { name: "Level 1 to 2" });
     await levelDialog.getByRole("button", { name: /^Measured Cut/ }).click();
     await levelDialog.getByRole("button", { name: "Confirm level 2" }).click();
-    await expect(page.getByText("Vanguard 2")).toBeVisible();
+    await expect(page.getByText("Vanguard 2").first()).toBeVisible();
 
+    await page.getByRole("tab", { name: "Character" }).click();
     await page.getByRole("button", { name: /Restore Brammel Voss to the point named Before level 2/ }).click();
-    await expect(page.getByText("Vanguard 1")).toBeVisible();
+    await expect(page.getByText("Vanguard 1").first()).toBeVisible();
     // The restore point itself is still listed; history was appended, not erased.
+    await page.getByRole("tab", { name: "Character" }).click();
     await expect(page.getByRole("heading", { name: "Restore points" })).toBeVisible();
   });
 });
@@ -325,9 +433,12 @@ test.describe("level up", () => {
     await buildBrammel(page);
 
     // Spend down to 5/10 hit points and 1/3 uses.
-    await page.getByLabel("Amount").fill("5");
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    await page.getByRole("spinbutton", { name: "Amount" }).fill("5");
     await page.getByRole("button", { name: /Apply 5 damage/ }).click();
-    const spend = page.getByRole("button", { name: "Spend one Rallying Breath" });
+    await page.keyboard.press("Escape");
+    await page.getByRole("tab", { name: "Actions" }).click();
+    const spend = page.getByRole("button", { name: /Spend one Rallying Breath/ });
     // Each spend is awaited before the next. The play sheet sends the runtime
     // revision it last rendered, so two taps inside one render round-trip carry
     // the same revision and the second is refused as stale. That is a real
@@ -339,7 +450,7 @@ test.describe("level up", () => {
     await spend.click();
     await expect(page.getByText("1 / 3")).toBeVisible();
 
-    await page.getByRole("button", { name: "Level up" }).click();
+    await openLevelUp(page);
     const dialog = page.getByRole("dialog", { name: "Level 1 to 2" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("Preserve deficit and expenditure")).toBeVisible();
@@ -357,6 +468,7 @@ test.describe("level up", () => {
 
     await expect(page.getByText("Vanguard 2")).toBeVisible();
     await expect(page.getByText("9 / 14")).toBeVisible();
+    await page.getByRole("tab", { name: "Actions" }).click();
     await expect(page.getByText("2 / 4")).toBeVisible();
   });
 
@@ -364,7 +476,7 @@ test.describe("level up", () => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    await page.getByRole("button", { name: "Level up" }).click();
+    await openLevelUp(page);
     await page.getByRole("dialog", { name: "Level 1 to 2" }).getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByText("Vanguard 1")).toBeVisible();
@@ -421,7 +533,7 @@ test.describe("transfer", () => {
     // Diverge the local record by levelling it up.
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: /Open Brammel Voss/ }).click();
-    await page.getByRole("button", { name: "Level up" }).click();
+    await openLevelUp(page);
     const levelDialog = page.getByRole("dialog", { name: "Level 1 to 2" });
     await levelDialog.getByRole("button", { name: /^Measured Cut/ }).click();
     await levelDialog.getByRole("button", { name: "Confirm level 2" }).click();
@@ -470,19 +582,21 @@ test.describe("offline session", () => {
 
     await expect(page.getByRole("heading", { name: "Characters", exact: true })).toBeVisible();
     await page.getByRole("button", { name: /Open Brammel Voss/ }).click();
-    await expect(page.getByRole("button", { name: /Explain Armour class, 18/ })).toBeVisible();
+    const armourClass = page.getByRole("button", { name: /Armour class 18\. Open details/ });
+    await expect(armourClass).toBeVisible();
 
     // Explanations backed by local content still open.
-    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    await armourClass.click();
     await expect(page.getByRole("dialog", { name: "Armour class" }).getByText("Travel Mail")).toBeVisible();
     await page.keyboard.press("Escape");
 
     // Runtime mutations and local history keep working with no network.
-    await page.getByLabel("Amount").fill("3");
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    await page.getByRole("spinbutton", { name: "Amount" }).fill("3");
     await page.getByRole("button", { name: /Apply 3 damage/ }).click();
-    await expect(page.getByText("7 / 10")).toBeVisible();
+    await expect(page.getByText("7 / 10").first()).toBeVisible();
     await page.getByRole("button", { name: /Undo the last play action/ }).click();
-    await expect(page.getByText("10 / 10")).toBeVisible();
+    await expect(page.getByText("10 / 10").first()).toBeVisible();
 
     await context.setOffline(false);
   });
@@ -555,7 +669,7 @@ test.describe("responsive and accessibility", () => {
   test("traps focus inside a modal surface", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
-    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    await page.getByRole("button", { name: /Armour class 18\. Open details/ }).click();
     const dialog = page.getByRole("dialog", { name: "Armour class" });
     await expect(dialog).toBeVisible();
 
@@ -571,6 +685,6 @@ test.describe("responsive and accessibility", () => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await startNewCharacter(page);
     await buildBrammel(page);
-    await expect(page.getByRole("button", { name: /Explain Armour class, 18/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Armour class 18\. Open details/ })).toBeVisible();
   });
 });
