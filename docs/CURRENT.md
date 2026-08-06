@@ -5,6 +5,60 @@ favicon and complete `any`/`maskable` PWA icon sets are documented in
 [`BRAND.md`](BRAND.md); technical installation and local-storage identities stay
 unchanged.
 
+## Pilot status
+
+`main` represents the current **workable pilot prototype**, not a feature-complete
+product. Development has deliberately moved from foundation-first to iterative
+physical-device testing: the branch is merged so the pilot can be installed and
+used on a real phone, and the gaps below are then found against something that
+runs rather than predicted against something that does not.
+
+Read the two lists as a single statement. The first is what a pilot can rely on;
+the second is what a pilot will hit, stated so nobody has to discover it by
+being surprised. Nothing in the second list is finished, partially finished, or
+scheduled here.
+
+### Ready for pilot
+
+- **Private pack import.** A real pack installs through the file input, becomes a
+  selectable ruleset in the same confirmation, and is available immediately
+  afterwards with no reload and no Settings detour.
+- **Direct and sequential creation.** A character can be created straight at a
+  target level, or built up one level at a time, with every level's choices
+  resolved in one pass.
+- **Ruleset selection.** Every installed profile is offered explicitly; nothing
+  is chosen by list order, and switching one build's ruleset never silently
+  repoints the device default.
+- **Mobile creation navigation.** The creation task is operable at 360–412 CSS
+  px: the primary navigation is hidden while the task owns the surface rather
+  than being covered by it, and the task carries its own Save & close.
+- **Save, close and resume unfinished drafts.** Closing waits for both the
+  pending edit and the step-position write, the draft is listed under Unfinished
+  builds, and resuming returns to the same step with every value intact.
+- **Committed sheet viewing.** A committed character opens to its active sheet
+  with derived values resolved from its own ruleset.
+- **Hit points and armour class for the validated case.** Per-level Constitution
+  application and armour-dependent bonuses are correct and regression-tested for
+  the cases in the engine-correctness slice.
+
+### Known pilot limitations
+
+These are **open**, not delivered. A pilot will meet them.
+
+- **Editing a committed character does not hydrate the draft yet.** Choosing to
+  edit opens an empty draft rather than one populated from the character.
+- **Equipped weapons do not yet fully generate attacks.** Attack entries are not
+  derived from what the character is actually carrying.
+- **Extra Attack is not represented.** No attack-count progression is applied.
+- **Weapon mastery is not shown against attacks.** A mastery may be selected and
+  recorded, but it is not surfaced on the attack it modifies.
+- **Play-sheet rapid-tap handling remains open.** Fast repeated taps on runtime
+  actions are not yet debounced or coalesced.
+- **Physical Android install, offline and storage behaviour remain unverified.**
+  Everything above was verified in Chromium at phone widths. Browser emulation is
+  not evidence of handset behaviour: install, relaunch, offline operation and
+  storage eviction on a real device are untested.
+
 ## Baseline before M1
 
 - Next.js 16/React 19 PWA shell with responsive navigation;
