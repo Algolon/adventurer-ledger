@@ -348,26 +348,34 @@ test.describe("editing a caster", () => {
   });
 });
 
-test.describe("editing when source content is missing", () => {
-  test("keeps the saved values and names the step that can confirm them", async ({ page }) => {
+/**
+ * The library's own Edit route, which is the second way in.
+ *
+ * The missing-source and changed-content cases are covered at the service level
+ * in `tests/edit-character.integration.test.ts` rather than here, deliberately:
+ * there is no UI route that uninstalls or disables installed content, so an
+ * end-to-end test of it would have to reach past the product to set up a state
+ * the product cannot produce — and a test that quietly skips its own setup when
+ * the control is absent reports a pass for something it never exercised.
+ */
+test.describe("the library's Edit build route", () => {
+  test("opens the same hydrated draft as the sheet's Edit character", async ({ page }) => {
     await startNewCharacter(page);
     await buildBrammel(page);
-
-    // Disabling the source is the supported way to make content unavailable; it
-    // is a Settings action, so the character keeps every stored selection.
-    await page.getByRole("button", { name: /^(Open Settings|Settings)$/ }).first().click();
-    const toggle = page.getByRole("button", { name: /Disable .*Runefolio/ });
-    if (await toggle.count()) await toggle.first().click();
 
     await goToCharacters(page);
     await page.getByRole("button", { name: /More actions for Brammel Voss/ }).click();
     await page.getByRole("button", { name: /^Edit build for Brammel Voss/ }).click();
 
-    // Whatever the content situation, the name the user typed is still there.
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Brammel Voss");
-    // And nothing was cleared behind their back.
-    const repair = page.getByRole("status").filter({ hasText: /Nothing has been cleared/ });
-    if (await repair.count()) await expect(repair.first()).toBeVisible();
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /^Class & level/ }).click();
+    await expect(page.getByRole("button", { name: /^Vanguard/ })).toHaveAttribute("aria-pressed", "true");
+
+    // One draft, whichever door was used.
+    await page.getByRole("button", { name: "Save & close" }).click();
+    await goToCharacters(page);
+    await expect(page.getByRole("button", { name: /Resume building/ })).toHaveCount(1);
   });
 });
 
