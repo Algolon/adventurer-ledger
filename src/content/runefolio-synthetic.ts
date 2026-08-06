@@ -18,6 +18,16 @@
  *   Resource    Rallying Breath 3 uses at level 1, 4 at level 2 (+1 maximum)
  *   Armour      Travel Mail 14 + Dexterity 2 (capped) + Round Guard 2 = 18
  *   Attack      Longblade Strike +5 to hit, 1d8+4 damage
+ *
+ * Sereth's reference numbers (the spellcaster fixture, standard array with the
+ * Caravan Warden +2 Dexterity / +1 Constitution):
+ *
+ *   Abilities   WIS 15, DEX 14+2=16, CON 13+1=14, INT 12, STR 10, CHA 8
+ *   Hit points  level 1: class base 6 + Constitution +2 = 8
+ *   Armour      Runewoven Vest 11 + Dexterity 3 = 14
+ *   Attack      Emberline +4 to hit (Wisdom +2, proficiency +2), 1d10+2
+ *   Casting     Wisdom; spell attack +4; save DC 8 + 2 + 2 = 12
+ *   Slots       Rune slots 2 at level 1, 3 at level 2; return on a long rest
  */
 import { contentPackSchema, type ContentPackDocument } from "@/src/domain/content-pack";
 import type { ContentEntry, Effect, RulesetProfile } from "@/src/domain/model";
@@ -42,6 +52,35 @@ export const SYNTHETIC_IDS = {
   attack: "action:longblade-strike",
   resource: "resource:rallying-breath",
 } as const;
+
+/** The spellcaster half of the fixture pair. All names are original. */
+export const RUNECALLER_IDS = {
+  class: "class:runecaller",
+  staff: "weapon:reed-staff",
+  vest: "armor:runewoven-vest",
+  attack: "action:emberline-strike",
+  slots: "resource:rune-slots",
+  spellList: "spell-list:rune-repertoire",
+  spellcastingRule: "rule:runecaller-spellcasting",
+  spells: {
+    emberline: "spell:emberline",
+    wardOfReeds: "spell:ward-of-reeds",
+    mendTheHour: "spell:mend-the-hour",
+    riversGrasp: "spell:rivers-grasp",
+  },
+} as const;
+
+export const RUNECALLER_CHOICES = {
+  classSkills: "choice:runecaller-skills",
+} as const;
+
+export const RUNECALLER_EQUIPMENT_BUNDLE = "bundle:runecaller-satchel";
+
+/** Per-level class hit-point base for the Runecaller. */
+export const RUNECALLER_HIT_POINT_BASE: Readonly<Record<number, number>> = { 1: 6, 2: 10 };
+/** Per-level Rune slot maximum. */
+export const RUNECALLER_RUNE_SLOTS: Readonly<Record<number, number>> = { 1: 2, 2: 3 };
+export const RUNECALLER_HIT_DIE = 6;
 
 /** Choice groups the builder resolves. Stable IDs outlive label refinement. */
 export const SYNTHETIC_CHOICES = {
@@ -119,6 +158,12 @@ export const PROFICIENCY_IDS = {
   weaponMartial: "proficiency:weapon-martial",
   languageTradeCant: "proficiency:language-trade-cant",
   languageRiverSigns: "proficiency:language-river-signs",
+  saveWisdom: "proficiency:save-wisdom",
+  saveIntelligence: "proficiency:save-intelligence",
+  saveDexterity: "proficiency:save-dexterity",
+  saveCharisma: "proficiency:save-charisma",
+  armorLight: "proficiency:armor-light",
+  weaponSimple: "proficiency:weapon-simple",
 } as const;
 
 const proficiencyEntries: ContentEntry[] = [
@@ -133,6 +178,14 @@ const proficiencyEntries: ContentEntry[] = [
   proficiency(PROFICIENCY_IDS.weaponMartial, "weapon-martial", "Martial weapons", "weapon", "martial"),
   proficiency(PROFICIENCY_IDS.languageTradeCant, "language-trade-cant", "Trade Cant", "language", "trade-cant"),
   proficiency(PROFICIENCY_IDS.languageRiverSigns, "language-river-signs", "River Signs", "language", "river-signs"),
+  proficiency(PROFICIENCY_IDS.saveWisdom, "save-wisdom", "Wisdom save", "save", "wisdom", "wisdom"),
+  proficiency(PROFICIENCY_IDS.saveIntelligence, "save-intelligence", "Intelligence save", "save", "intelligence", "intelligence"),
+  // A sheet lists all six saves and marks the proficient ones, so the ruleset
+  // defines the full set even though no fixture class is proficient in these.
+  proficiency(PROFICIENCY_IDS.saveDexterity, "save-dexterity", "Dexterity save", "save", "dexterity", "dexterity"),
+  proficiency(PROFICIENCY_IDS.saveCharisma, "save-charisma", "Charisma save", "save", "charisma", "charisma"),
+  proficiency(PROFICIENCY_IDS.armorLight, "armor-light", "Light armour", "armor", "light"),
+  proficiency(PROFICIENCY_IDS.weaponSimple, "weapon-simple", "Simple weapons", "weapon", "simple"),
 ];
 
 /**
@@ -551,6 +604,317 @@ const equipmentEntries: ContentEntry[] = [
   }),
 ];
 
+/**
+ * The Runecaller: the spellcaster half of the fixture pair.
+ *
+ * Its rune slots ride the existing resource machinery — the class progression
+ * writes a level-keyed maximum and the feature adds a long-rest resource — so
+ * slot tracking needs no new runtime concepts. Spells are granted as fixed
+ * `addSpell` effects on the class entry (no selection choice yet), which is
+ * also what makes the builder's Spells & resources step applicable.
+ */
+const runecallerHitPointBaseEffect: Effect = {
+  id: "effect:runecaller-hit-point-base",
+  type: "scaleAtLevel",
+  scope: "class",
+  classId: RUNECALLER_IDS.class,
+  target: "hitPoints.classBase",
+  levels: Object.fromEntries(
+    Object.entries(RUNECALLER_HIT_POINT_BASE).map(([level, base]) => [level, { kind: "literal", value: base }]),
+  ),
+  label: "Runecaller hit points",
+};
+
+const runecallerClassEntry = entry({
+  id: RUNECALLER_IDS.class,
+  slug: "runecaller",
+  name: "Runecaller",
+  category: "class",
+  summary: "A reader of river runes who spends stored marks to bend the current of a moment.",
+  effects: [
+    runecallerHitPointBaseEffect,
+    { id: "effect:runecaller-satchel", type: "grantEquipmentBundle", bundleId: RUNECALLER_EQUIPMENT_BUNDLE, label: "Runecaller satchel" },
+    { id: "effect:runecaller-spell-emberline", type: "addSpell", spellId: RUNECALLER_IDS.spells.emberline, alwaysPrepared: true },
+    { id: "effect:runecaller-spell-ward-of-reeds", type: "addSpell", spellId: RUNECALLER_IDS.spells.wardOfReeds },
+    { id: "effect:runecaller-spell-mend-the-hour", type: "addSpell", spellId: RUNECALLER_IDS.spells.mendTheHour },
+    { id: "effect:runecaller-spell-rivers-grasp", type: "addSpell", spellId: RUNECALLER_IDS.spells.riversGrasp },
+    { id: "effect:runecaller-spell-list", type: "addSpellList", spellListId: RUNECALLER_IDS.spellList },
+  ],
+  equipmentBundles: [
+    {
+      id: RUNECALLER_EQUIPMENT_BUNDLE,
+      label: "Runecaller satchel",
+      entries: [
+        { type: "item", itemId: RUNECALLER_IDS.staff, quantity: 1, status: "equipped" },
+        { type: "item", itemId: RUNECALLER_IDS.vest, quantity: 1, status: "equipped" },
+        {
+          type: "choice",
+          id: "equipment-choice:runecaller-kit",
+          label: "Travelling gear",
+          min: 1,
+          max: 1,
+          options: [
+            { id: "equipment-option:runecaller-warden-pack", label: "Warden pack", entries: [{ type: "item", itemId: "item:warden-pack", quantity: 1, status: "carried" }] },
+            { id: "equipment-option:runecaller-river-kit", label: "River kit", entries: [{ type: "item", itemId: "item:river-kit", quantity: 1, status: "carried" }] },
+          ],
+        },
+      ],
+    },
+  ],
+  choices: [
+    {
+      id: RUNECALLER_CHOICES.classSkills,
+      label: "Runecaller skills",
+      min: 1,
+      max: 1,
+      repeatable: false,
+      options: (
+        [
+          [PROFICIENCY_IDS.skillRiverlore, "Riverlore"],
+          [PROFICIENCY_IDS.skillWatchcraft, "Watchcraft"],
+          [PROFICIENCY_IDS.skillParley, "Parley"],
+        ] as const
+      ).map(([id, label]) => ({
+        id: `option:runecaller-${id}`,
+        label,
+        effects: [{ id: `effect:runecaller-grant-${id}`, type: "grantProficiency", proficiencyId: id } satisfies Effect],
+      })),
+    },
+  ],
+  mechanics: {
+    hitDie: RUNECALLER_HIT_DIE,
+    primaryAbilities: ["wisdom"],
+    savingThrows: [PROFICIENCY_IDS.saveWisdom, PROFICIENCY_IDS.saveIntelligence],
+    startingProficiencyIds: [PROFICIENCY_IDS.armorLight, PROFICIENCY_IDS.weaponSimple],
+    progression: [
+      {
+        level: 1,
+        proficiencyBonus: 2,
+        featureIds: ["feature:runecaller-rune-slots", "feature:runecaller-repertoire"],
+        choiceIds: [RUNECALLER_CHOICES.classSkills],
+        resourceChanges: { [RUNECALLER_IDS.slots]: RUNECALLER_RUNE_SLOTS[1] },
+      },
+      {
+        level: 2,
+        proficiencyBonus: 2,
+        featureIds: ["feature:runecaller-deep-reading"],
+        choiceIds: [],
+        resourceChanges: { [RUNECALLER_IDS.slots]: RUNECALLER_RUNE_SLOTS[2] },
+      },
+    ],
+    subclassLevel: 3,
+    subclassIds: [],
+  },
+});
+
+const runecallerFeatures: ContentEntry[] = [
+  entry({
+    id: "feature:runecaller-rune-slots",
+    slug: "runecaller-rune-slots",
+    name: "Rune Slots",
+    category: "class-feature",
+    summary: "Marks traced at dawn hold power you can spend to cast. They fade and reform after a long rest.",
+    mechanics: { classId: RUNECALLER_IDS.class, level: 1, featureType: "resource" },
+    effects: [
+      {
+        id: "effect:runecaller-rune-slots",
+        type: "addResource",
+        resource: {
+          id: RUNECALLER_IDS.slots,
+          name: "Rune slots",
+          maximum: { kind: "path", path: `resource.${RUNECALLER_IDS.slots}` },
+          recharge: "long-rest",
+        },
+      },
+      { id: "effect:runecaller-rune-slots-recharge", type: "rechargeOnLongRest", resourceId: RUNECALLER_IDS.slots },
+    ],
+  }),
+  entry({
+    id: "feature:runecaller-repertoire",
+    slug: "runecaller-repertoire",
+    name: "Runic Repertoire",
+    category: "class-feature",
+    summary: "You know a small set of runes by heart, and the Emberline rune answers as fast as a thrown stone.",
+    mechanics: { classId: RUNECALLER_IDS.class, level: 1, featureType: "core" },
+    effects: [{ id: "effect:runecaller-emberline-strike", type: "addAttack", definitionId: RUNECALLER_IDS.attack }],
+  }),
+  entry({
+    id: "feature:runecaller-deep-reading",
+    slug: "runecaller-deep-reading",
+    name: "Deep Reading",
+    category: "class-feature",
+    summary: "Second-level study holds one more rune slot ready each dawn.",
+    mechanics: { classId: RUNECALLER_IDS.class, level: 2, featureType: "core" },
+  }),
+];
+
+/** The playable ranged rune attack, mirrored by the Emberline spell entry. */
+const runecallerAttackEntry = entry({
+  id: RUNECALLER_IDS.attack,
+  slug: "emberline-strike",
+  name: "Emberline",
+  category: "rule",
+  summary: "A thin line of ember light darts to a mark you can see.",
+  mechanics: {
+    kind: "action-definition",
+    data: {
+      actionKind: "attack",
+      usage: "ranged",
+      ability: "wisdom",
+      proficient: true,
+      damageDice: "1d10",
+      damageType: "ember",
+      range: "60 ft.",
+    },
+  },
+});
+
+/**
+ * The declarative casting summary the sheet reads. The resolver computes the
+ * spell attack as ability modifier plus proficiency, and the save DC as
+ * `saveDcBase` plus ability modifier plus proficiency; nothing here is code.
+ */
+const runecallerSpellcastingRule = entry({
+  id: RUNECALLER_IDS.spellcastingRule,
+  slug: "runecaller-spellcasting",
+  name: "Runecaller spellcasting",
+  category: "rule",
+  summary: "Runecaller casting uses Wisdom and spends rune slots.",
+  mechanics: {
+    kind: "spellcasting",
+    data: {
+      classId: RUNECALLER_IDS.class,
+      ability: "wisdom",
+      attackProficient: true,
+      saveDcBase: 8,
+      slotResourceIds: [RUNECALLER_IDS.slots],
+    },
+  },
+});
+
+const spell = (
+  partial: Pick<ContentEntry, "id" | "slug" | "name" | "summary"> & { mechanics: Record<string, unknown> },
+): ContentEntry =>
+  entry({
+    ...partial,
+    category: "spell",
+    mechanics: partial.mechanics,
+  });
+
+const runecallerSpells: ContentEntry[] = [
+  spell({
+    id: RUNECALLER_IDS.spells.emberline,
+    slug: "emberline",
+    name: "Emberline",
+    summary: "A thin line of ember light darts to a mark you can see and scorches it.",
+    mechanics: {
+      level: 0,
+      school: "evocation",
+      components: { verbal: true, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "instantaneous", concentration: false },
+      range: { type: "distance", distance: 60, unit: "feet" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.wardOfReeds,
+    slug: "ward-of-reeds",
+    name: "Ward of Reeds",
+    summary: "Woven reeds of pale light brace one creature you touch against the next blows.",
+    mechanics: {
+      level: 1,
+      school: "abjuration",
+      components: { verbal: true, somatic: true, material: "a dried reed", consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "timed", amount: 10, unit: "minute", concentration: true },
+      range: { type: "touch" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.mendTheHour,
+    slug: "mend-the-hour",
+    name: "Mend the Hour",
+    summary: "Knits the last hour's hurts closed in one creature you touch.",
+    mechanics: {
+      level: 1,
+      school: "abjuration",
+      components: { verbal: true, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "instantaneous", concentration: false },
+      range: { type: "touch" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.riversGrasp,
+    slug: "rivers-grasp",
+    name: "River's Grasp",
+    summary: "The current itself grips a creature you can see, dragging at its every step.",
+    mechanics: {
+      level: 1,
+      school: "conjuration",
+      components: { verbal: true, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "timed", amount: 1, unit: "minute", concentration: true },
+      range: { type: "distance", distance: 30, unit: "feet" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+];
+
+const runecallerSpellList = entry({
+  id: RUNECALLER_IDS.spellList,
+  slug: "rune-repertoire",
+  name: "Rune repertoire",
+  category: "spell-list",
+  summary: "The runes a Runecaller can learn.",
+  mechanics: {
+    spellIds: Object.values(RUNECALLER_IDS.spells),
+    ownerIds: [RUNECALLER_IDS.class],
+  },
+});
+
+const runecallerResourceEntry = entry({
+  id: RUNECALLER_IDS.slots,
+  slug: "rune-slots",
+  name: "Rune slots",
+  category: "resource",
+  summary: "Marks traced at dawn that power your runes. They return after a long rest.",
+  mechanics: { kind: "resource", data: { recharge: "long-rest" } },
+});
+
+const runecallerEquipment: ContentEntry[] = [
+  entry({
+    id: RUNECALLER_IDS.staff,
+    slug: "reed-staff",
+    name: "Reed staff",
+    category: "weapon",
+    summary: "A light staff of bound river reed, worn smooth by the current.",
+    mechanics: {
+      category: "simple",
+      usage: "melee",
+      damage: { dice: "1d6", type: "bludgeoning" },
+      properties: ["versatile"],
+      weight: 4,
+      costGp: 2,
+    },
+  }),
+  entry({
+    id: RUNECALLER_IDS.vest,
+    slug: "runewoven-vest",
+    name: "Runewoven Vest",
+    category: "armor",
+    summary: "A quilted vest with warding marks stitched through the lining.",
+    mechanics: { category: "light", baseArmorClass: 11, dexterity: "full", stealthDisadvantage: false, weight: 8, costGp: 10 },
+  }),
+];
+
 export const SYNTHETIC_ENTRIES: readonly ContentEntry[] = [
   classEntry,
   ...classFeatures,
@@ -567,6 +931,14 @@ export const SYNTHETIC_ENTRIES: readonly ContentEntry[] = [
   ...abilityGenerationEntries,
   ...equipmentEntries,
   ...proficiencyEntries,
+  runecallerClassEntry,
+  ...runecallerFeatures,
+  runecallerAttackEntry,
+  runecallerSpellcastingRule,
+  ...runecallerSpells,
+  runecallerSpellList,
+  runecallerResourceEntry,
+  ...runecallerEquipment,
 ];
 
 export const SYNTHETIC_RULESET: RulesetProfile = {
@@ -576,7 +948,7 @@ export const SYNTHETIC_RULESET: RulesetProfile = {
   editionPriority: ["homebrew"],
   allowedCategories: [
     "class", "class-feature", "subclass", "species", "background", "feat", "item", "weapon", "armor", "tool",
-    "fighting-style", "weapon-mastery", "condition", "resource", "rule", "proficiency",
+    "fighting-style", "weapon-mastery", "condition", "resource", "rule", "proficiency", "spell", "spell-list",
   ],
   allowLegacy: false,
   allowDuplicateVersions: false,

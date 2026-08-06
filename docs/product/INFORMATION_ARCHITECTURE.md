@@ -45,11 +45,11 @@ When a task is modal in intent—creation, level-up, transfer confirmation—rep
   /new
   /:characterId
     /sheet
+      /overview
       /actions
-      /spells
+      /spells        (only when content declares spellcasting)
       /inventory
-      /features
-      /notes
+      /character
     /build/:step
     /level-up
     /manage
@@ -225,7 +225,8 @@ Global search should not remain an inert header field. Until it can return chara
 | On this device | Up to date everywhere | Devices do not exchange changes automatically |
 | Transfer | Share to cloud | User controls transport |
 | Issue / warning | Invalid character | Flexible builds remain saveable |
-| Automatic value | Correct value | Overrides may be intentional |
-| Manual value / override | Custom hack | Neutral, auditable language |
+| Automatic value | Correct value | A value the user entered is not wrong |
+| Manual value | Custom hack | Neutral, auditable language |
+| Edit character | Manage / override | One route to permanent change; the sheet itself is Play mode |
 | Origin | Race/background bundle | Aligns with recommended flow while allowing species/background detail |
 | Active sheet | Dashboard | Names the play job |

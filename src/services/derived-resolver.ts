@@ -125,6 +125,47 @@ export interface DerivedEquipmentItem {
   armorContribution?: number;
 }
 
+/** A granted feature, trait or feat, with its public/synthetic summary. */
+export interface DerivedFeature {
+  id: ID;
+  label: string;
+  summary?: string;
+  group: "class" | "species" | "background";
+}
+
+/** A non-skill, non-save proficiency the build grants. */
+export interface DerivedOtherProficiency {
+  id: ID;
+  label: string;
+  type: "armor" | "weapon" | "tool" | "language";
+}
+
+export interface DerivedSpell {
+  id: ID;
+  label: string;
+  summary?: string;
+  level: number;
+  school?: string;
+  castingTime?: string;
+  range?: string;
+  duration?: string;
+  concentration: boolean;
+}
+
+/**
+ * The declarative casting summary, present only when the ruleset content
+ * declares one for a class this character has. Nothing here is guessed: the
+ * attack and save numbers exist only when the declaration provides the inputs.
+ */
+export interface DerivedSpellcasting {
+  abilityLabel: string;
+  spellAttack: DerivedValue | null;
+  saveDc: DerivedValue | null;
+  /** Resource IDs (already present in `resources`) that act as spell slots. */
+  slotResourceIds: readonly ID[];
+  spells: readonly DerivedSpell[];
+}
+
 export interface SanitizedIssue {
   code: string;
   severity: "error" | "warning" | "info";
@@ -162,7 +203,18 @@ export interface DerivedCharacterSheet {
   actions: readonly DerivedAction[];
   resources: readonly DerivedResource[];
   equipment: readonly DerivedEquipmentItem[];
-  conditions: readonly { conditionId: ID; label: string }[];
+  features: readonly DerivedFeature[];
+  otherProficiencies: readonly DerivedOtherProficiency[];
+  /** Present only when the content declares spellcasting for this character. */
+  spellcasting?: DerivedSpellcasting;
+  conditions: readonly { conditionId: ID; label: string; summary?: string }[];
+  /** Conditions this character's ruleset can track, for the add-condition list. */
+  availableConditions: readonly { id: ID; label: string; summary?: string }[];
+  /** Session state surfaced for the glance header. */
+  hitDiceRemaining: number | null;
+  exhaustion: number;
+  deathSaves: { readonly successes: number; readonly failures: number };
+  inspiration: boolean;
   activeRulesetId: ID;
   activeRulesetLabel: string | null;
   activeSourceIds: readonly ID[];
@@ -186,6 +238,36 @@ const actionDefinitionSchema = z
     range: z.string().max(40).optional(),
   })
   .passthrough();
+
+/** Boundary schema for a declarative spellcasting rule. Nothing is evaluated. */
+const spellcastingDeclarationSchema = z
+  .object({
+    classId: z.string().max(160),
+    ability: z.enum(["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"]),
+    attackProficient: z.boolean().default(false),
+    saveDcBase: z.number().int().min(0).max(30).optional(),
+    slotResourceIds: z.array(z.string().max(160)).default([]),
+  })
+  .passthrough();
+
+/** Loose boundary read of stored spell mechanics; absent fields stay absent. */
+const spellMechanicsDisplaySchema = z
+  .object({
+    level: z.number().int().min(0).max(9),
+    school: z.string().max(40).optional(),
+    castingTime: z.object({ amount: z.number(), unit: z.string().max(20) }).passthrough().optional(),
+    duration: z
+      .object({ type: z.string().max(20), amount: z.number().optional(), unit: z.string().max(20).optional(), concentration: z.boolean() })
+      .passthrough()
+      .optional(),
+    range: z
+      .object({ type: z.string().max(20), distance: z.number().optional(), unit: z.string().max(20).optional() })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+const capitalize = (value: string) => (value ? `${value[0].toUpperCase()}${value.slice(1)}` : value);
 
 const known = (value: number, contributors: Contributor[]): DerivedValue => ({ value, contributors });
 const unknown = (recovery: RecoveryAction, contributors: Contributor[] = []): DerivedValue => ({
@@ -720,6 +802,115 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   }
   resources.sort((left, right) => left.id.localeCompare(right.id));
 
+  // ---- features, traits and feats ------------------------------------------
+  const features: DerivedFeature[] = [];
+  if (state) {
+    const pushFeature = (id: ID, group: DerivedFeature["group"]) => {
+      const definition = byId.get(id);
+      if (!definition) return;
+      features.push({ id, label: definition.name, ...(definition.summary ? { summary: definition.summary } : {}), group });
+    };
+    for (const id of state.classFeatureIds) pushFeature(id, "class");
+    // Chosen options with their own entry (a fighting style, a mastery) are
+    // part of the class's build and read best alongside its features.
+    for (const id of state.activeEntryIds) {
+      const definition = byId.get(id);
+      if (definition && (definition.category === "fighting-style" || definition.category === "weapon-mastery"))
+        pushFeature(id, "class");
+    }
+    for (const id of state.identityTraitIds) pushFeature(id, "species");
+    for (const id of state.activeEntryIds) {
+      const definition = byId.get(id);
+      if (definition && definition.category === "feat" && !state.identityTraitIds.has(id)) pushFeature(id, "background");
+    }
+  }
+  features.sort((left, right) => left.group.localeCompare(right.group) || left.label.localeCompare(right.label));
+
+  // ---- armour, weapon, tool and language proficiencies ----------------------
+  const otherProficiencies: DerivedOtherProficiency[] = [];
+  for (const id of proficiencies) {
+    const definition = byId.get(id);
+    if (!definition || definition.category !== "proficiency") continue;
+    const type = (definition.mechanics as { type?: unknown }).type;
+    if (type === "armor" || type === "weapon" || type === "tool" || type === "language")
+      otherProficiencies.push({ id, label: definition.name, type });
+  }
+  otherProficiencies.sort((left, right) => left.type.localeCompare(right.type) || left.label.localeCompare(right.label));
+
+  // ---- spellcasting ----------------------------------------------------------
+  let spellcasting: DerivedSpellcasting | undefined;
+  const classIds = new Set(character.classLevels.map(item => item.classId));
+  const spellcastingDeclaration = entries
+    .filter(item => item.category === "rule" && (item.mechanics as { kind?: unknown }).kind === "spellcasting")
+    .map(item => spellcastingDeclarationSchema.safeParse((item.mechanics as { data?: unknown }).data))
+    .find(parsed => parsed.success && classIds.has(parsed.data.classId));
+  if (state && spellcastingDeclaration?.success) {
+    const declaration = spellcastingDeclaration.data;
+    const castingModifier = modifierOf(declaration.ability);
+    const abilityLabel = capitalize(declaration.ability);
+    const castingContributors = (base?: Contributor): Contributor[] => [
+      ...(base ? [base] : []),
+      { kind: "ability" as const, label: `${abilityLabel} modifier`, amount: castingModifier ?? 0 },
+      { kind: "proficiency" as const, label: "Proficiency bonus", amount: bonus },
+    ];
+    const spellAttack: DerivedValue | null = declaration.attackProficient
+      ? castingModifier === null
+        ? unknown({ code: "ABILITY_SCORE_MISSING", fieldPath: "spellcasting.attack", action: `Set ${abilityLabel}` })
+        : known(castingModifier + bonus, castingContributors())
+      : null;
+    const saveDc: DerivedValue | null =
+      declaration.saveDcBase === undefined
+        ? null
+        : castingModifier === null
+          ? unknown({ code: "ABILITY_SCORE_MISSING", fieldPath: "spellcasting.saveDc", action: `Set ${abilityLabel}` })
+          : known(
+              declaration.saveDcBase + castingModifier + bonus,
+              castingContributors({ kind: "base", label: "Base", amount: declaration.saveDcBase }),
+            );
+    const spells: DerivedSpell[] = [];
+    for (const spellId of state.ruleResult.spells) {
+      const definition = byId.get(spellId);
+      if (!definition) {
+        missingDependencyIds.add(spellId);
+        continue;
+      }
+      const mechanics = spellMechanicsDisplaySchema.safeParse(definition.mechanics);
+      if (!mechanics.success) continue;
+      const meta = mechanics.data;
+      const rangeText =
+        meta.range === undefined
+          ? undefined
+          : meta.range.type === "distance" && meta.range.distance !== undefined
+            ? `${meta.range.distance} ${meta.range.unit ?? "feet"}`
+            : capitalize(meta.range.type);
+      const durationText =
+        meta.duration === undefined
+          ? undefined
+          : meta.duration.type === "timed" && meta.duration.amount !== undefined
+            ? `${meta.duration.amount} ${meta.duration.unit ?? "round"}${meta.duration.amount === 1 ? "" : "s"}`
+            : capitalize(meta.duration.type);
+      spells.push({
+        id: spellId,
+        label: definition.name,
+        ...(definition.summary ? { summary: definition.summary } : {}),
+        level: meta.level,
+        ...(meta.school ? { school: capitalize(meta.school) } : {}),
+        ...(meta.castingTime ? { castingTime: `${meta.castingTime.amount} ${meta.castingTime.unit.replace("-", " ")}` } : {}),
+        ...(rangeText ? { range: rangeText } : {}),
+        ...(durationText ? { duration: durationText } : {}),
+        concentration: meta.duration?.concentration ?? false,
+      });
+    }
+    spells.sort((left, right) => left.level - right.level || left.label.localeCompare(right.label));
+    spellcasting = {
+      abilityLabel,
+      spellAttack,
+      saveDc,
+      slotResourceIds: declaration.slotResourceIds.filter(id => resources.some(resource => resource.id === id)),
+      spells,
+    };
+  }
+
   // ---- classification ------------------------------------------------------
   const automaticMinimumMet =
     mode === "automatic" &&
@@ -804,7 +995,25 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     actions,
     resources,
     equipment,
-    conditions: (runtime?.conditions ?? []).map(item => ({ conditionId: item.conditionId, label: byId.get(item.conditionId)?.name ?? item.conditionId })),
+    features,
+    otherProficiencies,
+    ...(spellcasting ? { spellcasting } : {}),
+    conditions: (runtime?.conditions ?? []).map(item => {
+      const definition = byId.get(item.conditionId);
+      return {
+        conditionId: item.conditionId,
+        label: definition?.name ?? item.conditionId,
+        ...(definition?.summary ? { summary: definition.summary } : {}),
+      };
+    }),
+    availableConditions: entries
+      .filter(item => item.category === "condition")
+      .map(item => ({ id: item.id, label: item.name, ...(item.summary ? { summary: item.summary } : {}) }))
+      .sort((left, right) => left.label.localeCompare(right.label)),
+    hitDiceRemaining: runtime?.hitDiceRemaining ?? null,
+    exhaustion: runtime?.exhaustion ?? 0,
+    deathSaves: runtime?.deathSaves ?? { successes: 0, failures: 0 },
+    inspiration: runtime?.inspiration ?? false,
     activeRulesetId: character.rulesetProfileId,
     activeRulesetLabel: input.ruleset?.name ?? null,
     activeSourceIds,

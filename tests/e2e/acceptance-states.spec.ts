@@ -66,9 +66,11 @@ test.describe("AC-01 Duplicate and Archive", () => {
 
     // Playing the copy does not change the original.
     await page.getByRole("button", { name: /Open Brammel Voss \(Copy\)/ }).click();
-    await page.getByLabel("Amount").fill("4");
+    await page.getByRole("button", { name: /Open hit point actions/ }).click();
+    await page.getByRole("spinbutton", { name: "Amount" }).fill("4");
     await page.getByRole("button", { name: /Apply 4 damage/ }).click();
-    await expect(page.getByText("6 / 10")).toBeVisible();
+    await expect(page.getByText("6 / 10").first()).toBeVisible();
+    await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: /Open Brammel Voss,/ }).click();
@@ -177,14 +179,14 @@ test.describe("AC-05 manual-sheet entry", () => {
     // Visibly Manual, with no false claim of automatic justification.
     await expect(page.getByText("Manual", { exact: true })).toBeVisible();
     await expect(page.getByText(/not automatically rules-justified/)).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Armour class, 15/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Armour class 15\. Open details/ })).toBeVisible();
     await expect(page.getByText("9 / 9")).toBeVisible();
 
     // It reopens from the library as a manual character.
     await page.reload();
     await page.getByRole("button", { name: /Open Marek Tal/ }).click();
     await expect(page.getByText("Manual", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Armour class, 15/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Armour class 15\. Open details/ })).toBeVisible();
   });
 });
 
@@ -265,11 +267,17 @@ test.describe("AC-15 named states and recovery", () => {
     await page.reload();
     await page.getByRole("button", { name: /Open Brammel Voss/ }).click();
 
-    const banner = page.getByRole("alert").filter({ hasText: /Missing source/ });
+    const banner = page.getByRole("alert").filter({ hasText: /source content is missing/ });
     await expect(banner).toBeVisible();
-    // It names the stable ID and offers a recovery action.
-    await expect(banner).toContainText("class:vanguard");
-    await expect(banner).toContainText(/Re-enable or import the source/);
+    /*
+     * It says what happened and where to repair it, in plain words. The stable
+     * IDs it used to print were technical provenance on a play surface, so the
+     * banner now names neither the entry nor the source; Settings is where
+     * content is identified.
+     */
+    await expect(banner).not.toContainText("class:vanguard");
+    await expect(banner).not.toContainText("source:");
+    await expect(banner).toContainText(/re-enable or import it under Settings/);
     await expect(banner).toContainText(/Nothing is substituted for you/);
     // Affected values are blocked rather than guessed.
     await expect(page.getByText("—").first()).toBeVisible();
@@ -366,12 +374,13 @@ test.describe("AC-17 zoom, forced colours and focus order", () => {
     await startNewCharacter(page);
     await buildBrammel(page);
 
-    // State is carried by words, not colour alone, so it survives forced colours.
-    await expect(page.getByText("Automatic", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Armour class, 18/ })).toBeVisible();
+    // State is carried by words, not colour alone, so it survives forced
+    // colours: proficiency is in the accessible name, not only in a filled dot.
+    await expect(page.getByRole("button", { name: /Strength save \+5, proficient/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Armour class 18\. Open details/ })).toBeVisible();
 
     const bordered = await page.evaluate(() => {
-      const card = document.querySelector<HTMLElement>(".m2-card");
+      const card = document.querySelector<HTMLElement>(".sheet-card");
       return card ? getComputedStyle(card).borderTopWidth : "0px";
     });
     // Boundaries remain drawn rather than relying on a background colour.

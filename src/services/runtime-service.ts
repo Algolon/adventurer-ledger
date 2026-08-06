@@ -60,6 +60,12 @@ export type RuntimeOperation =
   | { kind: "resource-recover"; resourceId: ID; amount: number }
   | { kind: "condition-add"; conditionId: ID }
   | { kind: "condition-remove"; conditionId: ID }
+  | { kind: "inspiration-set"; value: boolean }
+  | { kind: "exhaustion-set"; value: number }
+  | { kind: "death-save"; result: "success" | "failure" }
+  | { kind: "death-saves-clear" }
+  | { kind: "hit-dice-spend"; amount: number }
+  | { kind: "hit-dice-recover"; amount: number }
   | { kind: "short-rest" }
   | { kind: "long-rest" };
 
@@ -81,6 +87,14 @@ export interface RuntimeResult {
 }
 
 const NUMERIC_FIELDS = ["currentHitPoints", "temporaryHitPoints", "hitDiceRemaining", "exhaustion"] as const;
+
+/** Absent inspiration and explicit false are the same state. */
+const inspirationOf = (state: CharacterRuntimeStateRecord) => state.inspiration ?? false;
+
+const sameDeathSaves = (
+  left: CharacterRuntimeStateRecord["deathSaves"],
+  right: CharacterRuntimeStateRecord["deathSaves"],
+) => left.successes === right.successes && left.failures === right.failures;
 
 const sameConditions = (
   left: CharacterRuntimeStateRecord["conditions"],
@@ -143,6 +157,18 @@ export function runtimeFragmentDiff(
     changed = true;
   }
 
+  if (inspirationOf(previous) !== inspirationOf(next)) {
+    before.inspiration = inspirationOf(previous);
+    after.inspiration = inspirationOf(next);
+    changed = true;
+  }
+
+  if (!sameDeathSaves(previous.deathSaves, next.deathSaves)) {
+    before.deathSaves = { ...previous.deathSaves };
+    after.deathSaves = { ...next.deathSaves };
+    changed = true;
+  }
+
   return { before, after, changed };
 }
 
@@ -164,6 +190,8 @@ export function applyRuntimeFragment(
     next.resourceUses = uses;
   }
   if (fragment.conditions) next.conditions = fragment.conditions.map(item => ({ ...item }));
+  if (typeof fragment.inspiration === "boolean") next.inspiration = fragment.inspiration;
+  if (fragment.deathSaves) next.deathSaves = { ...fragment.deathSaves };
   return next;
 }
 
@@ -191,7 +219,9 @@ export function fragmentRestoresExactly(
   return (
     NUMERIC_FIELDS.every(field => restored[field] === previous[field]) &&
     sameResourceUses(restored.resourceUses, previous.resourceUses) &&
-    sameConditions(restored.conditions, previous.conditions)
+    sameConditions(restored.conditions, previous.conditions) &&
+    inspirationOf(restored) === inspirationOf(previous) &&
+    sameDeathSaves(restored.deathSaves, previous.deathSaves)
   );
 }
 
@@ -226,6 +256,9 @@ export function previewRuntimeOperation(
       const amount = Math.max(0, Math.trunc(operation.amount));
       const from = next.currentHitPoints;
       next.currentHitPoints = clamp(from + amount, 0, maximumHitPoints, "HIT_POINTS_CLAMPED", "hitPoints.current");
+      // Regaining hit points ends the dying state, so the tally is cleared as
+      // part of the same mutation rather than left to reappear at the next 0.
+      if (from === 0 && next.currentHitPoints > 0) next.deathSaves = { successes: 0, failures: 0 };
       return { next, delta: next.currentHitPoints - from, warnings };
     }
     case "temporary-hit-points": {
@@ -262,6 +295,34 @@ export function previewRuntimeOperation(
       next.conditions = next.conditions.filter(item => item.conditionId !== operation.conditionId);
       return { next, targetId: operation.conditionId, warnings };
     }
+    case "inspiration-set": {
+      next.inspiration = operation.value;
+      return { next, warnings };
+    }
+    case "exhaustion-set": {
+      const from = next.exhaustion;
+      next.exhaustion = clamp(Math.trunc(operation.value), 0, 6, "EXHAUSTION_CLAMPED", "exhaustion");
+      return { next, delta: next.exhaustion - from, warnings };
+    }
+    case "death-save": {
+      const tally = { ...next.deathSaves };
+      if (operation.result === "success") tally.successes = clamp(tally.successes + 1, 0, 3, "DEATH_SAVES_CLAMPED", "deathSaves");
+      else tally.failures = clamp(tally.failures + 1, 0, 3, "DEATH_SAVES_CLAMPED", "deathSaves");
+      next.deathSaves = tally;
+      return { next, warnings };
+    }
+    case "death-saves-clear": {
+      next.deathSaves = { successes: 0, failures: 0 };
+      return { next, warnings };
+    }
+    case "hit-dice-spend":
+    case "hit-dice-recover": {
+      const amount = Math.max(0, Math.trunc(operation.amount));
+      const signed = operation.kind === "hit-dice-spend" ? -amount : amount;
+      const from = next.hitDiceRemaining;
+      next.hitDiceRemaining = clamp(from + signed, 0, sheet.level, "HIT_DICE_CLAMPED", "hitDiceRemaining");
+      return { next, delta: next.hitDiceRemaining - from, warnings };
+    }
     case "short-rest": {
       // Only resources the declarative data recharges on a short rest return.
       const uses = { ...next.resourceUses };
@@ -279,6 +340,7 @@ export function previewRuntimeOperation(
       next.temporaryHitPoints = 0;
       next.hitDiceRemaining = sheet.level;
       next.exhaustion = Math.max(0, next.exhaustion - 1);
+      next.deathSaves = { successes: 0, failures: 0 };
       return { next, warnings };
     }
   }

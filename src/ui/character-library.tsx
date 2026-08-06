@@ -172,11 +172,17 @@ function CharacterRow({
         <span className="m2-row-text">
           <b>{card.name}</b>
           <small>
-            {card.classLabel ? `${card.classLabel} ${card.level}` : `Level ${card.level}`} · <StateBadge state={card.state} />
+            {card.classLabel ? `${card.classLabel} ${card.level}` : `Level ${card.level}`}
+            {/* A badge appears only when something needs attention or the sheet
+                is hand-entered; the nominal state needs no label. */}
+            {card.state !== "automatic" ? (
+              <>
+                {" "}
+                · <StateBadge state={card.state} />
+              </>
+            ) : null}
           </small>
-          <small className="m2-muted">
-            {card.rulesetId.replace("ruleset:", "")} · edited on this device {relative(card.updatedAt)}
-          </small>
+          <small className="m2-muted">Saved on this device · {relative(card.updatedAt)}</small>
         </span>
         <ChevronRight aria-hidden="true" />
         <span className="m2-visually-hidden">

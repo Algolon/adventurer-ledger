@@ -25,6 +25,7 @@ import { SettingsView } from "@/src/ui/settings-view";
 import { TransferPanel } from "@/src/ui/transfer-panel";
 import type { RulesetSelection } from "@/src/services/content-install-service";
 import "./m2.css";
+import "./sheet.css";
 
 type View = "characters" | "sheet" | "compendium" | "settings" | "transfer";
 

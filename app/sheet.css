@@ -1,0 +1,786 @@
+/*
+ * The play-first character sheet.
+ *
+ * Sheet-scoped design tokens with a real dark scheme: the sheet reads its
+ * colours only through these variables, and the dark block re-states every one
+ * of them, so no dark-mode surface ever mixes a dark background with a
+ * light-assuming foreground. Touch targets stay at 44 CSS px minimum (play
+ * actions 48), no state relies on colour alone, and nothing scrolls the
+ * document sideways at 360–412 px.
+ */
+
+.sheet {
+  --sh-ink: #1c2730;
+  --sh-muted: #5c6570;
+  --sh-card: #fffaf0;
+  --sh-card-border: #b9945266;
+  --sh-inset: #f4ecda;
+  --sh-accent: #8a6420;
+  --sh-tab-ink: #4c5560;
+  --sh-chip-bg: #f4ecda;
+  --sh-chip-border: #b9945288;
+  --sh-chip-on-bg: #8a6420;
+  --sh-chip-on-ink: #fdf7ea;
+  --sh-warn-bg: #fff0d2;
+  --sh-warn-ink: #6d4611;
+  --sh-warn-border: #c9893b;
+  --sh-danger: #8c3535;
+  --sh-danger-bg: #fdeeee;
+  --sh-good: #43683f;
+  --sh-focus: #22456b;
+
+  color: var(--sh-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .sheet {
+    --sh-ink: #ece4d4;
+    --sh-muted: #a8a094;
+    --sh-card: #16222c;
+    --sh-card-border: #b9945255;
+    --sh-inset: #0e1820;
+    --sh-accent: #d9b56b;
+    --sh-tab-ink: #c4bcae;
+    --sh-chip-bg: #0e1820;
+    --sh-chip-border: #b9945266;
+    --sh-chip-on-bg: #d9b56b;
+    --sh-chip-on-ink: #16222c;
+    --sh-warn-bg: #3a2c14;
+    --sh-warn-ink: #f0d9a8;
+    --sh-warn-border: #c9893b;
+    --sh-danger: #e39c9c;
+    --sh-danger-bg: #3a1d1d;
+    --sh-good: #a4c9a0;
+    --sh-focus: #9ec1ec;
+  }
+
+  /*
+   * The page behind the sheet is painted by the shell. While the sheet is the
+   * open view it owns the visible surface, so it darkens the page area itself;
+   * the app chrome (top bar and navigation) is already dark navy in both
+   * schemes.
+   */
+  .m2-main:has(.sheet) {
+    background: #0a141d;
+  }
+  .m2-shell:has(.sheet) {
+    background: #0a141d;
+  }
+
+  /* The bottom bar sits over the dark sheet, so it darkens with it. */
+  .m2-shell:has(.sheet) .m2-rail {
+    background: #101c26;
+    border-top-color: #b9945244;
+    color: #ece4d4;
+  }
+  .m2-shell:has(.sheet) .m2-nav-button.m2-active {
+    color: #d9b56b;
+  }
+
+  .sheet .m2-banner {
+    background: var(--sh-warn-bg);
+    color: var(--sh-warn-ink);
+  }
+
+  .m2-backdrop-sheet .m2-dialog {
+    background: var(--sh-card, #16222c);
+    color: #ece4d4;
+    --sh-card: #16222c;
+    --sh-inset: #0e1820;
+    --sh-muted: #a8a094;
+    --sh-card-border: #b9945255;
+    --sh-chip-border: #b9945266;
+    --sh-danger: #e39c9c;
+    --sh-good: #a4c9a0;
+  }
+
+  /* Shared controls assume the light shell; restate them for the dark sheet. */
+  .sheet .m2-button:not(.m2-button-primary),
+  .m2-backdrop-sheet .m2-button:not(.m2-button-primary),
+  .sheet .m2-play-action,
+  .m2-backdrop-sheet .m2-play-action {
+    background: var(--sh-inset, #0e1820);
+    border-color: var(--sh-chip-border, #b9945266);
+    color: var(--sh-ink, #ece4d4);
+  }
+
+  .sheet .m2-unknown,
+  .m2-backdrop-sheet .m2-unknown {
+    color: var(--sh-warn-ink, #f0d9a8);
+  }
+
+  .m2-backdrop-sheet .m2-icon-button {
+    color: inherit;
+  }
+}
+
+.sheet :focus-visible,
+.m2-backdrop-sheet :focus-visible {
+  outline: 3px solid var(--sh-focus, #22456b);
+  outline-offset: 2px;
+}
+
+/* ---- glance header -------------------------------------------------------- */
+
+.sheet-glance {
+  display: grid;
+  gap: 10px;
+}
+
+.sheet-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.sheet-identity-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-identity h2 {
+  margin: 0;
+  font: 600 26px/1.2 var(--display);
+}
+
+.sheet-identity-line {
+  margin: 2px 0 0;
+  color: var(--sh-muted);
+}
+
+.sheet-quiet-note {
+  margin: 4px 0 0;
+  color: var(--sh-muted);
+  font-size: 13px;
+}
+
+.sheet-edit {
+  flex: none;
+  min-height: 44px;
+}
+
+.sheet-vitals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sheet-hp {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 56px;
+  padding: 8px 14px;
+  border: 1px solid var(--sh-card-border);
+  border-radius: 12px;
+  background: var(--sh-card);
+  color: inherit;
+  text-align: left;
+}
+
+.sheet-hp-value {
+  font: 700 28px/1.1 var(--display);
+}
+
+.sheet-hp-value small {
+  font: 600 16px var(--ui);
+  color: var(--sh-muted);
+}
+
+.sheet-hp-temp,
+.sheet-badge {
+  padding: 2px 8px;
+  border: 1px solid var(--sh-chip-border);
+  border-radius: 999px;
+  background: var(--sh-chip-bg);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.sheet-hp-dying {
+  border-color: var(--sh-danger);
+}
+
+.sheet-hp-state {
+  color: var(--sh-danger);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.sheet-tile,
+.sheet-ability {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  align-content: center;
+  min-height: 56px;
+  padding: 6px 4px;
+  border: 1px solid var(--sh-card-border);
+  border-radius: 12px;
+  background: var(--sh-card);
+  color: inherit;
+}
+
+.sheet-tile-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--sh-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sheet-tile-label svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sheet-tile-value {
+  font: 700 20px/1.1 var(--display);
+}
+
+.sheet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sheet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border: 1px solid var(--sh-chip-border);
+  border-radius: 999px;
+  background: var(--sh-chip-bg);
+  color: inherit;
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.sheet-chip svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sheet-chip-on {
+  background: var(--sh-chip-on-bg);
+  border-color: var(--sh-chip-on-bg);
+  color: var(--sh-chip-on-ink);
+}
+
+.sheet-chip-warn {
+  background: var(--sh-warn-bg);
+  border-color: var(--sh-warn-border);
+  color: var(--sh-warn-ink);
+}
+
+.sheet-chip-add {
+  border-style: dashed;
+}
+
+.sheet-receipt {
+  margin: 0;
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sh-muted);
+  font-size: 14px;
+}
+
+.sheet-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 2px 12px;
+  border: 1px solid var(--sh-chip-border);
+  border-radius: 999px;
+  background: var(--sh-card);
+  color: inherit;
+  font-weight: 650;
+}
+
+.sheet-undo svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---- death saves ---------------------------------------------------------- */
+
+.sheet-dying {
+  border-color: var(--sh-danger);
+}
+
+.sheet-death-tallies {
+  display: flex;
+  gap: 24px;
+}
+
+.sheet-death-tally {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-weight: 650;
+}
+
+.sheet-pip {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border: 2px solid var(--sh-muted);
+  border-radius: 50%;
+}
+
+.sheet-pip-filled {
+  background: var(--sh-danger);
+  border-color: var(--sh-danger);
+}
+
+/* ---- tabs ----------------------------------------------------------------- */
+
+.sheet-tabs {
+  position: sticky;
+  top: var(--appbar-height);
+  z-index: 15;
+  display: flex;
+  gap: 4px;
+  margin: 0 -14px;
+  padding: 6px 14px;
+  overflow-x: auto;
+  background: var(--paper);
+  border-bottom: 1px solid var(--sh-card-border);
+}
+
+@media (prefers-color-scheme: dark) {
+  .sheet-tabs {
+    background: #0a141d;
+  }
+}
+
+.sheet-tab {
+  flex: 1 0 auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--sh-tab-ink);
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.sheet-tab-active {
+  background: var(--sh-card);
+  color: var(--sh-accent);
+  box-shadow: inset 0 -3px 0 var(--sh-accent);
+}
+
+.sheet-panel {
+  display: grid;
+  gap: 14px;
+}
+
+/* ---- cards and rows -------------------------------------------------------- */
+
+.sheet-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--sh-card-border);
+  border-radius: 12px;
+  background: var(--sh-card);
+}
+
+.sheet-card h3 {
+  margin: 0;
+  font: 600 18px var(--display);
+}
+
+.sheet-card h4 {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--sh-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sheet-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+}
+
+.sheet-rows > li {
+  border-top: 1px solid var(--sh-card-border);
+}
+
+.sheet-rows > li:first-child {
+  border-top: none;
+}
+
+.sheet-row {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  min-height: 48px;
+  padding: 10px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.sheet-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+  font-size: 16px;
+}
+
+.sheet-row-title svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sheet-row-meta {
+  color: var(--sh-muted);
+  font-size: 14px;
+}
+
+.sheet-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 4px;
+}
+
+.sheet-quantity {
+  color: var(--sh-muted);
+  font-weight: 600;
+}
+
+/* ---- overview -------------------------------------------------------------- */
+
+.sheet-abilities {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sheet-ability {
+  min-height: 74px;
+}
+
+.sheet-ability-score {
+  color: var(--sh-muted);
+  font-size: 13px;
+}
+
+.sheet-checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+}
+
+.sheet-checks > li {
+  border-top: 1px solid var(--sh-card-border);
+}
+
+.sheet-checks > li:first-child {
+  border-top: none;
+}
+
+.sheet-checks button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-size: 16px;
+}
+
+.sheet-check-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-prof-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--sh-muted);
+  border-radius: 50%;
+}
+
+.sheet-prof-dot-on {
+  background: var(--sh-accent);
+  border-color: var(--sh-accent);
+}
+
+/* ---- resources and steppers ------------------------------------------------ */
+
+.sheet-resource {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title stepper"
+    "count stepper"
+    "recharge stepper";
+  align-items: center;
+  gap: 0 10px;
+  padding: 6px 0;
+}
+
+.sheet-resource .sheet-row-title {
+  grid-area: title;
+}
+
+.sheet-resource-count {
+  grid-area: count;
+  font: 700 18px var(--display);
+}
+
+.sheet-resource-recharge {
+  grid-area: recharge;
+  color: var(--sh-muted);
+  font-size: 13px;
+}
+
+.sheet-resource-recharge:empty {
+  display: none;
+}
+
+.sheet-stepper {
+  grid-area: stepper;
+  display: flex;
+  gap: 8px;
+}
+
+.sheet-stepper button,
+.sheet-amount button {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--sh-chip-border);
+  border-radius: 12px;
+  background: var(--sh-inset);
+  color: inherit;
+}
+
+.sheet-stepper button:disabled,
+.sheet-amount button:disabled {
+  opacity: 0.45;
+}
+
+.sheet-stepper svg,
+.sheet-amount svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* ---- spells ---------------------------------------------------------------- */
+
+.sheet-casting {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sheet-casting-fact {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  align-content: center;
+  min-height: 56px;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--sh-inset);
+}
+
+/* ---- character ------------------------------------------------------------- */
+
+.sheet-facts {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sheet-fact {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.sheet-fact dt {
+  color: var(--sh-muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sheet-fact dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.sheet-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sheet-row-actions .m2-play-action {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+/* ---- drawer (bottom sheet) -------------------------------------------------- */
+
+.m2-backdrop-sheet {
+  align-items: end;
+  padding: 0;
+}
+
+.m2-backdrop-sheet .m2-dialog {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  max-height: min(85dvh, 640px);
+  border-radius: 16px 16px 0 0;
+  border-bottom: none;
+}
+
+@media (min-width: 960px) {
+  .m2-backdrop-sheet {
+    align-items: center;
+    padding: 12px;
+  }
+
+  .m2-backdrop-sheet .m2-dialog {
+    border-radius: 12px;
+  }
+}
+
+.sheet-drawer-value {
+  margin: 0;
+  font: 700 30px/1.1 var(--display);
+}
+
+.sheet-drawer-value small {
+  font: 600 15px var(--ui);
+  color: var(--sh-muted, var(--muted));
+}
+
+.sheet-breakdown {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+}
+
+.sheet-breakdown > li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 6px 0;
+  border-top: 1px solid var(--sh-card-border, var(--border));
+}
+
+.sheet-breakdown > li:first-child {
+  border-top: none;
+}
+
+.sheet-hp-controls,
+.sheet-state-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.sheet-hp-controls h4,
+.sheet-state-controls h4 {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--sh-muted, var(--muted));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sheet-amount {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* Specific enough to beat the global light form-control background. */
+.m2-dialog .sheet-amount input[type="number"] {
+  width: 84px;
+  text-align: center;
+  font: 700 20px var(--display);
+  border: 1px solid var(--sh-chip-border, var(--border));
+  border-radius: 12px;
+  background-color: var(--sh-inset, #f4ecda);
+  color: var(--sh-ink, #1c2730);
+}
+
+.sheet-action-damage {
+  border-color: var(--sh-danger);
+}
+
+.sheet-action-heal {
+  border-color: var(--sh-good);
+}
+
+/* ---- width adaptations ------------------------------------------------------ */
+
+@media (min-width: 600px) {
+  .sheet-abilities {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .sheet-vitals {
+    grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 1fr));
+  }
+
+  .sheet-hp {
+    grid-column: 1;
+  }
+}
+
+@media (min-width: 960px) {
+  .sheet-tabs {
+    position: static;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border-bottom: 1px solid var(--sh-card-border);
+  }
+}

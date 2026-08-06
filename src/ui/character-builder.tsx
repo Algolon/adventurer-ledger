@@ -22,6 +22,7 @@ import {
   BUILDER_STEPS,
   recommendationsFor,
   remainingArraySlots,
+  resourceIdsFor,
   type BuilderStepId,
   type PlannedStep,
   type RequiredChoice,
@@ -981,6 +982,9 @@ function StepContent({
         </div>
       );
 
+    case "spells-resources":
+      return <SpellsResourcesStep build={build} entries={entries} plan={plan} onChange={onChange} />;
+
     case "equipment":
       return <EquipmentStep build={build} entries={entries} plan={plan} onChange={onChange} />;
 
@@ -1822,6 +1826,81 @@ function ManualSheetStep({
  * chosen. A package presented only by its name asks the user to choose between
  * two labels they cannot read the contents of.
  */
+/**
+ * Spells & resources: what the class grants at this level.
+ *
+ * The first fixture caster knows a fixed repertoire, so this step is a
+ * read-only statement of what the build grants — spells by level and the
+ * limited-use resources that power them. When content later models spell
+ * selection as choices, its choice groups render here through the same
+ * ChoiceGroups path every other step uses.
+ */
+function SpellsResourcesStep({
+  build,
+  entries,
+  plan,
+  onChange,
+}: {
+  build: CharacterDraftBuild;
+  entries: readonly ContentEntry[];
+  plan: DraftSnapshot["plan"];
+  onChange(patch: DraftPatch): void;
+}) {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const classEntry = build.classId ? byId.get(build.classId) : undefined;
+  const spellIds = (classEntry?.effects ?? [])
+    .filter(effect => effect.type === "addSpell")
+    .map(effect => (effect as { spellId: string }).spellId);
+  const spells = spellIds
+    .map(id => byId.get(id))
+    .filter((entry): entry is ContentEntry => entry !== undefined)
+    .map(entry => {
+      const level = (entry.mechanics as { level?: unknown }).level;
+      return { entry, level: typeof level === "number" ? level : null };
+    })
+    .sort((left, right) => (left.level ?? 0) - (right.level ?? 0) || left.entry.name.localeCompare(right.entry.name));
+  const resources = resourceIdsFor(build, entries)
+    .map(id => byId.get(id))
+    .filter((entry): entry is ContentEntry => entry !== undefined);
+
+  return (
+    <div className="m2-step">
+      {spells.length ? (
+        <section className="m2-fieldset">
+          <h3>Known spells</h3>
+          <p className="m2-muted">Granted by {classEntry?.name ?? "the class"}. Nothing here needs choosing at this level.</p>
+          <ul className="m2-plain-list">
+            {spells.map(({ entry, level }) => (
+              <li key={entry.id}>
+                <b>{entry.name}</b>
+                {level !== null ? <small className="m2-muted"> · {level === 0 ? "cantrip" : `level ${level}`}</small> : null}
+                {entry.summary ? <small className="m2-muted"> — {entry.summary}</small> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {resources.length ? (
+        <section className="m2-fieldset">
+          <h3>Resources</h3>
+          <ul className="m2-plain-list">
+            {resources.map(entry => (
+              <li key={entry.id}>
+                <b>{entry.name}</b>
+                {entry.summary ? <small className="m2-muted"> — {entry.summary}</small> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {!spells.length && !resources.length ? (
+        <p className="m2-muted">This class grants no spells or resources at the chosen level.</p>
+      ) : null}
+      <ChoiceGroups build={build} plan={plan} stepId="spells-resources" onChange={onChange} />
+    </div>
+  );
+}
+
 function EquipmentStep({
   build,
   entries,

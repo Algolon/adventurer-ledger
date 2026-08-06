@@ -392,7 +392,7 @@ test.describe("abilities are base plus origin, and stay that way", () => {
     await page.getByRole("button", { name: /Manual Base/ }).first().click();
     await expect(page.getByRole("heading", { name: "Manual Base", level: 2 })).toBeVisible();
     await expect(page.getByText("13 / 13")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Strength save, \+4/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Strength save \+4/ })).toBeVisible();
   });
 });
 
@@ -466,7 +466,11 @@ test.describe("levelling one step at a time through the UI", () => {
     await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible();
   }
 
-  const openLevelUp = (page: Page) => page.getByRole("button", { name: /^Level up/ }).first().click();
+  // Level up sits with Edit character in the sheet's Character section.
+  const openLevelUp = async (page: Page) => {
+    await page.getByRole("tab", { name: "Character" }).click();
+    await page.getByRole("button", { name: /^Level up/ }).first().click();
+  };
 
   test("goes 1 to 5, choosing the subclass at the level the class declares it", async ({ page }) => {
     await createLevelOne(page, "Stepwise");
@@ -506,7 +510,7 @@ test.describe("levelling one step at a time through the UI", () => {
     await expect(page.getByText("Second Beacon")).toBeVisible();
     await page.getByRole("button", { name: "Confirm level 5" }).click();
     await expect(page.getByText("Beaconkeeper 5 (Kindled Watch)")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Proficiency, \+3/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Proficiency bonus \+3/ })).toBeVisible();
   });
 });
 

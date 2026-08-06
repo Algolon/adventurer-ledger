@@ -220,6 +220,12 @@ export interface CharacterRuntimeStateRecord extends Audit {
   hitDiceRemaining: number;
   exhaustion: number;
   deathSaves: { readonly successes: number; readonly failures: number };
+  /**
+   * Heroic inspiration. Optional because records written before it existed do
+   * not carry it; an absent value reads as false and is only ever written back
+   * as an explicit boolean.
+   */
+  inspiration?: boolean;
 }
 
 export type RuntimeActionKind =
@@ -230,6 +236,12 @@ export type RuntimeActionKind =
   | "resource-recover"
   | "condition-add"
   | "condition-remove"
+  | "inspiration-set"
+  | "exhaustion-set"
+  | "death-save"
+  | "death-saves-clear"
+  | "hit-dice-spend"
+  | "hit-dice-recover"
   | "short-rest"
   | "long-rest"
   | "undo";
@@ -262,6 +274,14 @@ export interface RuntimeFragment {
   resourceUsesRemoved?: readonly ID[];
   /** The whole condition list, when it changed. */
   conditions?: readonly ConditionStateRecord[];
+  /**
+   * Inspiration on this side of the change. `false` and "absent from the
+   * fragment" differ, so the field is present exactly when the action changed
+   * it — the same discipline the resource keys follow.
+   */
+  inspiration?: boolean;
+  /** The whole death-save tally, when it changed. */
+  deathSaves?: { readonly successes: number; readonly failures: number };
 }
 
 /**

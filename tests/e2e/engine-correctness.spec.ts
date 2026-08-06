@@ -129,8 +129,8 @@ test.describe("hit points and armour resolve from content", () => {
     await expect(page.getByText("44 / 44")).toBeVisible();
     // Armour class 16, plus the +1 the level 1 feature contributes while armour
     // is worn. That bonus could never apply while the context said no armour.
-    await expect(page.getByRole("button", { name: /Explain Armour class, 17/ })).toBeVisible();
-    await page.getByRole("button", { name: /Explain Armour class/ }).click();
+    await expect(page.getByRole("button", { name: /Armour class 17\. Open details/ })).toBeVisible();
+    await page.getByRole("button", { name: /Armour class 17\. Open details/ }).click();
     const dialog = page.getByRole("dialog", { name: "Armour class" });
     await expect(dialog.getByText("Plated coat")).toBeVisible();
     await expect(dialog.getByText("Feature bonus")).toBeVisible();
@@ -140,7 +140,7 @@ test.describe("hit points and armour resolve from content", () => {
     await page.reload();
     await openCommitted(page, "Perrin Sallow");
     await expect(page.getByText("44 / 44")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Explain Armour class, 17/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Armour class 17\. Open details/ })).toBeVisible();
   });
 });
 
@@ -193,7 +193,8 @@ test.describe("a redundantly declared subclass is one decision", () => {
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByText("Mirrored Tide 2")).toBeVisible();
 
-    await page.getByRole("button", { name: "Level up" }).click();
+    await page.getByRole("tab", { name: "Character" }).click();
+    await page.getByRole("button", { name: /^Level up/ }).click();
     const dialog = page.getByRole("dialog", { name: "Level 2 to 3" });
     await expect(dialog).toBeVisible();
     // One subclass surface in the level-up dialog too, and no duplicate choice.

@@ -166,7 +166,14 @@ describe("unrelated pack isolation", () => {
     expect(sheetAfter?.activeSourceIds).toEqual(["source:runefolio-synthetic"]);
     // Nor do the other ruleset's saves and skills.
     expect(sheetAfter?.checks.map(check => check.label)).not.toContain("Tidereading");
-    expect(sheetAfter?.saves.map(save => save.ability)).toEqual(["strength", "constitution"]);
+    expect(sheetAfter?.saves.map(save => save.ability)).toEqual([
+      "strength",
+      "dexterity",
+      "constitution",
+      "intelligence",
+      "wisdom",
+      "charisma",
+    ]);
   });
 
   it("does not offer another ruleset's options in the builder", async () => {

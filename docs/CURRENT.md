@@ -59,6 +59,39 @@ These are **open**, not delivered. A pilot will meet them.
   not evidence of handset behaviour: install, relaunch, offline operation and
   storage eviction on a real device are untested.
 
+## Play-first character sheet, first iteration
+
+The character sheet is now **Play mode**, not a rules console. Its rationale and
+phone screenshots are in
+[`product/PLAY_SHEET_RATIONALE.md`](product/PLAY_SHEET_RATIONALE.md); the
+specification it produced is
+[`product/MOBILE_SHEET_SPEC.md`](product/MOBILE_SHEET_SPEC.md).
+
+The sheet writes only session state — current and temporary hit points, hit
+dice, death saves, conditions, exhaustion, inspiration, spell slots and
+limited-use resources — and every permanent change goes through one **Edit
+character** action that opens the builder. The Override editor, the
+`Copy expression` control, the roll expressions, the `Active ruleset` footer and
+the contributor rows tagged with engine kinds and source IDs are gone from the
+sheet and from the library. Content management is unchanged under Settings.
+Explanations remain, as plain-words breakdowns in a details drawer.
+
+The information architecture is a glance header over five sections — Overview,
+Actions, Spells, Inventory, Character — with Spells present only when installed
+content declares spellcasting for one of the character's classes. Runtime state
+gained inspiration, exhaustion, death saves and hit-dice spend/recover, each with
+exact undo.
+
+A second synthetic fixture, the **Runecaller** caster (Sereth Marsh), joins
+Vanguard so the Spells section and the conditional builder step are exercised by
+something real. Both fixtures are original synthetic content.
+
+This iteration deliberately does not close attack derivation from carried
+equipment, Extra Attack, prepared-versus-known spells, upcasting, concentration
+tracking, currency, attunement, senses, defences, notes or creatures. Sections
+without trustworthy data are hidden rather than filled with invented values; the
+full list is at the end of the rationale.
+
 ## Baseline before M1
 
 - Next.js 16/React 19 PWA shell with responsive navigation;
