@@ -65,9 +65,13 @@ The step list is exactly:
 8. Identity
 9. Review
 
-The conditional step is visibly marked “Not needed” rather than disappearing after the user has visited it.
+**Revised 2026-08-04, superseding the original wording.** The original criterion required a conditional step to stay in the sequence marked “Not needed” rather than disappearing. An exploratory review of the production build rejected that: an empty screen the user must still walk through is flow weight, not information.
 
-At 360 px, the user can discover current step, total steps, issue count, Back, Steps, and Continue without horizontally scrolling the document.
+A step that has nothing to decide is now **omitted from the active sequence**, and progress is numbered over the applicable steps only. What does not apply is stated once on Review, as `Spellcasting — None at this level`. Applicability is derived from content, so a class that does grant spell choices restores the step in its canonical position, with its draft state, validation and review entry intact.
+
+The nine steps above remain the canonical catalogue and their relative order never changes; only non-applicable steps are absent.
+
+At 360 px, the user can discover current step, total steps, issue count, Back and Continue without horizontally scrolling the document. Progress and the step list sit with the builder content; the footer holds exactly two actions, Back and Continue, at equal height with Continue primary.
 
 ### AC-04 — Guided mode
 
@@ -133,7 +137,7 @@ Removing the override previews the automatic replacement and is undoable/version
 
 Given renderable automatic level-1 Brammel, when Level up begins, then a pre-level restore point is identified before edits.
 
-The flow shows automatic gains, only newly required choices, resource/equipment impacts, and a before/after diff. It demonstrates `5/10 HP → 7/12` for a +2 maximum and `1/3 uses → 2/4` for a +1 maximum, naming the preserve-deficit/expenditure policy.
+The flow shows automatic gains, only newly required choices, resource/equipment impacts, and a before/after diff. It demonstrates `5/10 HP → 9/14` for a +4 maximum and `1/3 uses → 2/4` for a +1 maximum, naming the preserve-deficit/expenditure policy. The hit-point maximum moves by 4 because the Constitution modifier applies once per character level.
 
 Confirm commits level, choices, version, and derived state atomically. Cancel leaves level 1 unchanged. Undo restores the pre-level snapshot without deleting history.
 

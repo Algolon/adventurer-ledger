@@ -6,7 +6,9 @@ export const ruleContext = (): RuleContext => ({
   totalLevel: 5,
   classLevels: { "class:fighter:2024": 5 },
   abilities: { strength: 16, dexterity: 12, constitution: 14, intelligence: 13, wisdom: 14, charisma: 10 },
-  tags: new Set(), features: new Set(), proficiencies: new Set(), armor: { worn: true, type: "shield" }, flags: {},
+  // Body armour and a shield. `worn` and `type` describe the body armour; the
+  // shield is its own fact, so it can never stand in for one.
+  tags: new Set(), features: new Set(), proficiencies: new Set(), armor: { worn: true, type: "medium", shield: true, ambiguous: false }, flags: {},
   values: { armorClass: 18, initiative: 1, speed: 30, criticalRange: 20 },
 });
 

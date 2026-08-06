@@ -1,0 +1,171 @@
+/**
+ * Proficiency provenance and duplicate-grant detection.
+ *
+ * Every proficiency a build ends up with is traced to the entry that grants it
+ * and, when it was chosen rather than given, to the choice group it came from.
+ * Nothing here names a proficiency, a class or a background: it reads the same
+ * declarative structures the rules engine does.
+ *
+ * The duplicate rule exists because a class skill list frequently overlaps an
+ * origin's automatic grant. Selecting the overlapping option looks like a valid
+ * choice and then produces one fewer proficiency than the rules promise. That is
+ * a silent loss, so it is surfaced twice: redundant options are labelled with
+ * the source that already grants them and are not offered as live choices, and a
+ * build that already stores such a selection is blocked with a named repair.
+ */
+import { backgroundMechanicsSchema, classMechanicsSchema } from "@/src/domain/content-pack";
+import type { Category, ContentEntry, Effect, ID } from "@/src/domain/model";
+import type { ActivationPlan } from "@/src/services/choice-planner";
+
+export interface ProficiencySource {
+  entryId: ID;
+  entryLabel: string;
+  category: Category;
+}
+
+export interface ProficiencyGrantView {
+  proficiencyId: ID;
+  label: string;
+  kind: "automatic" | "selected";
+  source: ProficiencySource;
+  /** Present for a selected grant: the group the decision belongs to. */
+  choiceId?: ID;
+  choiceLabel?: string;
+  optionId?: ID;
+}
+
+export interface DuplicateProficiencySelection {
+  proficiencyId: ID;
+  label: string;
+  choiceId: ID;
+  choiceLabel: string;
+  optionId: ID;
+  grantedBy: ProficiencySource;
+  /** The action that resolves it, phrased for the builder's issue list. */
+  repair: string;
+}
+
+export interface ProficiencyPlan {
+  /** Automatic first, then selected; deterministic within each group. */
+  grants: readonly ProficiencyGrantView[];
+  /** Proficiency ID to the entry that grants it without a decision. */
+  automatic: ReadonlyMap<ID, ProficiencySource>;
+  /** `${choiceId}\u001f${optionId}` for options whose grant is already automatic. */
+  redundantOptions: ReadonlyMap<string, ProficiencySource>;
+  duplicates: readonly DuplicateProficiencySelection[];
+}
+
+export const redundantOptionKey = (choiceId: ID, optionId: ID): string => `${choiceId}\u001f${optionId}`;
+
+/** Unconditional proficiency grants declared directly by an entry's effects. */
+function directGrants(effects: readonly Effect[]): ID[] {
+  const granted: ID[] = [];
+  for (const effect of effects) {
+    // A conditional grant is not unconditional provenance; it is left to the
+    // rules engine, which evaluates the condition against a real context.
+    // `always` is the one condition that changes nothing, so it is not treated
+    // as a condition at all.
+    if (effect.condition && !("type" in effect.condition && effect.condition.type === "always")) continue;
+    if (effect.type === "grantProficiency") granted.push(effect.proficiencyId);
+  }
+  return granted;
+}
+
+/** Every proficiency one choice option would grant, directly or via its entry. */
+export function optionProficiencyIds(
+  option: { effects?: readonly Effect[]; entryId?: ID },
+  byId: ReadonlyMap<ID, ContentEntry>,
+): ID[] {
+  const fromEffects = directGrants(option.effects ?? []);
+  const entry = option.entryId ? byId.get(option.entryId) : undefined;
+  return [...new Set([...fromEffects, ...(entry ? directGrants(entry.effects) : [])])];
+}
+
+export function planProficiencies(
+  activation: ActivationPlan,
+  entries: readonly ContentEntry[],
+  choiceSelections: Readonly<Record<ID, readonly ID[]>>,
+): ProficiencyPlan {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const labelFor = (id: ID) => byId.get(id)?.name ?? id;
+  const automatic = new Map<ID, ProficiencySource>();
+  const grants: ProficiencyGrantView[] = [];
+
+  const sourceOf = (entry: ContentEntry): ProficiencySource => ({
+    entryId: entry.id,
+    entryLabel: entry.name,
+    category: entry.category,
+  });
+
+  const addAutomatic = (proficiencyId: ID, entry: ContentEntry) => {
+    // First activation wins, so provenance is stable rather than last-write.
+    if (automatic.has(proficiencyId)) return;
+    const source = sourceOf(entry);
+    automatic.set(proficiencyId, source);
+    grants.push({ proficiencyId, label: labelFor(proficiencyId), kind: "automatic", source });
+  };
+
+  for (const activated of activation.entries) {
+    // An entry that only became active because the user selected it is not an
+    // automatic source; treating it as one would make its own option redundant.
+    if (activated.route === "selection") continue;
+    const entry = activated.entry;
+    if (entry.category === "class") {
+      const mechanics = classMechanicsSchema.safeParse(entry.mechanics);
+      if (mechanics.success)
+        for (const id of [...mechanics.data.savingThrows, ...mechanics.data.startingProficiencyIds])
+          addAutomatic(id, entry);
+    }
+    if (entry.category === "background") {
+      const mechanics = backgroundMechanicsSchema.safeParse(entry.mechanics);
+      if (mechanics.success) for (const id of mechanics.data.proficiencyIds) addAutomatic(id, entry);
+    }
+    for (const id of directGrants(entry.effects)) addAutomatic(id, entry);
+  }
+
+  const redundantOptions = new Map<string, ProficiencySource>();
+  const duplicates: DuplicateProficiencySelection[] = [];
+  const selectedGrants: ProficiencyGrantView[] = [];
+
+  for (const activated of activation.choices) {
+    const selected = new Set(choiceSelections[activated.choice.id] ?? []);
+    for (const option of activated.choice.options) {
+      const proficiencyIds = optionProficiencyIds(option, byId);
+      for (const proficiencyId of proficiencyIds) {
+        const existing = automatic.get(proficiencyId);
+        if (existing) {
+          redundantOptions.set(redundantOptionKey(activated.choice.id, option.id), existing);
+          if (selected.has(option.id))
+            duplicates.push({
+              proficiencyId,
+              label: labelFor(proficiencyId),
+              choiceId: activated.choice.id,
+              choiceLabel: activated.choice.label,
+              optionId: option.id,
+              grantedBy: existing,
+              repair: `${labelFor(proficiencyId)} is already granted by ${existing.entryLabel}. Choose a different option for ${activated.choice.label}.`,
+            });
+          continue;
+        }
+        if (!selected.has(option.id)) continue;
+        selectedGrants.push({
+          proficiencyId,
+          label: labelFor(proficiencyId),
+          kind: "selected",
+          // Provenance comes from the activation record, which carries the
+          // declaring entry's identity even if the entry itself is gone.
+          source: {
+            entryId: activated.sourceEntryId,
+            entryLabel: activated.sourceLabel,
+            category: activated.sourceCategory,
+          },
+          choiceId: activated.choice.id,
+          choiceLabel: activated.choice.label,
+          optionId: option.id,
+        });
+      }
+    }
+  }
+
+  return { grants: [...grants, ...selectedGrants], automatic, redundantOptions, duplicates };
+}

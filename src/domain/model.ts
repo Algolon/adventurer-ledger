@@ -69,6 +69,12 @@ export interface ContentEntryVersion extends Audit{id:ID;entryId:ID;revision:num
 
 export interface RulesetProfile extends Audit{id:ID;name:string;activeSourceIds:ID[];editionPriority:Edition[];allowedCategories:Category[];allowedEntryIds?:ID[];disallowedEntryIds?:ID[];allowLegacy:boolean;allowDuplicateVersions:boolean;conflictResolution:"newest"|"source-priority"|"ask"|"allow-both"|"custom-override";allowCustomOverrides:boolean;requirementEnforcement:"hard"|"soft"}
 export interface Campaign extends Audit{id:ID;name:string;rulesetProfileId:ID;description?:string;status:"active"|"paused"|"completed"|"archived";tags:string[]}
+/**
+ * A local, explicitly-set device preference. It exists so an active ruleset is a
+ * recorded decision rather than whichever profile a query happened to return
+ * first. Values are short stable IDs, never content text.
+ */
+export interface AppPreference extends Audit{key:"activeRulesetId";value:string}
 export interface CharacterSelection extends Audit{id:ID;characterId:ID;choiceId?:ID;entryId?:ID;sourceId?:ID;levelGranted?:number;mode:"guided"|"free-entry"|"override"|"manual";value?:unknown}
 export interface Character extends Audit{id:ID;name:string;nickname?:string;imageRef?:string;tokenRef?:string;level:number;xp?:number;advancement:"xp"|"milestone";classLevels:Array<{classId:ID;subclassId?:ID;level:number}>;speciesId?:ID;lineageId?:ID;legacyRaceId?:ID;backgroundId?:ID;alignment?:string;deity?:string;faction?:string;campaignId?:ID;rulesetProfileId:ID;abilities:Record<Ability,number>;baseHitPoints:number;currentHitPoints:number;temporaryHitPoints:number;exhaustion:number;deathSaves:{successes:number;failures:number};selections:CharacterSelection[];biography:Record<string,string>;tags:string[];status:"active"|"archived"|"deceased";kind:"player-character"|"npc"|"premade"|"template";lastPlayedAt?:ISODate}
 export interface CharacterVersion extends Audit{id:ID;characterId:ID;sequence:number;reason:"manual"|"level-up"|"import"|"restore"|"migration";snapshot:Character;parentVersionId?:ID}

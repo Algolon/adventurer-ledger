@@ -4,15 +4,41 @@ const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "",
   APP_ROOT = `${BASE_PATH}/`,
   scoped = (pathname: `/${string}`) => `${BASE_PATH}${pathname}`;
 
+/**
+ * Navigates the M2.1 information architecture: Characters, Sheet and Compendium
+ * are primary destinations, and everything else is grouped under Settings.
+ */
+const SETTINGS_ITEMS = new Set([
+  "Content packs",
+  "Sources",
+  "Rulesets",
+  "Transfer",
+  "Imports and exports",
+  "Backups",
+  "Storage",
+  "Offline",
+  "Updates",
+]);
+
+/** Settings is the app-bar button on mobile and a rail entry on desktop. */
+async function openSettings(page: Page) {
+  const candidates = page.getByRole("button", { name: /^(Open Settings|Settings)$/ });
+  const total = await candidates.count();
+  for (let index = 0; index < total; index += 1) {
+    const candidate = candidates.nth(index);
+    if (await candidate.isVisible()) {
+      await candidate.click();
+      return;
+    }
+  }
+  throw new Error("No visible Settings control was found");
+}
+
 async function navigate(page: Page, label: string) {
-  const toggle = page.getByRole("button", { name: "Toggle navigation" });
-  if (await toggle.isVisible()) {
-    await toggle.click();
-    const side = page.locator(".side");
-    await expect(side).toHaveClass(/open/);
-    await expect
-      .poll(async () => (await side.boundingBox())?.x)
-      .toBeGreaterThanOrEqual(0);
+  if (SETTINGS_ITEMS.has(label)) {
+    await openSettings(page);
+    await page.getByRole("button", { name: new RegExp(`^${label}$`) }).click();
+    return;
   }
   await page.getByRole("button", { name: label, exact: true }).click();
 }
@@ -76,7 +102,7 @@ function pack(prefix: string, name: string, fullText: string) {
 test("presents the Runefolio identity and scoped icon metadata", async ({ page }) => {
   await page.goto(APP_ROOT);
   await expect(page).toHaveTitle("Runefolio");
-  await expect(page.locator(".page-title img")).toBeVisible();
+  await expect(page.locator(".m2-appbar-brand img")).toBeVisible();
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
     "href",
     `${BASE_PATH}/manifest.webmanifest?v=runefolio-1`,
@@ -104,17 +130,21 @@ test("presents the Runefolio identity and scoped icon metadata", async ({ page }
   expect(manifest.icons.every((icon) => /\/runefolio-(?:icon|maskable)-/.test(icon.src))).toBe(true);
 });
 
-test("opens and advances Brammel builder", async ({ page }) => {
+test("opens a real empty library rather than a fabricated active character", async ({
+  page,
+}) => {
   await page.goto(APP_ROOT);
   await expect(
-    page.getByRole("heading", { name: "Brammel “Boss” Voss" }),
+    page.getByRole("heading", { name: "No characters on this device yet" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /Continue character/ }).click();
+  // The prototype's fake persisted character must not reappear.
+  await expect(page.getByText("Brammel")).toHaveCount(0);
   await expect(
-    page.getByRole("dialog", { name: "Brammel “Boss” Voss" }),
+    page.getByRole("button", { name: "New character" }).first(),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(page.getByText("Step 6 of 6")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Import from another device" }),
+  ).toBeVisible();
 });
 test("navigates to sources", async ({ page }) => {
   await page.goto(APP_ROOT);
@@ -125,7 +155,7 @@ test("navigates to sources", async ({ page }) => {
 });
 test("shows device-local storage health in settings", async ({ page }) => {
   await page.goto(APP_ROOT);
-  await navigate(page, "Settings");
+  await navigate(page, "Storage");
   await expect(
     page.getByRole("heading", { name: "Settings", level: 2 }),
   ).toBeVisible();
@@ -139,7 +169,7 @@ test("previews, imports, and finds a synthetic compendium entry", async ({
   page,
 }) => {
   await page.goto(APP_ROOT);
-  await navigate(page, "Imports & exports");
+  await navigate(page, "Imports and exports");
   await page
     .getByLabel("Pack JSON")
     .fill(
@@ -166,7 +196,7 @@ test("blocks an invalid import without echoing private text in diagnostics", asy
   page,
 }) => {
   await page.goto(APP_ROOT);
-  await navigate(page, "Imports & exports");
+  await navigate(page, "Imports and exports");
   await page
     .getByLabel("Pack JSON")
     .fill(JSON.stringify({ schemaVersion: 99, privateText: "DO-NOT-SHOW" }));
@@ -189,7 +219,7 @@ test("works offline with local compendium edit, search, and export", async ({
     responses: Array<{ url: string; fromWorker: boolean }> = [];
   await page.goto(APP_ROOT);
   await expect(page.locator(".offline")).toContainText("Offline ready");
-  await navigate(page, "Imports & exports");
+  await navigate(page, "Imports and exports");
   const original = "Original offline-safe synthetic text without markup.";
   await page
     .getByLabel("Pack JSON")
@@ -219,7 +249,12 @@ test("works offline with local compendium edit, search, and export", async ({
     await page.evaluate(() => "PRIVATE_SYNTHETIC_EXECUTION" in window),
   ).toBe(false);
   await navigate(page, "Content packs");
-  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  // The seeded synthetic slice also installs a pack, so target this pack's row.
+  await page
+    .locator(".registryrow")
+    .filter({ hasText: "Offline Star Pack" })
+    .getByRole("button", { name: "Edit", exact: true })
+    .click();
   const fullText = page.getByLabel("Full text");
   await expect(fullText).toHaveValue(original);
   await fullText.fill("Edited entirely offline with original synthetic text.");
@@ -231,7 +266,7 @@ test("works offline with local compendium edit, search, and export", async ({
   await expect(page.getByRole("article")).toContainText(
     "Edited entirely offline",
   );
-  await navigate(page, "Imports & exports");
+  await navigate(page, "Imports and exports");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: /Create local export/ }).click();
   await download;

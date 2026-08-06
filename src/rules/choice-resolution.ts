@@ -20,11 +20,18 @@ export function resolveChoices(definitions: readonly ChoiceDefinition[], selecti
   const result: ChoiceResolution = { effects: [], entryIds: new Set(), resolvedChoiceIds: new Set(), unresolvedChoiceIds: new Set(), issues: [] };
   const visit = (choice: ChoiceDefinition) => {
     const selected = [...(selections[choice.id] ?? [])];
+    /**
+     * An empty required choice is one fact, not two.
+     *
+     * Reporting it as both "requires a selection" and "has an invalid selection
+     * count" produced two diagnostics for a single unresolved choice, which the
+     * builder then rendered twice. The count check now covers only a selection
+     * that exists and is the wrong size.
+     */
     if (!selected.length && choice.min > 0) {
       result.unresolvedChoiceIds.add(choice.id);
       result.issues.push({ code: "CHOICE_REQUIRED", choiceId: choice.id, severity: "error", message: `Choice ${choice.id} requires a selection` });
-    }
-    if (selected.length < choice.min || selected.length > choice.max) {
+    } else if (selected.length < choice.min || selected.length > choice.max) {
       result.unresolvedChoiceIds.add(choice.id);
       result.issues.push({ code: "CHOICE_COUNT_INVALID", choiceId: choice.id, severity: "error", message: `Choice ${choice.id} has an invalid selection count` });
     }

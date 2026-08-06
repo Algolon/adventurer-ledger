@@ -9,7 +9,15 @@
   --paper: var(--brand-warm-parchment);
   --cream: var(--brand-light-background);
   --brass: var(--brand-burnished-gold);
-  color-scheme: light dark;
+  /*
+   * The palette above is light-only; there is no dark variant anywhere in the
+   * app. Declaring `light dark` told the browser otherwise, so under a dark OS
+   * preference Chromium painted form controls with its dark user-agent colours
+   * — white text — while our own CSS kept forcing a light input background.
+   * Every field rendered near 1:1 contrast. `light` states what is true; the
+   * explicit colours in globals.css are what actually guarantee it.
+   */
+  color-scheme: light;
 }
 
 .brand {

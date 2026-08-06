@@ -63,7 +63,7 @@ The slice contains exactly enough declarative content to prove the vertical path
 - derived HP, hit dice, AC, initiative, speed, saves, and checks;
 - no spell definitions or spell runtime state.
 
-The creation step “Spells & resources” remains visible and reads `Not needed · This class has no spells at level 1`. The resource configuration still appears in that step. Tests and screenshots use only this synthetic material.
+**Revised 2026-08-04.** The creation step “Spells & resources” was originally kept visible reading `Not needed · This class has no spells at level 1`. It is now omitted from the sequence when the selected class grants no spell choices, and Review states `Spellcasting — None at this level` instead. Resources are tracked on the play sheet, not configured during creation, so nothing is lost by the omission. Applicability is read from the class's own content, never from a class ID. Tests and screenshots use only this synthetic material.
 
 ## D-03 — Minimum renderable sheet
 
@@ -169,9 +169,13 @@ They do not create a full character version. An explicit session snapshot create
 The synthetic ruleset uses **preserve deficit/expenditure** when a maximum increases:
 
 ```text
-HP:       5 / 10 + 2 maximum → 7 / 12
+HP:       5 / 10 + 4 maximum → 9 / 14
 Resource: 1 /  3 + 1 maximum → 2 /  4
 ```
+
+The hit-point delta is 4 because the Constitution modifier applies once per
+character level: level 2 is class base 10 plus `+2` twice. The policy itself is
+unchanged — only the maximum it is applied to was previously wrong.
 
 Equivalent form: `newCurrent = oldCurrent + (newMaximum - oldMaximum)`, clamped only to the new valid range. A decreasing maximum uses an explicit preview and never creates a negative current value.
 

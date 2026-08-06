@@ -10,11 +10,14 @@ import type { Character, ChoiceDefinition, ContentEntry, Effect, EquipmentBundle
 import { resolveChoices, type ChoiceSelections } from "@/src/rules/choice-resolution";
 import { resolveEquipmentBundles, type EquipmentChoiceSelections, type EquipmentResolution } from "@/src/rules/equipment";
 import { abilityModifier, applyEffects, evaluateCondition, type RuleContext, type RuleResult } from "@/src/rules/engine";
+import { armorContextFor, NO_ARMOR_CONTEXT, NO_ARMOR_RESOLUTION, sameArmorContext, type ArmorResolution } from "@/src/rules/armor-context";
+import { reconcileSubclassChoices } from "@/src/rules/subclass-reconciliation";
 
 export interface DerivedCharacterIssue {
   code:
     | "CHARACTER_LEVEL_MISMATCH" | "DUPLICATE_CLASS_SELECTION" | "CLASS_MISSING" | "CLASS_MECHANICS_INVALID" | "MULTICLASS_PREREQUISITE_FAILED"
     | "MULTICLASS_COMBINATION_UNSUPPORTED" | "MULTICLASS_PACT_SLOTS_SEPARATE" | "SUBCLASS_INVALID"
+    | "SUBCLASS_CHOICE_OVERLAP_AMBIGUOUS" | "ARMOUR_CONTEXT_UNSTABLE"
     | "IDENTITY_MECHANICS_INVALID" | "LINEAGE_INVALID"
     | "FEATURE_REFERENCE_MISSING" | "ENTRY_PREREQUISITE_FAILED" | "CHOICE_UNRESOLVED" | "EQUIPMENT_UNRESOLVED" | "EFFECT_REVIEW_REQUIRED" | "EFFECT_FAILED";
   severity: "error" | "review-required";
@@ -32,6 +35,8 @@ export interface DerivedCharacterState {
   pendingChoiceIds: Set<ID>;
   ruleResult: RuleResult;
   equipment: EquipmentResolution;
+  /** The armour the build actually wears, resolved from typed item mechanics. */
+  armor: ArmorResolution;
   spellSlots: SpellSlotState;
   issues: DerivedCharacterIssue[];
 }
@@ -49,7 +54,9 @@ function initialContext(character: Character): RuleContext {
     totalLevel: character.level,
     classLevels: Object.fromEntries(character.classLevels.map(item => [item.classId, item.level])),
     abilities: { ...character.abilities },
-    tags: new Set(character.tags), features: new Set(), proficiencies: new Set(), armor: { worn: false }, flags: {},
+    // Armour starts unresolved and is replaced with the build's own resolved
+    // context before any condition is evaluated. It is never left hard-coded.
+    tags: new Set(character.tags), features: new Set(), proficiencies: new Set(), armor: { ...NO_ARMOR_CONTEXT }, flags: {},
     values: { initiative: abilityModifier(character.abilities.dexterity), criticalRange: 20 },
   };
 }
@@ -81,6 +88,12 @@ export function deriveCharacterState(input: {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   const context = initialContext(character), issues: DerivedCharacterIssue[] = [], activeEntryIds = new Set<ID>();
   const classFeatureIds = new Set<ID>(), progressionChoiceIds = new Set<ID>();
+  /**
+   * Generic choices that are the class's typed subclass decision written a
+   * second time. They are answered by `subclassId` and must not be demanded
+   * again, or a character with a chosen subclass could never be committed.
+   */
+  const unifiedSubclassChoiceIds = new Set<ID>();
   const casterClasses: Array<{ id: ID; level: number; progression: "none" | "full" | "half" | "third" | "pact"; rounding: "down" | "up" }> = [];
   const totalClassLevels = character.classLevels.reduce((sum, item) => sum + item.level, 0);
   if (totalClassLevels !== character.level)
@@ -115,11 +128,41 @@ export function deriveCharacterState(input: {
     }
     const slotProgression = mechanics.multiclass?.spellSlotProgression ?? "none";
     casterClasses.push({ id: entry.id, level: selection.level, progression: slotProgression, rounding: mechanics.multiclass?.spellSlotRounding ?? "down" });
+    /** The level each of this class's progression choices becomes reachable at. */
+    const choiceLevels = new Map<ID, number>();
     for (const row of mechanics.progression.filter(row => row.level <= selection.level)) {
       for (const featureId of row.featureIds) classFeatureIds.add(featureId);
-      for (const choiceId of row.choiceIds) progressionChoiceIds.add(choiceId);
+      for (const choiceId of row.choiceIds) {
+        progressionChoiceIds.add(choiceId);
+        if (!choiceLevels.has(choiceId)) choiceLevels.set(choiceId, row.level);
+      }
       for (const [resourceId, amount] of Object.entries(row.resourceChanges)) context.values[`resource.${resourceId}`] = amount;
     }
+
+    /*
+     * One conceptual subclass decision, one requirement.
+     *
+     * A pack that also models the decision as a generic choice over the same
+     * subclass entries would otherwise leave that choice permanently
+     * unresolved, because the typed `subclassId` cannot answer it. The
+     * reconciliation is structural and names nothing.
+     */
+    const reconciliation = reconcileSubclassChoices({
+      classEntry: entry,
+      subclassIds: mechanics.subclassIds,
+      subclassLevel: mechanics.subclassLevel,
+      byId,
+      choiceLevels,
+    });
+    for (const choiceId of reconciliation.duplicateChoiceIds) unifiedSubclassChoiceIds.add(choiceId);
+    for (const overlap of reconciliation.overlaps)
+      if (overlap.kind === "ambiguous")
+        issues.push({
+          code: "SUBCLASS_CHOICE_OVERLAP_AMBIGUOUS",
+          severity: "review-required",
+          recordId: overlap.choiceId,
+          message: `Choice ${overlap.choiceId} partly overlaps the subclass declaration of class ${overlap.classId}`,
+        });
     if (selection.subclassId) {
       const subclass = byId.get(selection.subclassId), subclassMechanics = subclass?.category === "subclass" ? subclassMechanicsSchema.safeParse(subclass.mechanics) : undefined;
       if (!subclass || !subclassMechanics?.success || subclassMechanics.data.classId !== entry.id || selection.level < mechanics.subclassLevel || !mechanics.subclassIds.includes(subclass.id)) {
@@ -204,12 +247,13 @@ export function deriveCharacterState(input: {
   }
   const choiceDefinitions: ChoiceDefinition[] = activeEntries.flatMap(entry =>
     entry.category === "class" || entry.category === "subclass"
-      ? entry.choices.filter(choice => progressionChoiceIds.has(choice.id))
+      ? entry.choices.filter(choice => progressionChoiceIds.has(choice.id) && !unifiedSubclassChoiceIds.has(choice.id))
       : entry.choices
   );
   const knownChoiceIds = new Set(choiceDefinitions.map(choice => choice.id));
-  for (const choiceId of progressionChoiceIds) if (!knownChoiceIds.has(choiceId))
-    issues.push({ code: "CHOICE_UNRESOLVED", severity: "error", recordId: choiceId, message: `Progression choice ${choiceId} is unavailable` });
+  for (const choiceId of progressionChoiceIds)
+    if (!knownChoiceIds.has(choiceId) && !unifiedSubclassChoiceIds.has(choiceId))
+      issues.push({ code: "CHOICE_UNRESOLVED", severity: "error", recordId: choiceId, message: `Progression choice ${choiceId} is unavailable` });
   const choiceResolution = resolveChoices(choiceDefinitions, input.choiceSelections ?? {});
   for (const issue of choiceResolution.issues)
     issues.push({ code: "CHOICE_UNRESOLVED", severity: "error", recordId: issue.choiceId, message: issue.message });
@@ -221,26 +265,65 @@ export function deriveCharacterState(input: {
     else issues.push({ code: "FEATURE_REFERENCE_MISSING", severity: "error", recordId: entryId, message: `Selected entry ${entryId} is unavailable` });
   }
   const effectiveEntries = [...activeEntries, ...selectedEntries];
+  const effects: Effect[] = [...effectiveEntries.flatMap(entry => entry.effects), ...choiceResolution.effects];
+  const bundleDefinitions: EquipmentBundleDefinition[] = entries.flatMap(entry => entry.equipmentBundles ?? []);
+  const backgroundBundles = effectiveEntries.filter(entry => entry.category === "background").flatMap(entry => {
+    const ids = (entry.mechanics as { equipmentBundleIds?: unknown }).equipmentBundleIds;
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+  });
+  const availableItemIds = new Set(entries.filter(entry => ["item", "weapon", "armor", "tool"].includes(entry.category)).map(entry => entry.id));
+
+  /*
+   * Armour is both an input to the effects and an output of them.
+   *
+   * Equipment reaches the character through `grantEquipmentBundle` effects, and
+   * conditions such as `wearingArmor` are evaluated while those effects run. The
+   * two are resolved to a fixed point rather than assumed: run the effects with
+   * the armour known so far, resolve the equipment they grant, read the armour
+   * that equipment implies, and repeat until the answer stops moving.
+   *
+   * One extra pass settles every case content can express today — a bundle
+   * granted unconditionally, then armour-dependent effects evaluated against
+   * what it contains. The bound exists so content that makes a bundle grant
+   * depend on armour cannot loop; if it has not settled, that is reported rather
+   * than silently truncated.
+   */
+  const MAXIMUM_ARMOUR_PASSES = 3;
+  let armor: ArmorResolution = NO_ARMOR_RESOLUTION;
+  let ruleResult = applyEffects(context, effects, { resolvedChoiceIds: choiceResolution.resolvedChoiceIds });
+  let equipment = resolveEquipmentBundles([...ruleResult.equipmentBundleIds, ...backgroundBundles], bundleDefinitions, input.equipmentSelections ?? {}, availableItemIds);
+  let implied = armorContextFor(equipment.items, byId);
+  let passes = 1;
+  while (!sameArmorContext(implied.context, armor.context) && passes < MAXIMUM_ARMOUR_PASSES) {
+    armor = implied;
+    context.armor = { ...armor.context };
+    ruleResult = applyEffects(context, effects, { resolvedChoiceIds: choiceResolution.resolvedChoiceIds });
+    equipment = resolveEquipmentBundles([...ruleResult.equipmentBundleIds, ...backgroundBundles], bundleDefinitions, input.equipmentSelections ?? {}, availableItemIds);
+    implied = armorContextFor(equipment.items, byId);
+    passes += 1;
+  }
+  if (!sameArmorContext(implied.context, armor.context))
+    issues.push({
+      code: "ARMOUR_CONTEXT_UNSTABLE",
+      severity: "review-required",
+      recordId: character.id,
+      message: `Character ${character.id} has content whose armour context does not settle`,
+    });
+
+  // Prerequisites are evaluated once the armour context is settled, so an entry
+  // whose requirement mentions armour is judged against what is actually worn.
   for (const activeEntry of effectiveEntries) for (const prerequisite of activeEntry.prerequisites) if (!evaluateCondition(prerequisite.condition, context))
     issues.push({ code: "ENTRY_PREREQUISITE_FAILED", severity: prerequisite.enforcement === "hard" ? "error" : "review-required", recordId: activeEntry.id, message: `Entry ${activeEntry.id} does not satisfy prerequisite ${prerequisite.id}` });
-  const effects: Effect[] = [...effectiveEntries.flatMap(entry => entry.effects), ...choiceResolution.effects];
-  const ruleResult = applyEffects(context, effects, { resolvedChoiceIds: choiceResolution.resolvedChoiceIds });
   for (const issue of ruleResult.issues) issues.push({
     code: issue.code === "RULE_EFFECT_FAILED" ? "EFFECT_FAILED" : issue.code === "RULE_EFFECT_REVIEW_REQUIRED" ? "EFFECT_REVIEW_REQUIRED" : "CHOICE_UNRESOLVED",
     severity: issue.severity === "error" ? "error" : "review-required",
     recordId: issue.affectedRule ?? character.id,
     message: issue.message,
   });
-  const bundleDefinitions: EquipmentBundleDefinition[] = entries.flatMap(entry => entry.equipmentBundles ?? []);
-  const backgroundBundles = effectiveEntries.filter(entry => entry.category === "background").flatMap(entry => {
-    const ids = (entry.mechanics as { equipmentBundleIds?: unknown }).equipmentBundleIds;
-    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
-  });
-  const equipment = resolveEquipmentBundles([...ruleResult.equipmentBundleIds, ...backgroundBundles], bundleDefinitions, input.equipmentSelections ?? {}, new Set(entries.filter(entry => ["item", "weapon", "armor", "tool"].includes(entry.category)).map(entry => entry.id)));
   for (const issue of equipment.issues) issues.push({ code: "EQUIPMENT_UNRESOLVED", severity: "error", recordId: issue.bundleId, message: issue.message });
   const spellSlots = slotsFor(casterClasses);
   if (Object.keys(spellSlots.pactClassLevels).length && casterClasses.some(item => item.progression !== "none" && item.progression !== "pact"))
     issues.push({ code: "MULTICLASS_PACT_SLOTS_SEPARATE", severity: "review-required", recordId: character.id, message: `Character ${character.id} requires separate pact-slot tracking` });
   const status = issues.some(issue => issue.severity === "error") ? "invalid" : issues.length ? "review-required" : "ready";
-  return { status, activeEntryIds, classFeatureIds, identityTraitIds, pendingChoiceIds: new Set([...choiceResolution.unresolvedChoiceIds, ...ruleResult.pendingChoices]), ruleResult, equipment, spellSlots, issues };
+  return { status, activeEntryIds, classFeatureIds, identityTraitIds, pendingChoiceIds: new Set([...choiceResolution.unresolvedChoiceIds, ...ruleResult.pendingChoices]), ruleResult, equipment, armor, spellSlots, issues };
 }

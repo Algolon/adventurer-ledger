@@ -41,6 +41,20 @@ export interface ImportIssue {
   path?: string;
   recordId?: string;
   targetId?: string;
+  /**
+   * What is installed versus what arrived, for the version and revision
+   * refusals.
+   *
+   * A refusal that says only "requires a newer version" leaves the user unable
+   * to tell a re-import of what they already have from an attempt to install
+   * something older, and those need opposite responses. Both are declared
+   * numbers from pack metadata, never content, so reporting them exposes
+   * nothing about the material itself.
+   */
+  installedVersion?: string;
+  incomingVersion?: string;
+  installedRevision?: number;
+  incomingRevision?: number;
 }
 export interface ImportPlan {
   sources: { add: string[]; update: string[] };
@@ -349,13 +363,26 @@ async function previewDocument(
   const existingPack = await database.contentPacks.get(document.pack.id);
   observations.packs.set(document.pack.id, existingPack?.updatedAt);
   if (existingPack) {
-    if (compareVersions(document.pack.version, existingPack.version) <= 0)
+    const order = compareVersions(document.pack.version, existingPack.version);
+    if (order <= 0)
       issues.push({
         code: "PACK_VERSION_CONFLICT",
         severity: "error",
         recordId: document.pack.id,
         path: "pack.version",
-        message: `Pack ${document.pack.id} requires a newer version`,
+        /*
+         * The two cases read very differently to a user and are stated
+         * differently. Re-importing what is already installed is not a failure
+         * and must not be described as one; installing something older is a
+         * refusal, and the reason it is refused is that the newer content is
+         * still there and still usable.
+         */
+        message:
+          order === 0
+            ? `Pack ${document.pack.id} is already installed at version ${existingPack.version}. Nothing needs updating.`
+            : `Pack ${document.pack.id} version ${document.pack.version} is older than the installed version ${existingPack.version}, which is kept.`,
+        installedVersion: existingPack.version,
+        incomingVersion: document.pack.version,
       });
     else plan.packs.update.push(document.pack.id);
   } else plan.packs.add.push(document.pack.id);
@@ -375,7 +402,17 @@ async function previewDocument(
         severity: "error",
         recordId: entry.id,
         path: "entries.revision",
-        message: `Entry ${entry.id} requires a newer revision`,
+        /*
+         * Both revisions are named so the refusal can be acted on. They are
+         * integers the pack declares about a record, so an ID and two numbers
+         * say what happened without quoting any of the record's own text.
+         */
+        message:
+          entry.revision === existing.revision
+            ? `Entry ${entry.id} is already installed at revision ${existing.revision}.`
+            : `Entry ${entry.id} revision ${entry.revision} is older than the installed revision ${existing.revision}, which is kept.`,
+        installedRevision: existing.revision,
+        incomingRevision: entry.revision,
       });
     else plan.entries.update.push(entry.id);
   });
@@ -683,6 +720,21 @@ async function writeDocument(
 }
 
 /**
+ * Work that must land with the content or not at all.
+ *
+ * Creating a ruleset profile for an imported pack is the motivating case: a
+ * profile written after the transaction could survive a rolled-back import and
+ * point at content that was never installed, which is exactly the half-installed
+ * state the set boundary exists to prevent. Running it inside the transaction
+ * makes a failed or cancelled import leave neither content nor a partial profile.
+ */
+export type ImportSideEffect = (
+  documents: readonly ContentPackDocument[],
+  database: LedgerDB,
+  now: string,
+) => Promise<void>;
+
+/**
  * The single confirmation boundary for every import. One flat Dexie transaction
  * asserts preview freshness, revalidates the complete set against confirmation-time
  * database state, and only then writes packs, sources, entries and history. Any
@@ -692,15 +744,19 @@ async function commitImportStates(
   states: readonly PreviewState[],
   database: LedgerDB,
   signal?: AbortSignal,
+  afterWrite?: ImportSideEffect,
 ): Promise<void> {
   abortIfNeeded(signal);
   await database.transaction(
     "rw",
-    database.sources,
-    database.contentPacks,
-    database.contentEntries,
-    database.contentPackVersions,
-    database.contentEntryVersions,
+    [
+      database.sources,
+      database.contentPacks,
+      database.contentEntries,
+      database.contentPackVersions,
+      database.contentEntryVersions,
+      database.rulesetProfiles,
+    ],
     async () => {
       abortIfNeeded(signal);
       for (const state of states) await assertNotStale(state, database);
@@ -717,8 +773,10 @@ async function commitImportStates(
           revalidated.issues.filter((issue) => issue.severity === "error"),
         );
       const now = new Date().toISOString();
-      for (const document of orderDocuments(revalidated.documents))
-        await writeDocument(document, database, now, signal);
+      const ordered = orderDocuments(revalidated.documents);
+      for (const document of ordered) await writeDocument(document, database, now, signal);
+      abortIfNeeded(signal);
+      if (afterWrite) await afterWrite(ordered, database, now);
       abortIfNeeded(signal);
     },
   );
@@ -733,6 +791,7 @@ export async function confirmImport(
   preview: ImportPreview,
   database: LedgerDB,
   signal?: AbortSignal,
+  afterWrite?: ImportSideEffect,
 ): Promise<void> {
   const state = previewStates.get(preview);
   if (!preview.canImport || !state)
@@ -740,7 +799,7 @@ export async function confirmImport(
       "PREVIEW_INVALID",
       "Import preview is invalid or contains blocking issues",
     );
-  await commitImportStates([state], database, signal);
+  await commitImportStates([state], database, signal, afterWrite);
 }
 
 /** Confirm every file in one Dexie transaction; any failure rolls back the set. */
@@ -748,6 +807,7 @@ export async function confirmImportSet(
   preview: ImportSetPreview,
   database: LedgerDB,
   signal?: AbortSignal,
+  afterWrite?: ImportSideEffect,
 ): Promise<void> {
   const setState = importSetStates.get(preview);
   if (!preview.canImport || !setState)
@@ -764,5 +824,5 @@ export async function confirmImportSet(
       );
     return state;
   });
-  await commitImportStates(states, database, signal);
+  await commitImportStates(states, database, signal, afterWrite);
 }

@@ -13,8 +13,8 @@ Mode is not stored as character truth. Switching presentation does not erase, re
 
 Creation order:
 
-1. Start / ruleset
-2. Class
+1. Basics — name and ruleset
+2. Class & level
 3. Origin
 4. Abilities
 5. Class choices
@@ -25,7 +25,7 @@ Creation order:
 
 ```mermaid
 flowchart LR
-  S["Start / ruleset"] --> C["Class"]
+  S["Basics: name, ruleset"] --> C["Class & level"]
   C --> O["Origin"]
   O --> A["Abilities"]
   A --> CC["Class choices"]
@@ -92,23 +92,56 @@ Recommendations are deterministic and ruleset/source-aware. Each recommendation 
 
 ## Step specification
 
-### 1. Start / ruleset
+### 1. Basics
 
-Purpose: define the interpretation context before loading large option lists.
+Purpose: settle who this is and which content interprets them — before any
+option list is loaded.
 
-Required for guided completion:
+The step holds exactly two things:
 
-- level target for initial creation (Brammel slice: level 1);
-- ruleset profile;
-- guided/flexible presentation.
+- **Character name.** Autosaved as it is typed, and flushed on navigation, on a
+  mode switch and on commit, so it survives a reload, a closed tab and a switch
+  between guided and flexible. It is a warning, never a blocker: an unnamed
+  character falls back to `Unnamed character`.
+- **Ruleset.** Every installed profile is listed with the entry count and the
+  level range its content covers. Selecting one persists it on the draft and
+  scopes every later step to it. Nothing is ever selected by list order: with
+  more than one usable profile and none activated, the app asks.
+The starting level is deliberately **not** here. Level coverage is a property of
+the selected class's own progression, so a level presented before a class exists
+can be accepted here and only judged two steps later — which marked this step
+incomplete for a decision taken after leaving it, and put the repair on a screen
+the user was no longer on. It lives on step 2, beside the thing that validates it.
 
-Show a small set of ruleset presets first, such as “2024 core” and “2024 with configured private sources.” Advanced source toggles link to Settings and return to this step. Legacy and homebrew inclusion has explicit badges and a one-line compatibility policy.
+Changing the ruleset clears the class, subclass, origin, choices and equipment
+selections, because those belong to the ruleset that defined them. The name,
+level, ability scores and manual values are kept. Nothing is written until the
+change is confirmed, and the confirmation then lands on the first step that
+genuinely needs repairing — or leaves the user where they are when nothing does.
+Pronouns are no longer collected anywhere in the flow; a value stored by an older
+build is preserved untouched and feeds no calculation.
 
-Changing ruleset later produces an impact preview: choices still available, choices missing, changed calculations, and manual/override values unaffected. Confirming the change creates a restore point.
+### 2. Class & level
 
-### 2. Class
+Purpose: establish the character’s primary play loop, then the level that loop is
+resolved at, and unlock dependent choices.
 
-Purpose: establish the character’s primary play loop and unlock dependent choices.
+Option cards come first. The **starting level** appears once a class is selected,
+because only then is there a progression to judge it against. Its range is that
+class's own longest run of consecutive progression rows starting at level 1 —
+never another class's, and never the ruleset's advertised maximum. A manual sheet
+has no progression to read and falls back to what the ruleset as a whole reaches.
+
+Selecting a level above 1 creates the character **at** that level. Every level's
+progression is accumulated into one build: all reachable choices are exposed,
+subclass and feat timing are honoured, unresolved choices block the commit, and
+the commit writes that level directly. It is never a level 1 character that is
+silently advanced afterwards.
+
+Choosing a class never rewrites a level the user picked. If the incoming class
+still covers it, it stands. If it does not, the level is kept and shown as
+unsupported, and the conflict is reported **on this step** with both repairs
+beside it: lower the level, or choose a class whose content reaches it.
 
 Option cards show name, source badge, short play-style summary, primary abilities, and complexity indicator. Guided mode can ask an optional intent question—front line, protect, explore, support, magic—used only for ranking.
 

@@ -1,0 +1,232 @@
+"use client";
+
+/**
+ * The character library.
+ *
+ * A fresh database shows a real empty state with the two safe starting actions;
+ * it never renders a synthetic "active character" as if it were persisted. Each
+ * row's primary activation goes to the most appropriate destination, and Edit,
+ * Level up, Duplicate, Export/Transfer and Archive stay secondary.
+ */
+import { useState } from "react";
+import { ChevronRight, Import, Plus, Swords } from "lucide-react";
+import { useAsync, useServices } from "@/src/ui/services-context";
+import { StateBadge } from "@/src/ui/primitives";
+import type { DraftCard, LibraryCard } from "@/src/services/character-services";
+
+export type LibraryDestination =
+  | { kind: "sheet"; characterId: string; readOnly?: boolean }
+  | { kind: "build"; draftId: string }
+  | { kind: "edit"; characterId: string }
+  | { kind: "level-up"; characterId: string }
+  | { kind: "transfer"; characterId?: string }
+  | { kind: "duplicate"; characterId: string; revision: number }
+  | { kind: "archive"; characterId: string; revision: number }
+  | { kind: "new" };
+
+const relative = (iso: string) => {
+  const elapsed = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(elapsed / 60000);
+  if (!Number.isFinite(minutes) || minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+};
+
+export function CharacterLibrary({ onNavigate }: { onNavigate(destination: LibraryDestination): void }) {
+  const { query } = useServices();
+  const state = useAsync(() => query.library(), []);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+
+  if (state.status === "loading")
+    return (
+      <section className="m2-page" aria-busy="true">
+        <h2 className="m2-page-title">Characters</h2>
+        <p className="m2-muted" role="status">
+          Reading your local library…
+        </p>
+      </section>
+    );
+
+  if (state.status === "failed")
+    return (
+      <section className="m2-page">
+        <h2 className="m2-page-title">Characters</h2>
+        <div className="m2-banner m2-banner-error" role="alert">
+          <strong>The local library could not be read</strong>
+          <p>Your saved characters are still on this device. Reload the app to try again.</p>
+        </div>
+      </section>
+    );
+
+  const { characters, drafts } = state.value;
+  const empty = characters.length === 0 && drafts.length === 0;
+
+  return (
+    <section className="m2-page">
+      <div className="m2-page-head">
+        <h2 className="m2-page-title">Characters</h2>
+        <button type="button" className="m2-button m2-button-primary" onClick={() => onNavigate({ kind: "new" })}>
+          <Plus aria-hidden="true" />
+          New character
+        </button>
+      </div>
+
+      {empty ? (
+        <div className="m2-empty">
+          <Swords aria-hidden="true" className="m2-empty-icon" />
+          <h3>No characters on this device yet</h3>
+          <p>
+            Characters live only in this browser. Build one here, or bring one across from another device with a
+            transfer file.
+          </p>
+          <div className="m2-empty-actions">
+            <button type="button" className="m2-button m2-button-primary" onClick={() => onNavigate({ kind: "new" })}>
+              <Plus aria-hidden="true" />
+              New character
+            </button>
+            <button type="button" className="m2-button" onClick={() => onNavigate({ kind: "transfer" })}>
+              <Import aria-hidden="true" />
+              Import from another device
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {drafts.length ? (
+        <>
+          <h3 className="m2-section-title">Unfinished builds</h3>
+          <ul className="m2-list">
+            {drafts.map(draft => (
+              <DraftRow key={draft.draftId} draft={draft} onResume={() => onNavigate({ kind: "build", draftId: draft.draftId })} />
+            ))}
+          </ul>
+        </>
+      ) : null}
+
+      {characters.length ? (
+        <>
+          <h3 className="m2-section-title">Your characters</h3>
+          <ul className="m2-list">
+            {characters.map(card => (
+              <CharacterRow
+                key={card.characterId}
+                card={card}
+                menuOpen={menuFor === card.characterId}
+                onToggleMenu={() => setMenuFor(menuFor === card.characterId ? null : card.characterId)}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function DraftRow({ draft, onResume }: { draft: DraftCard; onResume(): void }) {
+  return (
+    <li className="m2-row">
+      <button type="button" className="m2-row-primary" onClick={onResume}>
+        <span className="m2-monogram" aria-hidden="true">
+          {draft.name.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="m2-row-text">
+          <b>{draft.name}</b>
+          <small>
+            <StateBadge state="incomplete" /> {draft.issueCount} issue{draft.issueCount === 1 ? "" : "s"} · edited on this
+            device {relative(draft.updatedAt)}
+          </small>
+          <small className="m2-muted">Resume: {draft.resumeStepId.replace(/-/g, " ")}</small>
+        </span>
+        <ChevronRight aria-hidden="true" />
+        <span className="m2-visually-hidden">Resume building {draft.name}</span>
+      </button>
+    </li>
+  );
+}
+
+function CharacterRow({
+  card,
+  menuOpen,
+  onToggleMenu,
+  onNavigate,
+}: {
+  card: LibraryCard;
+  menuOpen: boolean;
+  onToggleMenu(): void;
+  onNavigate(destination: LibraryDestination): void;
+}) {
+  const open = () => {
+    if (card.primaryDestination === "build") onNavigate({ kind: "edit", characterId: card.characterId });
+    else onNavigate({ kind: "sheet", characterId: card.characterId, readOnly: card.primaryDestination === "read-only-sheet" });
+  };
+
+  return (
+    <li className="m2-row">
+      <button type="button" className="m2-row-primary" onClick={open}>
+        <span className="m2-monogram" aria-hidden="true">
+          {card.name.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="m2-row-text">
+          <b>{card.name}</b>
+          <small>
+            {card.classLabel ? `${card.classLabel} ${card.level}` : `Level ${card.level}`} · <StateBadge state={card.state} />
+          </small>
+          <small className="m2-muted">
+            {card.rulesetId.replace("ruleset:", "")} · edited on this device {relative(card.updatedAt)}
+          </small>
+        </span>
+        <ChevronRight aria-hidden="true" />
+        <span className="m2-visually-hidden">
+          Open {card.name}, {card.primaryDestination === "sheet" ? "active sheet" : "recovery view"}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="m2-row-more"
+        aria-expanded={menuOpen}
+        aria-label={`More actions for ${card.name}`}
+        onClick={onToggleMenu}
+      >
+        <span aria-hidden="true">···</span>
+      </button>
+      {menuOpen ? (
+        <ul className="m2-row-menu">
+          <li>
+            <button type="button" onClick={() => onNavigate({ kind: "edit", characterId: card.characterId })}>
+              Edit build for {card.name}
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => onNavigate({ kind: "level-up", characterId: card.characterId })}>
+              Level up {card.name}
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => onNavigate({ kind: "transfer", characterId: card.characterId })}>
+              Export or transfer {card.name}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => onNavigate({ kind: "duplicate", characterId: card.characterId, revision: card.revision })}
+            >
+              Duplicate {card.name}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => onNavigate({ kind: "archive", characterId: card.characterId, revision: card.revision })}
+            >
+              Archive {card.name}
+            </button>
+          </li>
+        </ul>
+      ) : null}
+    </li>
+  );
+}
