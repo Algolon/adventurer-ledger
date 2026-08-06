@@ -839,6 +839,18 @@ function ImportExportPanel() {
               {currentPreview.set.plan.packs.update.length} packs, and{" "}
               {currentPreview.set.plan.entries.update.length} entries will be updated.
             </p>
+            {/*
+             * An additive update is mostly made of records the file restates
+             * without changing. Naming them keeps the count honest: without this
+             * line a 262-entry file reporting "47 added, 0 updated" reads as if
+             * 215 entries went missing.
+             */}
+            {currentPreview.set.plan.entries.unchanged.length ? (
+              <p>
+                {currentPreview.set.plan.entries.unchanged.length} entries are
+                already installed unchanged and will be left as they are.
+              </p>
+            ) : null}
             {currentPreview.offers.map(offer => (
               <p className="issue" key={offer.packId}>
                 <b>{offer.name}</b>{" "}

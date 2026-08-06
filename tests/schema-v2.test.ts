@@ -101,7 +101,12 @@ describe("multi-file dependency imports", () => {
     await expect(database.contentPacks.count()).resolves.toBe(2);
     const repeated = await previewContentPackSet([JSON.stringify(dependent), JSON.stringify(dependency)], database);
     expect(repeated.canImport).toBe(false);
-    expect(repeated.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(["PACK_VERSION_CONFLICT", "ENTRY_REVISION_CONFLICT"]));
+    // Re-importing the same version is still refused, by the pack-version rule.
+    expect(repeated.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(["PACK_VERSION_CONFLICT"]));
+    // The entries are byte-identical restatements, so they are no-ops rather than
+    // revision conflicts: an unchanged record is not a reason to refuse anything.
+    expect(repeated.issues.map(issue => issue.code)).not.toContain("ENTRY_REVISION_CONFLICT");
+    expect(repeated.plan.entries.unchanged).toEqual(expect.arrayContaining(["rule:dependency", "rule:dependent"]));
   });
   it("rolls back every pack when a later write fails", async () => {
     database = new LedgerDB(`rollback-set-${crypto.randomUUID()}`);
