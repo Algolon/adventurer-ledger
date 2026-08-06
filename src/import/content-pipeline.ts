@@ -7,6 +7,7 @@ import type {
   Source,
 } from "@/src/domain/model";
 import type { ChoiceDefinition, Effect, EquipmentBundleNode } from "@/src/domain/model";
+import { classifyEntry } from "@/src/import/entry-disposition";
 import { validateContentPackJson } from "@/src/import/validate-pack";
 import { effectCapability } from "@/src/rules/effect-capabilities";
 import { packCoveragePresentation } from "@/src/domain/pack-coverage";
@@ -59,7 +60,13 @@ export interface ImportIssue {
 export interface ImportPlan {
   sources: { add: string[]; update: string[] };
   packs: { add: string[]; update: string[] };
-  entries: { add: string[]; update: string[] };
+  /**
+   * `unchanged` records what an additive update deliberately leaves alone. It is
+   * reported so a summary can say "3 added, 1 updated, 215 unchanged" instead of
+   * silently omitting most of the file, and so the write path can skip exactly
+   * those records rather than rewriting them.
+   */
+  entries: { add: string[]; update: string[]; unchanged: string[] };
 }
 /**
  * Per-document preview. It validates one file against the installed database but
@@ -121,7 +128,7 @@ const importSetStates = new WeakMap<ImportSetPreview, { previews: ImportPreview[
 const emptyPlan = (): ImportPlan => ({
   sources: { add: [], update: [] },
   packs: { add: [], update: [] },
-  entries: { add: [], update: [] },
+  entries: { add: [], update: [], unchanged: [] },
 });
 const duplicates = (ids: readonly string[]) => {
   const seen = new Set<string>(),
@@ -395,8 +402,11 @@ async function previewDocument(
       entry.id,
       existing ? `${existing.revision}:${existing.updatedAt}` : undefined,
     );
-    if (!existing) plan.entries.add.push(entry.id);
-    else if (entry.revision <= existing.revision)
+    const disposition = classifyEntry(entry, existing);
+    if (disposition === "add") plan.entries.add.push(entry.id);
+    else if (disposition === "update") plan.entries.update.push(entry.id);
+    else if (disposition === "unchanged") plan.entries.unchanged.push(entry.id);
+    else if (existing)
       issues.push({
         code: "ENTRY_REVISION_CONFLICT",
         severity: "error",
@@ -406,15 +416,18 @@ async function previewDocument(
          * Both revisions are named so the refusal can be acted on. They are
          * integers the pack declares about a record, so an ID and two numbers
          * say what happened without quoting any of the record's own text.
+         *
+         * Reuse and downgrade are stated differently because the fix differs:
+         * reuse is repaired by the pack author raising the revision, while a
+         * downgrade is simply refused in favour of the newer installed record.
          */
         message:
-          entry.revision === existing.revision
-            ? `Entry ${entry.id} is already installed at revision ${existing.revision}.`
+          disposition === "revision-reuse"
+            ? `Entry ${entry.id} differs from the installed record but reuses revision ${existing.revision}. Increase the entry revision to import this change.`
             : `Entry ${entry.id} revision ${entry.revision} is older than the installed revision ${existing.revision}, which is kept.`,
         installedRevision: existing.revision,
         incomingRevision: entry.revision,
       });
-    else plan.entries.update.push(entry.id);
   });
   const referenceEntries = [...installed.entries, ...document.entries];
   const availableItemIds = new Set(referenceEntries.filter(entry => ["item", "weapon", "armor", "tool"].includes(entry.category)).map(entry => entry.id));
@@ -586,6 +599,7 @@ async function buildSetPreview(
     plan.sources.add.push(...preview.plan.sources.add); plan.sources.update.push(...preview.plan.sources.update);
     plan.packs.add.push(...preview.plan.packs.add); plan.packs.update.push(...preview.plan.packs.update);
     plan.entries.add.push(...preview.plan.entries.add); plan.entries.update.push(...preview.plan.entries.update);
+    plan.entries.unchanged.push(...preview.plan.entries.unchanged);
   }
   const sourceIds = new Set(documents.flatMap(document => document.sources.map(source => source.id)));
   const entriesById = new Map(documents.flatMap(document => document.entries.map(entry => [entry.id, entry] as const)));
@@ -697,6 +711,14 @@ async function writeDocument(
     records: ContentEntry[] = [];
   document.entries.forEach((incoming, index) => {
     const current = currentEntries[index];
+    /*
+     * Recomputed here rather than carried over from the preview, against the
+     * rows read inside this transaction. The write path must not archive or
+     * restamp a record the pack did not change: doing so would burn a history
+     * row and a new updatedAt on every untouched entry of an additive update,
+     * which is the storage-side half of the same defect.
+     */
+    if (classifyEntry(incoming, current) === "unchanged") return;
     if (current)
       histories.push({
         id: `${current.id}@${current.revision}`,
