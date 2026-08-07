@@ -339,7 +339,23 @@ test.describe("no Runefolio surface scrolls horizontally on a phone", () => {
       }
 
       await page.getByRole("button", { name: "Compendium" }).click();
+      // The entry list is loaded asynchronously; measuring before it arrives
+      // would check an empty page and pass for the wrong reason.
+      await expect(page.locator(".entrycard").first()).toBeVisible();
       await expectNoHorizontalScroll(page, `Compendium at ${width} px`);
+
+      /*
+       * The raw entry data, expanded.
+       *
+       * Every `pre` of effect JSON lives inside a collapsed `<details>`, so a
+       * check that only loads the Compendium never measures the widest content
+       * the app renders — unbroken machine output that used to be its own
+       * horizontal scroll container. Opening them is the whole point.
+       */
+      const details = page.locator(".entrycard details");
+      expect(await details.count(), "expected the Compendium to render collapsed entry data").toBeGreaterThan(0);
+      await details.evaluateAll(nodes => nodes.forEach(node => node.setAttribute("open", "")));
+      await expectNoHorizontalScroll(page, `Compendium with entry data expanded at ${width} px`);
     });
   }
 
