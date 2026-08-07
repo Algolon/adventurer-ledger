@@ -61,6 +61,8 @@ const ISSUE_LABELS: Record<string, string> = {
   MANUAL_ACTION_MISSING: "Add at least one action",
   SUBCLASS_NOT_CHOSEN: "Choose a subclass",
   SUBCLASS_INVALID: "The stored subclass does not belong to this class",
+  SUBCLASS_CHOICE_OVERLAP_AMBIGUOUS:
+    "This class offers its subclass twice, and the two lists do not match — choose one and check the result on Review.",
   LEVEL_NOT_COVERED_BY_CLASS: "This class's content does not reach the chosen level. Lower the level or choose another class.",
   PROGRESSION_CHOICE_MISSING: "The class progression names a choice this content does not define",
   PROGRESSION_FEATURE_MISSING: "The class progression names a feature this content does not define",
@@ -87,7 +89,17 @@ const REPAIR_LABELS: Record<EditDraftRepairNote["code"], string> = {
     "The saved ability scores are kept exactly, but how the origin increases were placed could not be read back — check Abilities.",
 };
 
-const labelFor = (code: string) => ISSUE_LABELS[code] ?? code;
+/**
+ * An issue in the user's words.
+ *
+ * The fallback is deliberately not the code. A diagnostic identifier is
+ * engine vocabulary, and printing one on Review tells a player nothing while
+ * looking like something they were supposed to understand. An unmapped code
+ * says plainly that something needs attention and where to look; the code
+ * itself stays in the record, where a diagnostic belongs.
+ */
+const labelFor = (code: string) =>
+  ISSUE_LABELS[code] ?? "Something in this build still needs attention — check the steps marked incomplete.";
 
 const titleCase = (value: string) => value[0].toUpperCase() + value.slice(1);
 
@@ -1042,7 +1054,14 @@ function StepContent({
    */
   const stepChoices = plan.requiredChoices.filter(choice => choice.stepId === step.id);
   const outstanding = stepChoices.filter(choice => !choice.resolved).length;
-  const choicePanel = stepChoices.length ? <ChoiceList choices={stepChoices} onChange={onChange} /> : undefined;
+  /*
+   * The option whose card these decisions are rendered inside, so a choice the
+   * option itself declares does not repeat the option's name back at the user.
+   */
+  const expandedSourceId = step.id === "origin" ? build.speciesId : step.id === "background" ? build.backgroundId : undefined;
+  const choicePanel = stepChoices.length ? (
+    <ChoiceList choices={stepChoices} onChange={onChange} {...(expandedSourceId ? { withinSourceId: expandedSourceId } : {})} />
+  ) : undefined;
   const pending = <PendingDecisions outstanding={outstanding} total={stepChoices.length} />;
 
   switch (step.id) {
@@ -1561,16 +1580,23 @@ const toggleChoice =
 function ChoiceList({
   choices,
   onChange,
+  withinSourceId,
 }: {
   choices: readonly RequiredChoice[];
   onChange(patch: DraftPatch): void;
+  withinSourceId?: string;
 }) {
   if (!choices.length) return null;
   const toggle = toggleChoice(onChange);
   return (
     <div className="m2-step">
       {choices.map(choice => (
-        <ChoiceGroup key={choice.choiceId} choice={choice} onToggle={toggle} />
+        <ChoiceGroup
+          key={choice.choiceId}
+          choice={choice}
+          onToggle={toggle}
+          {...(withinSourceId ? { withinSourceId } : {})}
+        />
       ))}
     </div>
   );
@@ -1621,9 +1647,12 @@ function ClassPendingSummary({ plan, build }: { plan: DraftSnapshot["plan"]; bui
 function ChoiceGroup({
   choice,
   onToggle,
+  withinSourceId,
 }: {
   choice: RequiredChoice;
   onToggle(choiceId: string, optionId: string, max: number): void;
+  /** The entry whose expanded card this is rendering inside, when it is one. */
+  withinSourceId?: string;
 }) {
   return (
     <fieldset className="m2-fieldset">
@@ -1634,11 +1663,22 @@ function ChoiceGroup({
           choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
         </small>
       </legend>
-      {/* Provenance stays visible: which entry asks for this, and from when. */}
-      <p className="m2-muted">
-        From {choice.sourceLabel}
-        {choice.level === undefined ? "" : ` · level ${choice.level}`}
-      </p>
+      {/*
+       * Provenance stays visible — which entry asks for this, and from when —
+       * except when it would only restate the card the decision is sitting in.
+       * Inside the selected Stonevigil, "From Stonevigil" is a line of text that
+       * tells the reader where they already are. A trait-declared choice still
+       * names its trait, because that genuinely says something the card does
+       * not: the trait asks, not the species.
+       */}
+      {withinSourceId === choice.sourceEntryId ? (
+        choice.level === undefined ? null : <p className="m2-muted">From level {choice.level}</p>
+      ) : (
+        <p className="m2-muted">
+          From {choice.sourceLabel}
+          {choice.level === undefined ? "" : ` · level ${choice.level}`}
+        </p>
+      )}
       {!choice.resolved ? (
         <p className="m2-inline-issue" role="status">
           <TriangleAlert aria-hidden="true" /> {choice.selected.length} of {choice.min} chosen
@@ -1899,6 +1939,8 @@ function AbilitiesStep({
     <div className="m2-ability-grid">
       {ABILITIES.map(ability => {
         const total = build.abilityScores[ability];
+        const base = build.abilityBaseScores[ability];
+        const increase = build.abilityIncreases[ability];
         const name = titleCase(ability);
         return (
           <div key={ability} className="m2-field">
@@ -1913,6 +1955,21 @@ function AbilitiesStep({
                 </small>
               ) : null}
             </output>
+            {/*
+             * Where the number came from, next to the number.
+             *
+             * Base scores and origin increases are set in two separate grids
+             * above, so a final score of 16 required the user to hold "base 14"
+             * and "+2 went here" in their head and add them. Restating the sum
+             * on the total is the smallest way to make the arithmetic legible
+             * without duplicating either control.
+             */}
+            {typeof base === "number" && increase ? (
+              <small className="m2-muted">
+                {base} base + {increase}
+                {origin ? ` from ${origin.sourceLabel}` : ""}
+              </small>
+            ) : null}
           </div>
         );
       })}
@@ -2316,7 +2373,15 @@ function ReviewStep({
   plan: DraftSnapshot["plan"];
   presentation: "guided" | "flexible";
 }) {
-  const name = (id: string | undefined) => (id ? entries.find(entry => entry.id === id)?.name ?? id : "Not chosen");
+  /*
+   * A record's name, never its identifier. A saved selection whose content is
+   * no longer installed has no name to show, and printing the stored ID instead
+   * would put an internal identifier in front of a player as though it were the
+   * answer. The planner already reports the missing source against the step
+   * that owns it, so this says only what is true.
+   */
+  const name = (id: string | undefined) =>
+    id ? (entries.find(entry => entry.id === id)?.name ?? "No longer installed") : "Not chosen";
   const errors = plan.issues.filter(issue => issue.severity === "error");
   const warnings = plan.issues.filter(issue => issue.severity !== "error");
   const equipment = selectedEquipmentFor(plan.equipmentGrants, build.equipmentSelections);
@@ -2367,11 +2432,18 @@ function ReviewStep({
             {plan.subclass?.valid && build.subclassId ? ` · ${name(build.subclassId)}` : ""}
           </dd>
         </div>
+        {/*
+         * Two rows, because they are two decisions. Reading them back as one
+         * "Origin" line is the presentation the rest of this change exists to
+         * undo.
+         */}
         <div>
-          <dt>Origin</dt>
-          <dd>
-            {name(build.speciesId)} · {name(build.backgroundId)}
-          </dd>
+          <dt>Species</dt>
+          <dd>{name(build.speciesId)}</dd>
+        </div>
+        <div>
+          <dt>Background</dt>
+          <dd>{name(build.backgroundId)}</dd>
         </div>
         <div>
           <dt>Level</dt>
@@ -2380,12 +2452,36 @@ function ReviewStep({
         <div>
           <dt>Abilities</dt>
           {/*
-           * The planner's finals, which are the base scores plus only the origin
-           * increases the current origin still authorises. Showing the stored
-           * finals here would display a number the commit is not going to write.
+           * Base, what the background added, and the total — the same three
+           * concepts the Abilities step presents, in the same order.
+           *
+           * The numbers are the planner's, not the draft's stored finals: they
+           * are the base scores plus only the increases the current background
+           * still authorises, which is what the commit will actually write. A
+           * row that showed the stored finals would be showing a number this
+           * build is not going to keep.
            */}
           <dd>
-            {ABILITIES.map(ability => `${ability.slice(0, 3).toUpperCase()} ${plan.abilities.final[ability] ?? "—"}`).join(" · ")}
+            <ul className="m2-plain-list m2-ability-review">
+              {ABILITIES.map(ability => {
+                const base = plan.abilities.base[ability];
+                const increase = plan.abilities.increases[ability];
+                const final = plan.abilities.final[ability];
+                return (
+                  <li key={ability}>
+                    <span>{titleCase(ability)}</span>
+                    <b>{final ?? "—"}</b>
+                    {typeof base === "number" && increase ? (
+                      <small className="m2-muted">
+                        {base} base + {increase} from {name(build.backgroundId)}
+                      </small>
+                    ) : typeof base === "number" ? (
+                      <small className="m2-muted">{base} base</small>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
           </dd>
         </div>
         {/*
@@ -2413,7 +2509,9 @@ function ReviewStep({
           <li key={choice.choiceId}>
             <b>{choice.label}</b> <small className="m2-muted">({choice.sourceLabel})</small>:{" "}
             {choice.selected.length
-              ? choice.selected.map(id => choice.options.find(option => option.id === id)?.label ?? id).join(", ")
+              ? choice.selected
+                  .map(id => choice.options.find(option => option.id === id)?.label ?? "No longer offered")
+                  .join(", ")
               : "Not chosen"}
           </li>
         ))}
@@ -2429,7 +2527,7 @@ function ReviewStep({
                 {group.grants.map(grant => (
                   <li key={`${grant.proficiencyId}-${grant.choiceId ?? "auto"}`}>
                     {grant.label} —{" "}
-                    {grant.kind === "automatic" ? "automatic" : `chosen in ${grant.choiceLabel ?? grant.choiceId}`}
+                    {grant.kind === "automatic" ? "automatic" : `chosen in ${grant.choiceLabel ?? "an earlier step"}`}
                   </li>
                 ))}
               </ul>

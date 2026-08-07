@@ -21,7 +21,7 @@
  * Exactly one option is expanded, because exactly one can be selected. There is
  * no separate expansion state to fall out of step with the selection.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Check, CircleHelp, TriangleAlert } from "lucide-react";
 import type { SelectionGrant, SelectionOptionView } from "@/src/services/selection-presenter";
 import type { Recommendation } from "@/src/services/build-planner";
@@ -104,6 +104,8 @@ export function ContentSelection({
    */
   /** Which option's "Why this?" copy is open. Never affects the selection. */
   const [explaining, setExplaining] = useState<string | null>(null);
+  /** Unique per instance, so two lists on one screen cannot collide. */
+  const panelId = useId();
   const anchor = useRef<{ id: string; top: number; until: number } | null>(null);
   /** Set around our own scrolling, so it is not mistaken for the user's. */
   const selfScrolling = useRef(false);
@@ -181,11 +183,20 @@ export function ContentSelection({
           const recommendation = recommendations.find(item => item.optionId === option.id);
           return (
             <li key={option.id} className={isSelected ? "m2-select-card m2-select-card-open" : "m2-select-card"}>
+              {/*
+               * Both states, because the control genuinely has both: it selects
+               * the option, and selecting it is what reveals the panel. They are
+               * not independent — there is no way to expand without selecting —
+               * so `aria-expanded` describes the consequence rather than
+               * offering a second control that does not exist.
+               */}
               <button
                 type="button"
                 data-option-id={option.id}
                 className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
                 aria-pressed={isSelected}
+                aria-expanded={isSelected}
+                aria-controls={`${panelId}-${option.id}`}
                 onClick={event => select(option.id, event.currentTarget)}
               >
                 <span className="m2-option-mark" aria-hidden="true">
@@ -214,7 +225,12 @@ export function ContentSelection({
               </button>
 
               {isSelected ? (
-                <div className="m2-select-panel" role="group" aria-label={`${option.label} — what this gives you`}>
+                <div
+                  className="m2-select-panel"
+                  id={`${panelId}-${option.id}`}
+                  role="group"
+                  aria-label={`${option.label} — what this gives you`}
+                >
                   {extra}
                   {option.grants.length ? (
                     <section className="m2-select-section">

@@ -477,3 +477,70 @@ describe("GAP-005: changing background removes what the old one owned", () => {
     expect(build.choiceSelections[SYNTHETIC_CHOICES.speciesAncestry]).toEqual(["option:hearth-kept"]);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Deliberate decisions, recorded so they cannot drift silently               */
+/* -------------------------------------------------------------------------- */
+
+describe("a manual sheet keeps Species and Background, and they never block it", () => {
+  /*
+   * Deferred deliberately rather than fixed.
+   *
+   * The two steps are not empty in manual mode: they present the same real,
+   * selectable content, and a hand-built character may legitimately record an
+   * origin. Dropping them would remove that capability and would require a new
+   * semantic — "a manual sheet has no origin" — which is a manual-sheet IA
+   * decision, not a consequence of splitting the origin step.
+   *
+   * What must hold is that they cost the user nothing: they raise no issue, so
+   * a manual sheet is completable without answering either.
+   */
+  const manual = draft({ manualSheet: true, name: "Hand Built" });
+
+  it("still offers both steps", () => {
+    const ids = planBuild(manual, SYNTHETIC_ENTRIES, "guided").steps.map(step => step.id);
+    expect(ids).toContain("origin");
+    expect(ids).toContain("background");
+  });
+
+  it("reports no species or background issue against them", () => {
+    const plan = planBuild(manual, SYNTHETIC_ENTRIES, "guided");
+    const codes = plan.issues.map(issue => issue.code);
+    expect(codes).not.toContain("SPECIES_NOT_CHOSEN");
+    expect(codes).not.toContain("BACKGROUND_NOT_CHOSEN");
+    for (const id of ["origin", "background"] as const)
+      expect(plan.steps.find(step => step.id === id)?.status).toBe("complete");
+  });
+});
+
+describe("choosing a distribution before placing anything into it", () => {
+  /*
+   * The chosen shape is inferred from the allocation rather than stored.
+   *
+   * With nothing placed, every distribution fits equally and the inference
+   * settles on the first by declaration order. That is the whole of the edge
+   * case: a user who taps "+1 to three abilities", places nothing, and reloads
+   * sees the default shape again. No increase is lost because none was made, so
+   * this is derived-state behaviour rather than a persistence defect — and
+   * storing a shape field to fix it would create a second source of truth that
+   * could disagree with the increases beside it.
+   */
+  const ferryHand = draft({ backgroundId: SYNTHETIC_IDS.backgroundSecond });
+
+  it("loses no allocation, because there is none to lose", () => {
+    const allocation = reconcileAbilityAllocation(ferryHand, SYNTHETIC_ENTRIES);
+    expect(allocation.increases).toEqual({});
+    expect(allocation.invalid).toEqual([]);
+    expect(allocation.activePatternIndex).toBe(0);
+  });
+
+  it("settles on the shape the placed increases actually imply, once any exist", () => {
+    const base = { dexterity: 14, wisdom: 13, charisma: 12, strength: 10, constitution: 10, intelligence: 8 };
+    const spread = reconcileAbilityAllocation(
+      { ...ferryHand, abilityBaseScores: base, abilityIncreases: { dexterity: 1, wisdom: 1, charisma: 1 } },
+      SYNTHETIC_ENTRIES,
+    );
+    expect(spread.activePatternIndex).toBe(1);
+    expect(spread.patternSatisfied).toBe(true);
+  });
+});

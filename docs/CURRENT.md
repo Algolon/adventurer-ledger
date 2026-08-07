@@ -106,6 +106,28 @@ expression or issue code reaches the screen.
 effect dispositions, so a trait carrying `manualAdjudication` is labelled for the
 table rather than listed beside the ones the engine applies.
 
+**Review names the two origins separately** and states each ability as base, the
+increase the background authorised, and the total — the same three concepts the
+Abilities step presents, in the same order, and taken from the planner so they
+are the numbers the commit will actually write. No identifier, issue code or
+effect name reaches the screen: an unmapped diagnostic renders as a plain
+sentence, and a selection whose content is no longer installed says so rather
+than printing its stored ID.
+
+**Species and Background remain in the sequence for a manual sheet**, and raise
+no issue there. They are not empty in manual mode — they offer the same real
+content, and a hand-built character may legitimately record an origin — so
+dropping them would remove a capability and would require deciding that a manual
+sheet has no origin at all. That is a manual-sheet IA decision rather than a
+consequence of splitting the origin step, and it is deferred.
+
+**The chosen increase distribution is derived, not stored.** With nothing placed
+every distribution fits equally and the inference settles on the declared
+default, so choosing a shape and reloading before allocating anything shows the
+default again. No allocation is lost, because none was made; storing the shape
+would create a second source of truth that could disagree with the increases
+beside it.
+
 ### Alternative ability-increase distributions (GAP-003)
 
 `abilityScoreChoices` gains an optional `increasePatterns`, a list of legal
@@ -515,6 +537,18 @@ hit-point-finalisation items above, is recorded in
 - Initial installation and application updates require HTTPS, except browser-recognized localhost development.
 - After one successful online load and service-worker installation, the cached application shell can reload and operate offline. Local compendium reads, edits, search, and JSON export require no network.
 - Persistent storage may reduce browser eviction risk, but browsers can refuse it and it never replaces a backup.
+
+### Recorded follow-ups
+
+**The local end-to-end suite can pass against a stale build.** `playwright.config.ts`
+sets `reuseExistingServer: !process.env.CI`, so a local `npm run test:e2e` reuses
+whatever preview server is already listening — which may have been built before
+the changes under test. During the creation IA work this produced a local run
+reporting 407 passing while CI, which builds fresh, failed 64 of the same tests.
+Until it is addressed, a local run is only evidence when the build output is
+wiped and `CI=1` is set. Deliberately not fixed inside the creation IA change:
+it is a change to how every suite in the repository is verified, and it should
+not ride along with a product branch.
 
 ## Next milestone
 

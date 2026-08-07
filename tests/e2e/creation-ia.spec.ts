@@ -170,6 +170,8 @@ test.describe("progressive disclosure", () => {
     await expect(panel.getByRole("heading", { name: "Choices to make" })).toBeVisible();
     // The decision is inside the expanded species, not on a later screen.
     await expect(panel.getByRole("button", { name: /^Deepdelve/ })).toBeVisible();
+    // And it does not restate the card it is already sitting in.
+    await expect(panel.getByText("From Stonevigil")).toHaveCount(0);
   });
 
   test("automatic benefits are told apart from ones needing a ruling", async ({ page }) => {
@@ -413,15 +415,54 @@ test.describe("the phone contract holds on the new steps", () => {
 });
 
 test.describe("keyboard and assistive technology", () => {
-  test("the selected option is announced as pressed and its panel is grouped", async ({ page }) => {
+  test("the selected option is announced as pressed and expanded, and its panel is grouped", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await reachSpecies(page);
     const riverborn = page.getByRole("button", { name: /^Riverborn/ });
     await expect(riverborn).toHaveAttribute("aria-pressed", "false");
+    await expect(riverborn).toHaveAttribute("aria-expanded", "false");
 
     await riverborn.click();
     await expect(riverborn).toHaveAttribute("aria-pressed", "true");
+    await expect(riverborn).toHaveAttribute("aria-expanded", "true");
+
+    // The control names the region it reveals, and that region really is there.
+    const panelId = await riverborn.getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    // An attribute selector, because React's generated ids contain characters
+    // that are not valid in a bare CSS id selector.
+    await expect(page.locator(`[id="${panelId}"]`)).toBeVisible();
     await expect(page.getByRole("group", { name: /Riverborn — what this gives you/ })).toBeVisible();
+  });
+
+  /**
+   * A collapsed option is not rendered at all rather than hidden with CSS, so
+   * there is nothing behind it for Tab or a screen reader to reach.
+   */
+  test("a collapsed option exposes no reachable controls", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await reachSpecies(page);
+    await page.getByRole("button", { name: /^Stonevigil/ }).click();
+    await expect(page.getByRole("button", { name: /^Deepdelve/ })).toBeVisible();
+
+    // Selecting elsewhere collapses it; its nested control goes with it.
+    await page.getByRole("button", { name: /^Riverborn/ }).click();
+    await expect(page.getByRole("button", { name: /^Deepdelve/ })).toHaveCount(0);
+    await expect(page.locator(".m2-select-panel")).toHaveCount(1);
+  });
+
+  /** An unmet nested decision is reported inside the option that asks for it. */
+  test("an outstanding nested decision is reported in context", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await reachSpecies(page);
+    await page.getByRole("button", { name: /^Stonevigil/ }).click();
+
+    const panel = page.locator(".m2-select-panel");
+    await expect(panel.getByText(/of 1 chosen/)).toBeVisible();
+    await expect(page.getByText(/decisions? still to make/)).toBeVisible();
+
+    await page.getByRole("button", { name: /^Deepdelve/ }).click();
+    await expect(page.getByText(/decisions? still to make/)).toHaveCount(0);
   });
 
   test("an option can be selected from the keyboard alone", async ({ page }) => {

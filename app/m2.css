@@ -1319,6 +1319,38 @@
   font-weight: 650;
 }
 
+/*
+ * The derivation under a final score, and the same three concepts on Review.
+ * Both wrap rather than widen: "14 base + 2 from Caravan Warden" is longer than
+ * a phone column, and the source name is content, so its length is not ours to
+ * assume.
+ */
+.m2-ability-final + small {
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.m2-ability-review {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.m2-ability-review li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.m2-ability-review small {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 /* Remaining standard-array slots, one chip per unassigned slot. */
 .m2-remaining {
   display: grid;

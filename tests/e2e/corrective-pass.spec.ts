@@ -391,8 +391,11 @@ test.describe("abilities are base plus origin, and stay that way", () => {
     await page.getByRole("button", { name: /^Ink set/ }).click();
     await next(page);
     await next(page);
-    // Review shows the finals the commit will write.
-    await expect(page.getByRole("definition").filter({ hasText: "CON 17" })).toBeVisible();
+    // Review shows the finals the commit will write, and how they were reached:
+    // the hand-entered base and the increase the background authorised.
+    const constitution = page.locator(".m2-ability-review li", { hasText: "Constitution" });
+    await expect(constitution).toContainText("17");
+    await expect(constitution).toContainText("15 base + 2");
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByRole("heading", { name: "Manual Base", level: 2 })).toBeVisible();
 
