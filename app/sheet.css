@@ -1,122 +1,19 @@
 /*
  * The play-first character sheet.
  *
- * Sheet-scoped design tokens with a real dark scheme: the sheet reads its
- * colours only through these variables, and the dark block re-states every one
- * of them, so no dark-mode surface ever mixes a dark background with a
- * light-assuming foreground. Touch targets stay at 44 CSS px minimum (play
- * actions 48), no state relies on colour alone, and nothing scrolls the
- * document sideways at 360–412 px.
+ * The sheet used to carry the app's only dark rules, in two
+ * `prefers-color-scheme: dark` blocks that restated a parallel set of
+ * `--sh-*` tokens and patched the shell around it. Both blocks are gone: there
+ * is one theme now, declared in `theme.css`, and the sheet reads the same
+ * tokens as every other surface. Nothing here re-declares a colour.
+ *
+ * Touch targets stay at 44 CSS px minimum, play actions 48, no state relies on
+ * colour alone, and nothing scrolls the document sideways from 320 px up.
  */
-
-.sheet {
-  --sh-ink: #1c2730;
-  --sh-muted: #5c6570;
-  --sh-card: #fffaf0;
-  --sh-card-border: #b9945266;
-  --sh-inset: #f4ecda;
-  --sh-accent: #8a6420;
-  --sh-tab-ink: #4c5560;
-  --sh-chip-bg: #f4ecda;
-  --sh-chip-border: #b9945288;
-  --sh-chip-on-bg: #8a6420;
-  --sh-chip-on-ink: #fdf7ea;
-  --sh-warn-bg: #fff0d2;
-  --sh-warn-ink: #6d4611;
-  --sh-warn-border: #c9893b;
-  --sh-danger: #8c3535;
-  --sh-danger-bg: #fdeeee;
-  --sh-good: #43683f;
-  --sh-focus: #22456b;
-
-  color: var(--sh-ink);
-}
-
-@media (prefers-color-scheme: dark) {
-  .sheet {
-    --sh-ink: #ece4d4;
-    --sh-muted: #a8a094;
-    --sh-card: #16222c;
-    --sh-card-border: #b9945255;
-    --sh-inset: #0e1820;
-    --sh-accent: #d9b56b;
-    --sh-tab-ink: #c4bcae;
-    --sh-chip-bg: #0e1820;
-    --sh-chip-border: #b9945266;
-    --sh-chip-on-bg: #d9b56b;
-    --sh-chip-on-ink: #16222c;
-    --sh-warn-bg: #3a2c14;
-    --sh-warn-ink: #f0d9a8;
-    --sh-warn-border: #c9893b;
-    --sh-danger: #e39c9c;
-    --sh-danger-bg: #3a1d1d;
-    --sh-good: #a4c9a0;
-    --sh-focus: #9ec1ec;
-  }
-
-  /*
-   * The page behind the sheet is painted by the shell. While the sheet is the
-   * open view it owns the visible surface, so it darkens the page area itself;
-   * the app chrome (top bar and navigation) is already dark navy in both
-   * schemes.
-   */
-  .m2-main:has(.sheet) {
-    background: #0a141d;
-  }
-  .m2-shell:has(.sheet) {
-    background: #0a141d;
-  }
-
-  /* The bottom bar sits over the dark sheet, so it darkens with it. */
-  .m2-shell:has(.sheet) .m2-rail {
-    background: #101c26;
-    border-top-color: #b9945244;
-    color: #ece4d4;
-  }
-  .m2-shell:has(.sheet) .m2-nav-button.m2-active {
-    color: #d9b56b;
-  }
-
-  .sheet .m2-banner {
-    background: var(--sh-warn-bg);
-    color: var(--sh-warn-ink);
-  }
-
-  .m2-backdrop-sheet .m2-dialog {
-    background: var(--sh-card, #16222c);
-    color: #ece4d4;
-    --sh-card: #16222c;
-    --sh-inset: #0e1820;
-    --sh-muted: #a8a094;
-    --sh-card-border: #b9945255;
-    --sh-chip-border: #b9945266;
-    --sh-danger: #e39c9c;
-    --sh-good: #a4c9a0;
-  }
-
-  /* Shared controls assume the light shell; restate them for the dark sheet. */
-  .sheet .m2-button:not(.m2-button-primary),
-  .m2-backdrop-sheet .m2-button:not(.m2-button-primary),
-  .sheet .m2-play-action,
-  .m2-backdrop-sheet .m2-play-action {
-    background: var(--sh-inset, #0e1820);
-    border-color: var(--sh-chip-border, #b9945266);
-    color: var(--sh-ink, #ece4d4);
-  }
-
-  .sheet .m2-unknown,
-  .m2-backdrop-sheet .m2-unknown {
-    color: var(--sh-warn-ink, #f0d9a8);
-  }
-
-  .m2-backdrop-sheet .m2-icon-button {
-    color: inherit;
-  }
-}
 
 .sheet :focus-visible,
 .m2-backdrop-sheet :focus-visible {
-  outline: 3px solid var(--sh-focus, #22456b);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -125,6 +22,7 @@
 .sheet-glance {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .sheet-identity {
@@ -138,19 +36,25 @@
   min-width: 0;
 }
 
+/*
+ * The character's name is the title of this screen, so it is the only large
+ * type in the header. It wraps rather than truncating: a long name is a real
+ * name, and an ellipsis at 360 px hid whole words.
+ */
 .sheet-identity h2 {
   margin: 0;
   font: 600 26px/1.2 var(--display);
+  overflow-wrap: anywhere;
 }
 
 .sheet-identity-line {
   margin: 2px 0 0;
-  color: var(--sh-muted);
+  color: var(--muted);
 }
 
 .sheet-quiet-note {
   margin: 4px 0 0;
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 13px;
 }
 
@@ -171,11 +75,12 @@
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
   min-height: 56px;
   padding: 8px 14px;
-  border: 1px solid var(--sh-card-border);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--sh-card);
+  background: var(--surface);
   color: inherit;
   text-align: left;
 }
@@ -186,26 +91,26 @@
 
 .sheet-hp-value small {
   font: 600 16px var(--ui);
-  color: var(--sh-muted);
+  color: var(--muted);
 }
 
 .sheet-hp-temp,
 .sheet-badge {
   padding: 2px 8px;
-  border: 1px solid var(--sh-chip-border);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--sh-chip-bg);
+  background: var(--inset);
   font-size: 12px;
   font-weight: 650;
   white-space: nowrap;
 }
 
 .sheet-hp-dying {
-  border-color: var(--sh-danger);
+  border-color: var(--danger-border);
 }
 
 .sheet-hp-state {
-  color: var(--sh-danger);
+  color: var(--danger);
   font-weight: 750;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -218,11 +123,12 @@
   gap: 2px;
   justify-items: center;
   align-content: center;
+  min-width: 0;
   min-height: 56px;
   padding: 6px 4px;
-  border: 1px solid var(--sh-card-border);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--sh-card);
+  background: var(--surface);
   color: inherit;
 }
 
@@ -230,7 +136,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -238,6 +144,7 @@
 }
 
 .sheet-tile-label svg {
+  flex: 0 0 auto;
   width: 14px;
   height: 14px;
 }
@@ -256,31 +163,33 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   min-height: 44px;
   padding: 6px 14px;
-  border: 1px solid var(--sh-chip-border);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--sh-chip-bg);
+  background: var(--inset);
   color: inherit;
   font-weight: 650;
   font-size: 14px;
 }
 
 .sheet-chip svg {
+  flex: 0 0 auto;
   width: 15px;
   height: 15px;
 }
 
 .sheet-chip-on {
-  background: var(--sh-chip-on-bg);
-  border-color: var(--sh-chip-on-bg);
-  color: var(--sh-chip-on-ink);
+  background: var(--brass);
+  border-color: var(--brass);
+  color: var(--deep);
 }
 
 .sheet-chip-warn {
-  background: var(--sh-warn-bg);
-  border-color: var(--sh-warn-border);
-  color: var(--sh-warn-ink);
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
 }
 
 .sheet-chip-add {
@@ -291,9 +200,10 @@
   margin: 0;
   min-height: 20px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 14px;
 }
 
@@ -303,9 +213,9 @@
   gap: 5px;
   min-height: 32px;
   padding: 2px 12px;
-  border: 1px solid var(--sh-chip-border);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--sh-card);
+  background: var(--surface);
   color: inherit;
   font-weight: 650;
 }
@@ -318,11 +228,12 @@
 /* ---- death saves ---------------------------------------------------------- */
 
 .sheet-dying {
-  border-color: var(--sh-danger);
+  border-color: var(--danger-border);
 }
 
 .sheet-death-tallies {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
 }
 
@@ -338,58 +249,87 @@
   width: 14px;
   height: 14px;
   margin-right: 6px;
-  border: 2px solid var(--sh-muted);
+  border: 2px solid var(--muted);
   border-radius: 50%;
 }
 
 .sheet-pip-filled {
-  background: var(--sh-danger);
-  border-color: var(--sh-danger);
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ---- tabs ----------------------------------------------------------------- */
 
+/*
+ * Sheet sections are a fixed grid, not a scrolling strip.
+ *
+ * This was `display: flex; overflow-x: auto`, so on a 360 px phone the fifth
+ * section of a caster's sheet — Character — sat off the right edge behind a
+ * clipped Inventory, findable only by swiping a container with no affordance
+ * saying it could be swiped. Every section now has a column: four for a martial
+ * sheet, five for a caster, each an equal fraction of the available width. The
+ * count comes from the sheet itself through `--sheet-tab-count`, so no width
+ * is guessed and no tab is ever cut off.
+ */
 .sheet-tabs {
   position: sticky;
   top: var(--appbar-height);
   z-index: 15;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--sheet-tab-count, 4), minmax(0, 1fr));
   gap: 4px;
   margin: 0 -14px;
-  padding: 6px 14px;
-  overflow-x: auto;
+  padding: 6px 10px;
   background: var(--paper);
-  border-bottom: 1px solid var(--sh-card-border);
+  border-bottom: 1px solid var(--border-soft);
 }
 
-@media (prefers-color-scheme: dark) {
-  .sheet-tabs {
-    background: #0a141d;
-  }
-}
-
+/*
+ * Icon over label. The stack is what lets a full word fit a fifth of a 320 px
+ * screen: "Character" and "Inventory" stay whole at every required width, so
+ * nothing has to be abbreviated into something ambiguous.
+ */
 .sheet-tab {
-  flex: 1 0 auto;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: none;
+  min-width: 0;
+  min-height: 48px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
-  color: var(--sh-tab-ink);
+  color: var(--muted);
   font-weight: 700;
-  font-size: 15px;
-  white-space: nowrap;
+  font-size: clamp(10px, 3vw, 12px);
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
+  hyphens: none;
 }
 
+.sheet-tab svg {
+  width: 18px;
+  height: 18px;
+}
+
+/*
+ * Selected state carries four signals: a filled surface, a brass edge, a brass
+ * underline and `aria-selected`. Remove the colour and the fill, the rule and
+ * the announcement all still say which section is open.
+ */
 .sheet-tab-active {
-  background: var(--sh-card);
-  color: var(--sh-accent);
-  box-shadow: inset 0 -3px 0 var(--sh-accent);
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--brass);
+  box-shadow: inset 0 -3px 0 var(--brass);
 }
 
 .sheet-panel {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 /* ---- cards and rows -------------------------------------------------------- */
@@ -397,10 +337,11 @@
 .sheet-card {
   display: grid;
   gap: 10px;
+  min-width: 0;
   padding: 14px;
-  border: 1px solid var(--sh-card-border);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--sh-card);
+  background: var(--surface);
 }
 
 .sheet-card h3 {
@@ -411,7 +352,7 @@
 .sheet-card h4 {
   margin: 4px 0 0;
   font-size: 14px;
-  color: var(--sh-muted);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -421,10 +362,12 @@
   padding: 0;
   list-style: none;
   display: grid;
+  min-width: 0;
 }
 
 .sheet-rows > li {
-  border-top: 1px solid var(--sh-card-border);
+  min-width: 0;
+  border-top: 1px solid var(--border-soft);
 }
 
 .sheet-rows > li:first-child {
@@ -435,6 +378,7 @@
   width: 100%;
   display: grid;
   gap: 2px;
+  min-width: 0;
   min-height: 48px;
   padding: 10px 4px;
   border: none;
@@ -447,31 +391,35 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   font-weight: 650;
   font-size: 16px;
 }
 
 .sheet-row-title svg {
+  flex: 0 0 auto;
   width: 15px;
   height: 15px;
 }
 
 .sheet-row-meta {
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 14px;
 }
 
 .sheet-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
   min-height: 48px;
   padding: 8px 4px;
 }
 
 .sheet-quantity {
-  color: var(--sh-muted);
+  color: var(--muted);
   font-weight: 600;
 }
 
@@ -488,7 +436,7 @@
 }
 
 .sheet-ability-score {
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 13px;
 }
 
@@ -497,10 +445,12 @@
   padding: 0;
   list-style: none;
   display: grid;
+  min-width: 0;
 }
 
 .sheet-checks > li {
-  border-top: 1px solid var(--sh-card-border);
+  min-width: 0;
+  border-top: 1px solid var(--border-soft);
 }
 
 .sheet-checks > li:first-child {
@@ -512,6 +462,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   min-height: 44px;
   padding: 6px 4px;
   border: none;
@@ -526,24 +477,25 @@
   min-width: 0;
 }
 
+/* Proficiency is a filled ring, not a colour: it reads at any palette. */
 .sheet-prof-dot {
   flex: none;
   width: 10px;
   height: 10px;
-  border: 2px solid var(--sh-muted);
+  border: 2px solid var(--muted);
   border-radius: 50%;
 }
 
 .sheet-prof-dot-on {
-  background: var(--sh-accent);
-  border-color: var(--sh-accent);
+  background: var(--brass);
+  border-color: var(--brass);
 }
 
 /* ---- resources and steppers ------------------------------------------------ */
 
 .sheet-resource {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "title stepper"
     "count stepper"
@@ -564,7 +516,7 @@
 
 .sheet-resource-recharge {
   grid-area: recharge;
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 13px;
 }
 
@@ -582,11 +534,12 @@
 .sheet-amount button {
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
   width: 48px;
   height: 48px;
-  border: 1px solid var(--sh-chip-border);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--sh-inset);
+  background: var(--inset);
   color: inherit;
 }
 
@@ -615,11 +568,12 @@
   gap: 2px;
   justify-items: center;
   align-content: center;
+  min-width: 0;
   min-height: 56px;
   padding: 6px 4px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-soft);
   border-radius: 12px;
-  background: var(--sh-inset);
+  background: var(--inset);
 }
 
 /* ---- character ------------------------------------------------------------- */
@@ -628,17 +582,23 @@
   margin: 0;
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
+/*
+ * Label above value below 420 px. A 110 px label track left about 180 px for a
+ * value on a 320 px phone, which a species and subclass pairing overflowed.
+ */
 .sheet-fact {
   display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
   align-items: baseline;
+  min-width: 0;
 }
 
 .sheet-fact dt {
-  color: var(--sh-muted);
+  color: var(--muted);
   font-size: 13px;
   font-weight: 700;
   text-transform: uppercase;
@@ -647,7 +607,9 @@
 
 .sheet-fact dd {
   margin: 0;
+  min-width: 0;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .sheet-row-actions {
@@ -695,7 +657,7 @@
 
 .sheet-drawer-value small {
   font: 600 15px var(--ui);
-  color: var(--sh-muted, var(--muted));
+  color: var(--muted);
 }
 
 .sheet-breakdown {
@@ -703,16 +665,19 @@
   padding: 0;
   list-style: none;
   display: grid;
+  min-width: 0;
 }
 
 .sheet-breakdown > li {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
   min-height: 36px;
   padding: 6px 0;
-  border-top: 1px solid var(--sh-card-border, var(--border));
+  border-top: 1px solid var(--border-soft);
 }
 
 .sheet-breakdown > li:first-child {
@@ -723,13 +688,14 @@
 .sheet-state-controls {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .sheet-hp-controls h4,
 .sheet-state-controls h4 {
   margin: 4px 0 0;
   font-size: 14px;
-  color: var(--sh-muted, var(--muted));
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -738,28 +704,36 @@
   display: flex;
   align-items: stretch;
   gap: 8px;
+  min-width: 0;
 }
 
-/* Specific enough to beat the global light form-control background. */
 .m2-dialog .sheet-amount input[type="number"] {
   width: 84px;
+  min-width: 0;
   text-align: center;
   font: 700 20px var(--display);
-  border: 1px solid var(--sh-chip-border, var(--border));
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background-color: var(--sh-inset, #f4ecda);
-  color: var(--sh-ink, #1c2730);
+  background-color: var(--inset);
+  color: var(--ink);
 }
 
 .sheet-action-damage {
-  border-color: var(--sh-danger);
+  border-color: var(--danger-border);
 }
 
 .sheet-action-heal {
-  border-color: var(--sh-good);
+  border-color: var(--good-border);
 }
 
 /* ---- width adaptations ------------------------------------------------------ */
+
+@media (min-width: 420px) {
+  .sheet-fact {
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 10px;
+  }
+}
 
 @media (min-width: 600px) {
   .sheet-abilities {
@@ -773,14 +747,18 @@
   .sheet-hp {
     grid-column: 1;
   }
+
+  .sheet-tab {
+    font-size: 13px;
+  }
 }
 
 @media (min-width: 960px) {
   .sheet-tabs {
     position: static;
     margin: 0;
-    padding: 0;
+    padding: 0 0 6px;
     background: transparent;
-    border-bottom: 1px solid var(--sh-card-border);
+    border-bottom: 1px solid var(--border-soft);
   }
 }

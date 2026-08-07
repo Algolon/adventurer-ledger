@@ -1,15 +1,29 @@
 /*
- * M2.1 character surfaces.
+ * The Runefolio application shell and its character surfaces.
  *
- * Mobile first. Every interactive target is at least 44 CSS px and play actions
- * are 48. Nothing relies on colour alone: each state pairs its colour with a
- * word or an icon. Wide content scrolls inside its own labelled container so the
- * document itself never scrolls horizontally at 360, 390, 412, 768, 1024 or
- * 1440 px, including at 200% zoom where the rail query falls back to the bottom
- * bar.
+ * Mobile first, portrait first, dark only. Every interactive target is at least
+ * 44 CSS px and play actions are 48. Nothing relies on colour alone: each state
+ * pairs its colour with a word, an icon or a shape.
+ *
+ * Nothing scrolls sideways. That is a layout property, not a clipping property:
+ * this file used to carry `overflow-x: clip` on the shell, the main region and
+ * the page, which hid overflow rather than removing it and made the document
+ * width assertion in `tests/e2e/mobile-visual-contract.spec.ts` unable to fail.
+ * The clip is gone and every container that can receive long content declares
+ * `min-width: 0` so it may shrink below its content's intrinsic width.
  */
 
 .m2-shell {
+  /*
+   * The app bar's own height, shared with anything that has to sit below it.
+   * The safe-area inset is part of it: a sticky element offset by the bare
+   * 60 px would tuck under the bar by the height of the notch.
+   */
+  --appbar-content: 60px;
+  --appbar-height: calc(var(--appbar-content) + env(safe-area-inset-top, 0px));
+  /* 56 px of button plus the 1 px top border. */
+  --rail-height: 57px;
+
   min-height: 100vh;
   min-height: 100dvh;
   display: grid;
@@ -18,26 +32,20 @@
   color: var(--ink);
 }
 
-/* Nothing in the character surfaces may push the document sideways. */
+/*
+ * Nothing in the character surfaces may push the document sideways. These are
+ * the containers whose default `min-width: auto` would otherwise let a long
+ * child set the width of the document.
+ */
 .m2-shell,
 .m2-main,
 .m2-page {
   max-width: 100%;
   min-width: 0;
-  overflow-x: clip;
 }
 
 .m2-page :where(h2, h3, h4, p, b, small, dd, dt, li, code) {
   overflow-wrap: anywhere;
-}
-
-/*
- * The app bar's own height, shared with anything that has to sit below it.
- * Its content renders taller than the 56 px floor, so a second sticky element
- * offset by the floor would tuck under it by the difference.
- */
-.m2-shell {
-  --appbar-height: 60px;
 }
 
 .m2-appbar {
@@ -48,10 +56,14 @@
   height: var(--appbar-height);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top, 0px));
+  padding-left: calc(12px + env(safe-area-inset-left, 0px));
+  padding-right: calc(12px + env(safe-area-inset-right, 0px));
   color: var(--cream);
   background: var(--navy);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .m2-appbar-brand {
@@ -62,41 +74,85 @@
   margin-right: auto;
 }
 
+/*
+ * Branding is stated once, at the size of a label rather than a masthead. On
+ * the sheet the character's name is the title of the screen; a 19 px wordmark
+ * above a 26 px character name read as two competing headings on a 360 px
+ * phone, and cost a line of vertical space on every scroll.
+ */
 .m2-appbar-brand strong {
-  font:
-    600 19px/1.1 var(--display);
+  font: 600 17px/1.1 var(--display);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .m2-appbar-brand img {
-  width: 32px;
-  height: 32px;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
 }
 
+/*
+ * Settings is reachable from every screen without competing with the wordmark
+ * for the header. Below 400 px the label is carried by `aria-label` alone and
+ * the control is a 44 px icon; the visible word returns as soon as there is
+ * room for it.
+ */
 .m2-appbar-settings {
+  flex: 0 0 auto;
   min-height: 44px;
   min-width: 44px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 0 10px;
-  border: 1px solid #b9945288;
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
   color: inherit;
+  font-size: 14px;
 }
 
 .m2-appbar-settings svg {
+  flex: 0 0 auto;
   width: 20px;
 }
 
 .m2-appbar-settings.m2-active {
-  background: #ffffff1f;
+  background: var(--surface);
   border-color: var(--brass);
+  color: var(--brass);
+}
+
+@media (max-width: 399px) {
+  .m2-appbar-settings span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .m2-appbar-settings {
+    padding: 0;
+  }
 }
 
 .m2-main {
-  padding: 16px 14px 96px;
+  padding: 16px 14px;
+  padding-left: calc(14px + env(safe-area-inset-left, 0px));
+  padding-right: calc(14px + env(safe-area-inset-right, 0px));
+  /*
+   * The bottom bar is fixed, so it is out of flow and would otherwise sit on
+   * top of the last card. This clears its full height plus the inset it adds
+   * for the home indicator, plus a card's worth of breathing room.
+   */
+  padding-bottom: calc(var(--rail-height) + 26px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Primary navigation: bottom bar on mobile. */
@@ -105,7 +161,8 @@
   inset: auto 0 0 0;
   z-index: 25;
   border-top: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--navy);
+  color: var(--cream);
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
@@ -150,6 +207,7 @@
   padding: 6px 4px;
   border: 0;
   background: transparent;
+  color: inherit;
   font-size: 12px;
 }
 
@@ -158,8 +216,9 @@
   height: 22px;
 }
 
+/* Colour, weight and a rule: three signals, so none of them is load-bearing. */
 .m2-nav-button.m2-active {
-  color: #6b4d1c;
+  color: var(--brass);
   font-weight: 700;
   box-shadow: inset 0 3px var(--brass);
 }
@@ -182,14 +241,12 @@
 
 .m2-page-title {
   margin: 0;
-  font:
-    600 28px/1.15 var(--display);
+  font: 600 28px/1.15 var(--display);
 }
 
 .m2-section-title {
   margin: 8px 0 0;
-  font:
-    600 19px/1.2 var(--display);
+  font: 600 19px/1.2 var(--display);
 }
 
 .m2-muted {
@@ -199,7 +256,7 @@
 
 .m2-eyebrow {
   margin: 0 0 2px;
-  color: #7d5b2a;
+  color: var(--brass);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -221,6 +278,7 @@
 .m2-button {
   min-height: 44px;
   min-width: 44px;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -228,11 +286,13 @@
   padding: 0 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fffaf0;
+  color: var(--ink);
+  background: var(--inset);
   font-weight: 650;
 }
 
 .m2-button svg {
+  flex: 0 0 auto;
   width: 18px;
 }
 
@@ -262,6 +322,7 @@
 .m2-play-action {
   min-height: 48px;
   min-width: 48px;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -269,11 +330,13 @@
   padding: 0 14px;
   border: 1px solid var(--border);
   border-radius: 9px;
-  background: var(--surface);
+  color: var(--ink);
+  background: var(--inset);
   font-weight: 650;
 }
 
 .m2-play-action svg {
+  flex: 0 0 auto;
   width: 20px;
 }
 
@@ -284,11 +347,12 @@
 }
 
 .m2-icon-button {
+  flex: 0 0 auto;
   min-width: 44px;
   min-height: 44px;
   display: grid;
   place-items: center;
-  border: 1px solid #b9945288;
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
   color: inherit;
@@ -298,10 +362,11 @@
 .m2-card {
   display: grid;
   gap: 10px;
+  min-width: 0;
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 11px;
-  background: #f8f0ddf2;
+  background: var(--surface);
 }
 
 .m2-card-head {
@@ -310,18 +375,20 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .m2-card-head h3 {
   margin: 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  font:
-    600 20px/1.2 var(--display);
+  font: 600 20px/1.2 var(--display);
 }
 
 .m2-card-head svg {
+  flex: 0 0 auto;
   width: 20px;
 }
 
@@ -338,6 +405,7 @@
   display: flex;
   align-items: stretch;
   gap: 4px;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -355,6 +423,7 @@
   border: 0;
   border-radius: 10px;
   background: transparent;
+  color: inherit;
   text-align: left;
 }
 
@@ -374,26 +443,36 @@
 }
 
 .m2-row-more {
+  flex: 0 0 auto;
   min-width: 44px;
   border: 0;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--border-soft);
   background: transparent;
+  color: inherit;
   font-size: 18px;
 }
 
+/*
+ * The row menu is anchored to the right edge of its row and can be wider than
+ * a 320 px viewport once the row has any inset. It is clamped to the row and
+ * allowed to shrink, so a long action label wraps instead of hanging off the
+ * side of the document.
+ */
 .m2-row-menu {
   position: absolute;
   right: 0;
   top: 100%;
   z-index: 10;
-  min-width: 220px;
+  width: max-content;
+  min-width: 0;
+  max-width: 100%;
   margin: 4px 0 0;
   padding: 4px;
   list-style: none;
   border: 1px solid var(--border);
   border-radius: 9px;
-  background: #fffaf0;
-  box-shadow: 0 6px 18px #28231d22;
+  background: var(--raised);
+  box-shadow: var(--shadow-overlay);
 }
 
 .m2-row-menu button {
@@ -403,11 +482,12 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
+  color: inherit;
   text-align: left;
 }
 
 .m2-row-menu button:hover {
-  background: #b994521f;
+  background: var(--inset);
 }
 
 .m2-monogram {
@@ -417,7 +497,8 @@
   place-items: center;
   border-radius: 50%;
   color: var(--brass);
-  background: var(--navy);
+  background: var(--inset);
+  border: 1px solid var(--border);
   font-weight: 700;
 }
 
@@ -433,7 +514,7 @@
   justify-items: center;
   gap: 10px;
   padding: 32px 16px;
-  border: 1px dashed #7d5b2a;
+  border: 1px dashed var(--border);
   border-radius: 12px;
   text-align: center;
 }
@@ -446,8 +527,7 @@
 
 .m2-empty h3 {
   margin: 0;
-  font:
-    600 22px/1.2 var(--display);
+  font: 600 22px/1.2 var(--display);
 }
 
 .m2-empty-actions {
@@ -472,60 +552,62 @@
 }
 
 .m2-badge-automatic {
-  color: #43683f;
+  color: var(--good);
 }
 .m2-badge-manual {
-  color: #6a4f8c;
+  color: var(--lav);
 }
 .m2-badge-incomplete {
-  color: #8a5a17;
+  color: var(--warn);
 }
 .m2-badge-missing-source {
-  color: #8c3535;
+  color: var(--danger);
 }
 .m2-badge-override {
-  color: #6a4f8c;
+  color: var(--lav);
   margin-left: 6px;
 }
 .m2-badge-recommended {
-  color: #43683f;
+  color: var(--good);
 }
 
 /* Banners: one highest-priority banner per surface. */
 .m2-banner {
   display: grid;
   gap: 6px;
+  min-width: 0;
   padding: 12px;
   border: 1px solid;
   border-radius: 10px;
 }
 
 .m2-banner-error {
-  color: #7a2020;
-  border-color: #8c3535;
-  background: #fdeeee;
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
 }
 
 .m2-banner-warning {
-  color: #6d4611;
-  border-color: var(--amber);
-  background: #fff4d6;
+  color: var(--warn);
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
 }
 
 .m2-banner-info {
-  color: #22456b;
-  border-color: #3d6795;
-  background: #eef4fb;
+  color: var(--info);
+  border-color: var(--info-border);
+  background: var(--info-bg);
 }
 
 .m2-error-summary {
   display: flex;
   gap: 10px;
+  min-width: 0;
   padding: 12px;
-  border: 2px solid #8c3535;
+  border: 2px solid var(--danger-border);
   border-radius: 10px;
-  background: #fdeeee;
-  color: #7a2020;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .m2-error-summary svg {
@@ -536,6 +618,7 @@
 .m2-error-summary ul {
   margin: 4px 0 0;
   padding-left: 18px;
+  min-width: 0;
 }
 
 .m2-inline-issue {
@@ -543,11 +626,13 @@
   align-items: center;
   gap: 6px;
   margin: 0;
-  color: #6d4611;
+  min-width: 0;
+  color: var(--warn);
   font-size: 13px;
 }
 
 .m2-inline-issue svg {
+  flex: 0 0 auto;
   width: 16px;
 }
 
@@ -567,17 +652,20 @@
 
 .m2-unknown {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
-  color: #6d4611;
+  color: var(--warn);
 }
 
 .m2-recovery {
   min-height: 44px;
+  max-width: 100%;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #fffaf0;
+  color: var(--ink);
+  background: var(--inset);
   font-size: 13px;
 }
 
@@ -598,8 +686,9 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .m2-contributor-kind {
@@ -616,13 +705,15 @@
   align-items: center;
   gap: 10px;
   margin: 8px 0;
+  min-width: 0;
 }
 
 .m2-expression code {
+  min-width: 0;
   padding: 6px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: 7px;
-  background: #fffaf0;
+  background: var(--inset);
   font-size: 15px;
 }
 
@@ -637,8 +728,8 @@
 
 .m2-sheet-head h2 {
   margin: 0;
-  font:
-    600 26px/1.15 var(--display);
+  min-width: 0;
+  font: 600 26px/1.15 var(--display);
 }
 
 .m2-sheet-head-actions {
@@ -655,11 +746,13 @@
 
 .m2-stat {
   min-height: 72px;
+  min-width: 0;
   display: grid;
   gap: 4px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
+  color: inherit;
   background: var(--surface);
   text-align: left;
 }
@@ -673,18 +766,17 @@
 }
 
 .m2-stat-label svg {
+  flex: 0 0 auto;
   width: 16px;
 }
 
 .m2-stat-value {
-  font:
-    600 26px/1 var(--display);
+  font: 600 26px/1 var(--display);
 }
 
 .m2-big-value {
   margin: 0;
-  font:
-    600 30px/1.1 var(--display);
+  font: 600 30px/1.1 var(--display);
 }
 
 .m2-amount-row {
@@ -696,7 +788,7 @@
   display: grid;
   gap: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-soft);
 }
 
 .m2-resource p {
@@ -723,6 +815,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 9px;
+  color: inherit;
   background: var(--surface);
   text-align: left;
 }
@@ -750,9 +843,11 @@
 .m2-builder {
   display: grid;
   gap: 14px;
+  min-width: 0;
   max-width: 900px;
   margin: 0 auto;
-  padding-bottom: 90px;
+  /* Clears the fixed task footer, which is taller than the bottom bar. */
+  padding-bottom: 62px;
 }
 
 /*
@@ -777,7 +872,13 @@
   justify-content: space-between;
   gap: 10px;
   padding: 8px 0;
-  background: var(--bg);
+  /*
+   * An opaque background, because a sticky element paints over the content
+   * scrolling beneath it. This named `var(--bg)`, which no stylesheet ever
+   * defined, so the declaration resolved to transparent and the step body slid
+   * visibly through the heading and the Save & close control.
+   */
+  background: var(--paper);
 }
 
 .m2-builder-actions {
@@ -792,7 +893,8 @@
   padding: 0 14px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface);
+  color: var(--ink);
+  background: var(--inset);
   font-weight: 650;
 }
 
@@ -802,8 +904,8 @@
 
 .m2-builder-head h2 {
   margin: 0;
-  font:
-    600 26px/1.15 var(--display);
+  min-width: 0;
+  font: 600 26px/1.15 var(--display);
 }
 
 .m2-mode-toggle {
@@ -811,7 +913,8 @@
   padding: 0 14px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface);
+  color: var(--ink);
+  background: var(--inset);
   font-weight: 650;
 }
 
@@ -824,20 +927,20 @@
 .m2-step {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .m2-step h3 {
   margin: 0;
-  font:
-    600 21px/1.2 var(--display);
+  font: 600 21px/1.2 var(--display);
 }
 
 .m2-not-needed {
   margin: 0;
   padding: 10px 12px;
-  border: 1px dashed #7d5b2a;
+  border: 1px dashed var(--border);
   border-radius: 9px;
-  background: #fffaf0;
+  background: var(--inset);
   font-weight: 650;
 }
 
@@ -872,6 +975,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 9px;
+  color: inherit;
   background: var(--surface);
   text-align: left;
 }
@@ -895,13 +999,14 @@
   width: 16px;
 }
 
+/* Selected: a filled mark, a green edge and a tinted field. Never colour alone. */
 .m2-option-selected {
-  border-color: var(--sage);
-  background: #5f836817;
+  border-color: var(--good-border);
+  background: var(--good-bg);
 }
 
 .m2-option-selected .m2-option-mark {
-  color: white;
+  color: var(--deep);
   background: var(--sage);
   border-color: var(--sage);
 }
@@ -914,12 +1019,13 @@
   padding: 0 8px;
   border: 0;
   background: transparent;
-  color: #6b4d1c;
+  color: var(--brass);
   font-size: 13px;
   text-decoration: underline;
 }
 
 .m2-why svg {
+  flex: 0 0 auto;
   width: 16px;
 }
 
@@ -947,13 +1053,14 @@
 .m2-field textarea {
   min-height: 44px;
   width: 100%;
+  min-width: 0;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   /* Both colours, always. A background without a foreground is what let the
-     user-agent's dark-mode text colour through. */
+     user-agent's own control palette through. */
   color: var(--ink);
-  background: #fffaf0;
+  background: var(--inset);
 }
 
 .m2-field textarea {
@@ -971,7 +1078,7 @@
 .m2-field textarea[readonly] {
   color: var(--ink);
   -webkit-text-fill-color: var(--ink);
-  background: #ece3cf;
+  background: var(--inset-disabled);
 }
 
 .m2-field input:disabled,
@@ -979,7 +1086,7 @@
 .m2-field textarea:disabled {
   color: var(--muted);
   -webkit-text-fill-color: var(--muted);
-  background: #e7dcc4;
+  background: var(--inset-disabled);
   opacity: 1;
 }
 
@@ -995,6 +1102,7 @@
 
 .m2-ability-final {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   font-weight: 700;
@@ -1013,7 +1121,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--inset);
 }
 
 .m2-remaining-label {
@@ -1055,15 +1163,16 @@
 
 .m2-summary > div {
   display: grid;
-  grid-template-columns: minmax(120px, 34%) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 34%) minmax(0, 1fr);
   gap: 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .m2-summary dt {
   color: var(--muted);
   font-size: 13px;
+  min-width: 0;
 }
 
 .m2-summary dd {
@@ -1072,10 +1181,10 @@
 }
 
 .m2-issue-errors {
-  color: #7a2020;
+  color: var(--danger);
 }
 .m2-issue-warnings {
-  color: #6d4611;
+  color: var(--warn);
 }
 
 .m2-step-list ol {
@@ -1086,6 +1195,14 @@
   list-style: none;
 }
 
+/*
+ * Builder steps are a vertical list at every width.
+ *
+ * They were a horizontal strip of fixed-width chips that ran off the side of a
+ * 360 px screen, so the later steps of a build could only be found by dragging.
+ * A one-per-row list shows all of them, gives each its full name and status,
+ * and keeps the 48 px target.
+ */
 .m2-step-list button {
   width: 100%;
   min-height: 48px;
@@ -1096,6 +1213,7 @@
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 9px;
+  color: inherit;
   background: var(--surface);
   text-align: left;
 }
@@ -1135,7 +1253,8 @@
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e3d7bd;
+  background: var(--inset);
+  border: 1px solid var(--border-soft);
 }
 
 .m2-progress-fill {
@@ -1148,6 +1267,7 @@
 
 .m2-progress-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -1168,6 +1288,7 @@
 }
 
 .m2-progress-steps svg {
+  flex: 0 0 auto;
   width: 17px;
 }
 
@@ -1183,12 +1304,14 @@
   inset: auto 0 0 0;
   z-index: 26;
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: stretch;
   gap: 10px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding-left: calc(12px + env(safe-area-inset-left, 0px));
+  padding-right: calc(12px + env(safe-area-inset-right, 0px));
   border-top: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--navy);
 }
 
 .m2-task-footer > .m2-button {
@@ -1209,11 +1332,12 @@
 .m2-static-field {
   display: grid;
   gap: 4px;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--brass);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--inset);
 }
 
 .m2-static-label {
@@ -1223,8 +1347,7 @@
 
 .m2-static-value {
   color: var(--ink);
-  font:
-    600 20px/1.2 var(--display);
+  font: 600 20px/1.2 var(--display);
 }
 
 .m2-static-field p {
@@ -1239,17 +1362,19 @@
   display: grid;
   place-items: center;
   padding: 12px;
-  background: #050a0ec4;
+  background: var(--scrim);
 }
 
 .m2-dialog {
   width: min(720px, 100%);
+  min-width: 0;
   max-height: calc(100dvh - 24px);
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   border: 1px solid var(--brass);
   border-radius: 12px;
-  background: #fffaf0;
+  color: var(--ink);
+  background: var(--raised);
   overflow: hidden;
 }
 
@@ -1258,6 +1383,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
   padding: 12px 14px;
   color: var(--cream);
   background: var(--navy);
@@ -1265,13 +1391,14 @@
 
 .m2-dialog-head h2 {
   margin: 0;
-  font:
-    600 21px/1.2 var(--display);
+  min-width: 0;
+  font: 600 21px/1.2 var(--display);
 }
 
 .m2-dialog-body {
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  overflow-y: auto;
   display: grid;
   gap: 10px;
   align-content: start;
@@ -1280,8 +1407,7 @@
 
 .m2-dialog-body h4 {
   margin: 6px 0 0;
-  font:
-    600 16px/1.2 var(--display);
+  font: 600 16px/1.2 var(--display);
 }
 
 .m2-dialog-foot {
@@ -1290,39 +1416,64 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--paper);
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
 }
 
 /*
- * Wide tables scroll inside `.m2-scroller`, not the document and not the table
- * itself: a table that is its own scroll container is an unlabelled, unreachable
- * scrollable region.
+ * Comparison tables wrap; they do not scroll.
+ *
+ * These cells were `white-space: nowrap` inside a horizontally scrolling
+ * wrapper, which is a scroll region a touch user has to discover by dragging —
+ * and the wrapper was announced as "scrollable" whether or not it was. Letting
+ * the text wrap removes the cause, so the table fits four columns at 320 px and
+ * the wrapper is gone.
  */
 .m2-diff {
+  width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 14px;
 }
 
 .m2-diff th,
 .m2-diff td {
-  padding: 6px 10px;
-  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
   text-align: left;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.m2-diff thead th {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 419px) {
+  .m2-diff {
+    font-size: 13px;
+  }
+
+  .m2-diff th,
+  .m2-diff td {
+    padding: 6px 4px;
+  }
 }
 
 .m2-policy {
   margin: 0;
   padding: 8px 10px;
   border-left: 3px solid var(--brass);
-  background: #fffaf0;
+  background: var(--inset);
   font-size: 13px;
 }
 
 .m2-preview {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 @media (min-width: 600px) {
@@ -1348,14 +1499,21 @@
   .m2-appbar {
     grid-column: 1 / -1;
   }
+  .m2-appbar-brand strong {
+    font-size: 19px;
+  }
+  .m2-appbar-brand img {
+    width: 32px;
+    height: 32px;
+  }
   .m2-rail {
     position: sticky;
-    top: 56px;
+    top: var(--appbar-height);
     inset: auto;
     align-self: start;
-    height: calc(100dvh - 56px);
+    height: calc(100dvh - var(--appbar-height));
     border-top: 0;
-    border-right: 1px solid var(--border);
+    border-right: 1px solid var(--border-soft);
   }
   .m2-rail ul {
     flex-direction: column;
@@ -1416,7 +1574,8 @@
   }
   .m2-option-selected,
   .m2-nav-button.m2-active,
-  .m2-step-list button[aria-current="step"] {
+  .m2-step-list button[aria-current="step"],
+  .sheet-tab-active {
     outline: 2px solid Highlight;
   }
   .m2-monogram,
@@ -1429,21 +1588,15 @@
 .m2-override {
   display: grid;
   gap: 8px;
+  min-width: 0;
   margin-top: 8px;
   padding-top: 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-soft);
 }
 
 .m2-override h4 {
   margin: 0;
-  font:
-    600 16px/1.2 var(--display);
-}
-
-/* Labelled, keyboard-reachable container for content wider than the viewport. */
-.m2-scroller {
-  max-width: 100%;
-  overflow-x: auto;
+  font: 600 16px/1.2 var(--display);
 }
 
 /*
@@ -1451,10 +1604,8 @@
  *
  * A destructive change is stated in full before it happens, so this is a real
  * modal rather than an inline note: it owns the surface until it is answered.
- * Colours are explicit rather than inherited, because the app is light-only and
- * a dark browser preference would otherwise let the user agent paint the panel's
- * text. The panel scrolls internally so a long list of cleared values never
- * pushes the document sideways at 360 px.
+ * The panel scrolls vertically so a long list of cleared values never pushes
+ * the document sideways at 320 px.
  */
 .m2-confirm-backdrop {
   position: fixed;
@@ -1463,11 +1614,12 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  background: #050a0ec4;
+  background: var(--scrim);
 }
 
 .m2-confirm-panel {
   width: min(560px, 100%);
+  min-width: 0;
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1476,7 +1628,7 @@
   padding: 20px;
   border: 1px solid var(--brass);
   border-radius: 12px;
-  background: #fffaf0;
+  background: var(--raised);
   color: var(--ink);
 }
 
@@ -1496,10 +1648,7 @@
 .m2-confirm-panel ul {
   margin: 4px 0 0;
   padding-left: 18px;
-}
-
-.m2-confirm-panel .m2-muted {
-  color: #4f5860;
+  min-width: 0;
 }
 
 .m2-confirm-actions {
@@ -1517,6 +1666,7 @@
 /* The level conflict wraps a repair action, so it stacks rather than centres. */
 .m2-inline-issue[role="alert"] {
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1527,7 +1677,7 @@
 
 /* Whether a ruleset reaches private content. Never a colour on its own. */
 .m2-ruleset-privacy {
-  color: #4f5860;
+  color: var(--muted);
 }
 
 /* The ruleset-change confirmation renders inside the shared dialog surface, so
@@ -1535,4 +1685,49 @@
 .m2-confirm-body {
   display: grid;
   gap: 12px;
+  min-width: 0;
+}
+
+/*
+ * The portrait guard.
+ *
+ * It covers the complete app, including the fixed bottom bar and any open
+ * dialog, so its z-index sits above the 60 those use. It is opaque and it is
+ * ordinary Runefolio: the same canvas, the same parchment text, the same brass.
+ * A phone held sideways should look like the app has paused, not like it has
+ * crashed into a system error screen.
+ *
+ * The app underneath is not hidden or unmounted — it is marked `inert`, which
+ * is what stops focus and pointer events reaching it. Everything the user had
+ * typed or opened is still there.
+ */
+.portrait-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px calc(24px + env(safe-area-inset-right, 0px)) 24px calc(24px + env(safe-area-inset-left, 0px));
+  background: var(--paper);
+  color: var(--ink);
+  text-align: center;
+}
+
+.portrait-guard-icon {
+  width: 56px;
+  height: 56px;
+  color: var(--brass);
+}
+
+.portrait-guard h2 {
+  margin: 0;
+  font: 600 26px/1.2 var(--display);
+}
+
+.portrait-guard p {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--muted);
 }

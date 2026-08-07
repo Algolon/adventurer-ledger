@@ -19,9 +19,15 @@ a second installed PWA or a second local data store.
 - The build scans exported HTML, JSON, PNG, ICO, and webmanifest files and injects
   them into a content-hashed service-worker precache. The Pages base path is
   derived from `NEXT_PUBLIC_BASE_PATH`; no asset may assume the domain root.
-- There was no custom splash/loading view. The application uses a fixed branded
-  light content surface with dark navy navigation; it has no independent theme
-  toggle. The logo therefore has explicit light-surface and dark-surface variants.
+- There was no custom splash/loading view. The application used a fixed branded
+  light content surface with dark navy navigation, so the logo was drawn with
+  explicit light-surface and dark-surface variants.
+
+  **This is no longer current.** Runefolio has one theme and it is dark; see
+  [`MOBILE_VISUAL_CONTRACT.md`](./MOBILE_VISUAL_CONTRACT.md). There is still no
+  theme toggle, and there is no longer anything for one to toggle. The inverse
+  (light-on-dark) variant is the one the app renders; the default and monochrome
+  variants remain for export, print and forced-colours use.
 
 ## Canonical geometry
 
@@ -39,11 +45,16 @@ safe-zone diameter. Android or the launcher supplies the final outer shape.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--brand-midnight-ink` | `#0F1D29` | Rune, app icon background, theme color |
-| `--brand-warm-parchment` | `#F6EBD6` | Light rune and manifest background |
-| `--brand-burnished-gold` | `#C79A45` | Ring and rune diamonds |
-| `--brand-dark-background` | `#09141E` | Supporting deep navigation background |
-| `--brand-light-background` | `#FBF5E8` | Supporting high-light surface |
+| `--brand-midnight-ink` | `#0F1D29` | Rune, app icon background, app bar, manifest `theme_color` |
+| `--brand-warm-parchment` | `#F6EBD6` | Light rune, and the app's primary text colour |
+| `--brand-burnished-gold` | `#C79A45` | Ring and rune diamonds, and the app's accent and borders |
+
+These three are the identity and are declared in
+[`app/theme.css`](../app/theme.css), which derives every application surface,
+text and line token from them. The former `--brand-dark-background` and
+`--brand-light-background` are gone: they described the two backgrounds of a
+two-theme app. The single dark canvas is `--paper` (`#08121B`), and the shade
+behind it, which an overscroll bounce exposes, is `--deep` (`#060D14`).
 
 The monochrome SVG uses `currentColor`. Standalone SVG files include a title;
 React instances adjacent to visible Runefolio text use empty alt text and

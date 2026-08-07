@@ -1,4 +1,336 @@
-.editor{display:grid;gap:14px;padding:22px}.editor h3,.registry h3,.entrycard h3{margin:0;font:600 24px var(--display)}.editor label{display:grid;gap:6px;color:#5e4c34;font-size:12px;font-weight:750}.editor input,.editor textarea,.compendiumsearch input{width:100%;padding:11px;border:1px solid var(--border);border-radius:7px;color:var(--ink);background:#fffaf0}.editor textarea{resize:vertical;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}.editor .btn{width:max-content;min-height:42px}.formrow{display:grid;grid-template-columns:1fr 1fr;gap:12px}.check{display:flex!important;grid-template-columns:auto 1fr;align-items:center;justify-content:flex-start}.check input{width:18px}.confirmation{padding:12px;border:1px solid var(--amber);border-radius:7px;background:#fff4d6}.formmessage{margin:0;padding:10px;border-left:4px solid var(--sage);background:#5f836812}.registry{padding:20px}.registryrow{min-height:66px;display:grid;grid-template-columns:1fr auto 44px;align-items:center;gap:10px;border-top:1px solid var(--border)}.registryrow span{display:grid}.registryrow small{color:var(--muted)}.danger{color:#8d332e;border-color:#8d332e}.preview{padding:16px;border:1px solid var(--brass);border-radius:8px;background:#fffaf0}.preview h4{margin:0;font:600 21px var(--display)}.preview .issue{padding:8px;border-left:3px solid #a54a42;background:#a54a420d}.compendiumsearch{display:grid;gap:8px;padding:16px;font-weight:700}.compendiumgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.entrycard{padding:20px;overflow:hidden}.entrycard>.badge{margin-right:6px}.entrycard h3{margin-top:13px}.entrycard small{color:var(--muted)}.entrycard details{margin-top:13px;padding-top:10px;border-top:1px solid var(--border)}.entrycard summary{cursor:pointer;font-weight:700}.entrycard pre{max-height:230px;overflow:auto;padding:10px;background:#eee3cc;font-size:11px}
-@media(max-width:720px){.formrow,.compendiumgrid{grid-template-columns:1fr}}
-.update-ready{position:fixed;right:20px;bottom:64px;z-index:60;max-width:440px;display:flex;align-items:center;gap:14px;padding:14px;border:1px solid var(--brass);border-radius:9px;color:var(--cream);background:var(--navy);box-shadow:0 8px 30px #0005}.update-ready span{display:grid}.update-ready small{color:#d5d0c6}.update-ready .btn{min-height:42px;white-space:nowrap}.storage-card{display:grid;gap:18px;padding:22px}.storage-card h3{display:flex;align-items:center;gap:10px;margin:0;font:600 24px var(--display)}.storage-card dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}.storage-card dl div{padding:14px;border:1px solid var(--border);border-radius:8px;background:#fffaf0}.storage-card dt{color:var(--muted);font-size:12px}.storage-card dd{margin:5px 0 0;font-weight:750}.storage-card .btn{width:max-content;min-height:42px}.storage-warning{padding:12px;border-left:4px solid var(--amber);background:#fff4d6}
-@media(max-width:720px){.update-ready{left:14px;right:14px;bottom:64px;align-items:stretch;flex-direction:column}.storage-card dl{grid-template-columns:1fr}}
+/*
+ * Content surfaces: Compendium, Sources, content packs, import and export,
+ * storage, and the update banner.
+ *
+ * These were the surfaces with no dark branch at all, so a phone set to dark
+ * showed a navy shell wrapped around parchment panels. They now read every
+ * colour from `theme.css` like everything else.
+ *
+ * They are also where long machine strings surface — pack identifiers, source
+ * IDs, validation codes, raw JSON — so the layout rules here are about making
+ * those wrap or stack rather than set the document's width.
+ */
+
+.editor {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  min-width: 0;
+}
+
+.editor h3,
+.registry h3,
+.entrycard h3 {
+  margin: 0;
+  font: 600 24px var(--display);
+}
+
+.editor label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.editor input,
+.editor textarea,
+.compendiumsearch input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--inset);
+}
+
+.editor textarea {
+  resize: vertical;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.editor .btn {
+  width: max-content;
+  max-width: 100%;
+  min-height: 44px;
+}
+
+/*
+ * Two columns only where two columns fit. Below 720 px the pair stacks, which
+ * is what keeps a long value in either field from widening the row.
+ */
+.formrow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.check {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.check input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+
+.confirmation {
+  padding: 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 7px;
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.formmessage {
+  margin: 0;
+  padding: 10px;
+  border-left: 4px solid var(--good-border);
+  color: var(--ink);
+  background: var(--good-bg);
+}
+
+.registry {
+  padding: 20px;
+  min-width: 0;
+}
+
+/*
+ * A registry row names a pack or source by its identifier, which is long,
+ * unbroken and machine-generated. It stacks on phones: the identifier gets the
+ * full width to wrap into, and the controls sit under it rather than competing
+ * with it for a fixed track.
+ */
+.registryrow {
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.registryrow span {
+  display: grid;
+  min-width: 0;
+}
+
+.registryrow small {
+  color: var(--muted);
+}
+
+.danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.preview {
+  padding: 16px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--inset);
+}
+
+.preview h4 {
+  margin: 0;
+  font: 600 21px var(--display);
+}
+
+/*
+ * One validation issue. The message is prose and the code is an identifier, so
+ * both wrap; neither may set a width. This is the list the contract calls out
+ * as never scrolling sideways.
+ */
+.issue {
+  min-width: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--danger-border);
+  color: var(--ink);
+  background: var(--danger-bg);
+}
+
+.compendiumsearch {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  font-weight: 700;
+}
+
+.compendiumgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.entrycard {
+  padding: 20px;
+  min-width: 0;
+}
+
+.entrycard > .badge {
+  margin-right: 6px;
+}
+
+.entrycard h3 {
+  margin-top: 13px;
+}
+
+.entrycard small {
+  color: var(--muted);
+}
+
+.entrycard details {
+  margin-top: 13px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.entrycard summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+/*
+ * Raw entry data wraps instead of scrolling. A `pre` that is its own horizontal
+ * scroll container is an unlabelled scrollable region on a touch screen, and at
+ * 320 px it was also wide enough to drag the card with it.
+ */
+.entrycard pre {
+  max-height: 230px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 10px;
+  color: var(--ink);
+  background: var(--inset);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The update banner sits over the app, so it uses the chrome colours. */
+.update-ready {
+  position: fixed;
+  right: 20px;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  max-width: 440px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--brass);
+  border-radius: 9px;
+  color: var(--cream);
+  background: var(--navy);
+  box-shadow: var(--shadow-floating);
+}
+
+.update-ready span {
+  display: grid;
+  min-width: 0;
+}
+
+.update-ready small {
+  color: var(--muted);
+}
+
+.update-ready .btn {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.storage-card {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.storage-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font: 600 24px var(--display);
+}
+
+.storage-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.storage-card dl div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--inset);
+}
+
+.storage-card dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.storage-card dd {
+  margin: 5px 0 0;
+  font-weight: 750;
+}
+
+.storage-card .btn {
+  width: max-content;
+  max-width: 100%;
+  min-height: 44px;
+}
+
+.storage-warning {
+  padding: 12px;
+  border-left: 4px solid var(--warn-border);
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+@media (max-width: 720px) {
+  .formrow,
+  .compendiumgrid,
+  .storage-card dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /*
+   * Identifier first and full width, then its controls. A three-track row at
+   * 360 px gave the identifier about 180 px, which an unbroken pack ID
+   * overflowed straight out of the document.
+   */
+  .registryrow {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .registryrow .btn,
+  .registryrow .icon {
+    width: 100%;
+  }
+
+  .update-ready {
+    left: 14px;
+    right: 14px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

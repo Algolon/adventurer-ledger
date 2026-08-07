@@ -103,9 +103,14 @@ test("presents the Runefolio identity and scoped icon metadata", async ({ page }
   await page.goto(APP_ROOT);
   await expect(page).toHaveTitle("Runefolio");
   await expect(page.locator(".m2-appbar-brand img")).toBeVisible();
+  /*
+   * Bumped to `runefolio-2` with the portrait-primary, dark-shell manifest.
+   * The version is pinned rather than imported so that changing the installed
+   * app's identity is a deliberate, reviewed edit here as well as there.
+   */
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
     "href",
-    `${BASE_PATH}/manifest.webmanifest?v=runefolio-1`,
+    `${BASE_PATH}/manifest.webmanifest?v=runefolio-2`,
   );
   const iconLinks = await page
     .locator('link[rel~="icon"], link[rel="apple-touch-icon"]')

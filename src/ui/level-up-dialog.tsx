@@ -137,7 +137,13 @@ export function LevelUpDialog({
       </p>
 
       <h4>Automatic gains</h4>
-      <div className="m2-scroller" tabIndex={0} role="group" aria-label="Automatic gains comparison, scrollable">
+      {/*
+       * The table wraps; it does not scroll. It used to sit in a focusable
+       * `.m2-scroller` announced as "scrollable" — a horizontal scroll region a
+       * touch user could only find by dragging, and a promise the container
+       * broke on every width where it happened to fit. The cells no longer
+       * refuse to wrap, so at 320 px the table simply gets taller.
+       */}
       <table className="m2-diff">
         <caption className="m2-visually-hidden">Before and after comparison for level {preview.toLevel}</caption>
         <thead>
@@ -157,11 +163,9 @@ export function LevelUpDialog({
           ))}
         </tbody>
       </table>
-      </div>
 
       <h4>Current and maximum values</h4>
       <p className="m2-policy">Policy: {preview.policyLabel}. Your current value moves by the same amount as the maximum.</p>
-      <div className="m2-scroller" tabIndex={0} role="group" aria-label="Current and maximum comparison, scrollable">
       <table className="m2-diff">
         <thead>
           <tr>
@@ -186,7 +190,6 @@ export function LevelUpDialog({
           ))}
         </tbody>
       </table>
-      </div>
 
       {/*
        * What the level actually adds, named. A level whose only visible change

@@ -19,8 +19,19 @@
  * Overview, Actions, Spells (only for casters), Inventory and Character.
  * Sections without trustworthy data are hidden rather than filled in.
  */
-import { useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Heart, Minus, Pencil, Plus, Sparkles, Undo2 } from "lucide-react";
+import { useCallback, useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import {
+  Backpack,
+  Heart,
+  Minus,
+  Pencil,
+  Plus,
+  ScrollText,
+  Sparkles,
+  Swords,
+  Undo2,
+  UserRound,
+} from "lucide-react";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import { Breakdown, Dialog, DerivedNumber, formatDerived, signed } from "@/src/ui/primitives";
 import type {
@@ -125,15 +136,25 @@ export function PlaySheet({
     [characterId, levelUp, refresh, sheet],
   );
 
-  const tabs = useMemo<readonly { id: SheetTab; label: string }[]>(() => {
+  /*
+   * The sections, and how many of them there are.
+   *
+   * The count matters to the layout, not just to this list: the tab strip is a
+   * fixed grid of exactly this many equal columns, so it is handed down as
+   * `--sheet-tab-count`. A martial sheet gets four, a caster five, and in both
+   * cases every tab is fully visible with nothing to swipe for.
+   */
+  const tabs = useMemo<readonly { id: SheetTab; label: string; icon: ReactNode }[]>(() => {
     if (!sheet) return [];
     return [
-      { id: "overview" as const, label: "Overview" },
-      { id: "actions" as const, label: "Actions" },
+      { id: "overview" as const, label: "Overview", icon: <ScrollText aria-hidden="true" /> },
+      { id: "actions" as const, label: "Actions", icon: <Swords aria-hidden="true" /> },
       // Spells appears only when the content actually declares spellcasting.
-      ...(sheet.spellcasting ? [{ id: "spells" as const, label: "Spells" }] : []),
-      { id: "inventory" as const, label: "Inventory" },
-      { id: "character" as const, label: "Character" },
+      ...(sheet.spellcasting
+        ? [{ id: "spells" as const, label: "Spells", icon: <Sparkles aria-hidden="true" /> }]
+        : []),
+      { id: "inventory" as const, label: "Inventory", icon: <Backpack aria-hidden="true" /> },
+      { id: "character" as const, label: "Character", icon: <UserRound aria-hidden="true" /> },
     ];
   }, [sheet]);
 
@@ -333,7 +354,13 @@ export function PlaySheet({
         </section>
       ) : null}
 
-      <div className="sheet-tabs" role="tablist" aria-label="Character sheet sections" onKeyDown={onTabKeyDown}>
+      <div
+        className="sheet-tabs"
+        role="tablist"
+        aria-label="Character sheet sections"
+        onKeyDown={onTabKeyDown}
+        style={{ "--sheet-tab-count": tabs.length } as CSSProperties}
+      >
         {tabs.map(item => (
           <button
             key={item.id}
@@ -346,7 +373,8 @@ export function PlaySheet({
             className={activeTab === item.id ? "sheet-tab sheet-tab-active" : "sheet-tab"}
             onClick={() => setTab(item.id)}
           >
-            {item.label}
+            {item.icon}
+            <span>{item.label}</span>
           </button>
         ))}
       </div>

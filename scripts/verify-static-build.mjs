@@ -34,8 +34,21 @@ assert(manifest.start_url === appRoot, "Manifest start_url is outside the app sc
 assert(manifest.scope === appRoot, "Manifest scope is outside the app scope");
 assert(manifest.name === "Runefolio", "Manifest product name mismatch");
 assert(manifest.short_name === "Runefolio", "Manifest short name mismatch");
+// The installed app's declared shape and its splash colours. Neither is
+// observable in a rendered page: `orientation` governs how the platform
+// launches the installed app, and `background_color` paints the splash screen
+// before the app's first frame, which is where a light value shows as a flash.
+assert(manifest.orientation === "portrait-primary", "Manifest is not portrait-primary");
+assert(manifest.background_color === "#08121B", "Manifest splash background is not the dark shell colour");
+assert(manifest.theme_color === "#0F1D29", "Manifest theme colour mismatch");
+// The first paint, before any stylesheet resolves.
+assert(html.includes('style="color-scheme:dark'), "Generated HTML does not declare a dark colour scheme inline");
 assert(
-  html.includes(`rel="manifest" href="${appRoot}manifest.webmanifest?v=runefolio-1"`),
+  html.includes('name="color-scheme" content="dark"'),
+  "Generated HTML does not tell the user agent to use its dark palette",
+);
+assert(
+  html.includes(`rel="manifest" href="${appRoot}manifest.webmanifest?v=runefolio-2"`),
   "Generated HTML does not use the versioned Runefolio manifest reference",
 );
 assert(

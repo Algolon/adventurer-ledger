@@ -132,11 +132,24 @@ const labels: Record<OfflineState, string> = {
   update: "Update ready",
   unavailable: "Offline cache unavailable",
 };
+/**
+ * Offline readiness, sized for the space it is actually in.
+ *
+ * In the app bar of a 360 px phone the full sentence wrapped onto a second
+ * line, which pushed the bar past its own height and squeezed the wordmark down
+ * to "Runef…". The dot is always shown and always labelled; the sentence is
+ * revealed only where there is room for it, so the accessible name is identical
+ * at every width and only the visible text changes.
+ */
 export function PwaIndicator() {
   const { state } = useContext(PwaContext);
   return (
     <span className={`offline ${state}`} role="status">
-      ● {labels[state]}
+      <span aria-hidden="true" className="offline-dot">
+        ●
+      </span>
+      <span className="offline-label">{labels[state]}</span>
+      <span className="m2-visually-hidden">{labels[state]}</span>
     </span>
   );
 }

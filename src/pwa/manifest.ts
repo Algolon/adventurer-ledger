@@ -10,8 +10,23 @@ export function createManifest(): MetadataRoute.Manifest {
     start_url: APP_ROOT,
     scope: APP_ROOT,
     display: "standalone",
-    orientation: "any",
-    background_color: "#F6EBD6",
+    /*
+     * Portrait is the shape of the product on a phone.
+     *
+     * `"any"` let Android rotate the installed app into a landscape layout that
+     * was never designed: the sheet's vitals row, the bottom bar and the app bar
+     * together left about a hundred pixels of content between them. The manifest
+     * states the intent for the installed app; `src/pwa/orientation.ts` asks the
+     * Screen Orientation API to honour it at runtime, and the portrait guard
+     * covers the case where neither is available.
+     */
+    orientation: "portrait-primary",
+    /*
+     * The splash screen and the shell behind it. This was warm parchment, so an
+     * install launched light and then repainted dark on first frame — the flash
+     * this pass exists to remove. Both values now match the shipped shell.
+     */
+    background_color: "#08121B",
     theme_color: "#0F1D29",
     categories: ["productivity", "games"],
     icons: [
