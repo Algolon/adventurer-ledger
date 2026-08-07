@@ -718,10 +718,18 @@ function ImportExportPanel() {
       setMessage("Import was not applied. No content and no ruleset profile were kept.");
       return;
     }
+    /*
+     * An update creates no profile and must not therefore report that nothing
+     * happened to the rulesets. The existing profile advanced to the pack's new
+     * membership in the same transaction, and that is the fact the user needs:
+     * the content they just added is reachable from the ruleset they already use.
+     */
     setMessage(
       outcome.result.createdRulesetIds.length
         ? `Import completed atomically. ${outcome.result.createdRulesetIds.length} ruleset profile(s) created and ready to select.`
-        : "Import completed atomically. No ruleset profile was created, so this content is only reachable through an existing ruleset.",
+        : outcome.result.updatedRulesetIds.length
+          ? `Import completed atomically. ${outcome.result.updatedRulesetIds.length} existing ruleset(s) updated to include this pack's current entries.`
+          : "Import completed atomically. No ruleset profile was created, so this content is only reachable through an existing ruleset.",
     );
     clearImport();
     refresh();
@@ -857,7 +865,11 @@ function ImportExportPanel() {
                 {offer.alreadyInstalled
                   ? offer.installedMatch === "legacy"
                     ? `maps to the existing ruleset ${offer.installedRulesetId}, which an earlier naming scheme also produced for a differently-named pack. Nothing is overwritten; this pack cannot be installed until that is resolved.`
-                    : `already has the ruleset ${offer.installedRulesetId ?? offer.rulesetId}.`
+                    : currentPreview.verdict === "update"
+                      ? // No second ruleset: the one it already has advances to
+                        // the membership this version ships.
+                        `already has the ruleset ${offer.installedRulesetId ?? offer.rulesetId}, which will be updated to activate all ${offer.entryCount} entries.`
+                      : `already has the ruleset ${offer.installedRulesetId ?? offer.rulesetId}.`
                   : offer.usable
                     ? `can become the ruleset ${offer.rulesetId}, covering levels 1 to ${offer.maxSupportedLevel}.`
                     : `cannot stand as a ruleset on its own: it supplies no ${offer.missingCategories.join(", ")}.`}

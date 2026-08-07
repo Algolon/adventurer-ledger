@@ -109,19 +109,35 @@ export function SettingsView({ onOpenCharacter }: { onOpenCharacter(id: string):
  * create its profile belongs here as well as at the import boundary. Activation
  * is explicit: the active ruleset is the one a new build starts in, and nothing
  * picks it from the order of this list.
+ *
+ * Inspecting the list also repairs it. A device that updated a pack before the
+ * install transaction carried the profile with it holds a ruleset still scoped
+ * to the older, smaller membership, and the only visible symptom is a count that
+ * disagrees with the pack. The repair replaces a pack-derived membership with
+ * that same pack's current one and changes nothing else, so it is done on the
+ * way in and then said plainly rather than left as a button the user has to know
+ * to press.
  */
 function RulesetsPage() {
   const { install, refresh } = useServices();
-  const installedState = useAsync(() => install.installedRulesets(), []);
+  const installedState = useAsync(() => install.inspectInstalledRulesets(), []);
   const pendingState = useAsync(() => install.pendingOffers(), []);
   const activeState = useAsync(() => install.activeRulesetId(), []);
-  const rulesets = installedState.status === "ready" ? installedState.value : [];
+  const rulesets = installedState.status === "ready" ? installedState.value.views : [];
+  const repaired = installedState.status === "ready" ? installedState.value.repaired : [];
   const pending = pendingState.status === "ready" ? pendingState.value : [];
   const active = activeState.status === "ready" ? activeState.value : undefined;
 
   return (
     <div className="m2-step">
       <h2 className="m2-page-title">Rulesets</h2>
+      {repaired.length ? (
+        <p className="m2-muted" role="status">
+          {repaired.length === 1
+            ? `1 ruleset was updated to match its installed content pack, and now activates ${repaired[0].entryCount} entries.`
+            : `${repaired.length} rulesets were updated to match their installed content packs.`}
+        </p>
+      ) : null}
       {rulesets.length ? (
         rulesets.map(ruleset => (
           <div className="m2-card" key={ruleset.id}>

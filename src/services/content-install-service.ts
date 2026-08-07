@@ -18,7 +18,7 @@
  * It is also the boundary the import UI talks to, so no React component opens a
  * Dexie table to install content.
  */
-import type { ContentEntry, ContentPack, ID } from "@/src/domain/model";
+import type { ContentEntry, ContentPack, ID, RulesetProfile } from "@/src/domain/model";
 import {
   confirmImportSet,
   previewContentPackSet,
@@ -29,13 +29,16 @@ import {
   describeInstalledRulesets,
   proposeRulesetForPack,
   legacyRulesetIdsForPack,
+  reconcileRulesetMembership,
   rulesetIdCandidatesForPack,
   rulesetIdForPack,
   rulesetProfileFrom,
+  rulesetProfileOwnership,
   type InstalledRulesetView,
   type ResolvedDependency,
   type RulesetProposal,
 } from "@/src/services/ruleset-planner";
+import type { LedgerDB } from "@/src/storage/db";
 import type { ServiceContext } from "@/src/services/character-services";
 import {
   invalid,
@@ -120,7 +123,26 @@ export interface InstallResult {
   packIds: readonly ID[];
   entryCount: number;
   createdRulesetIds: readonly ID[];
+  /**
+   * Existing profiles whose pack-owned membership advanced with this import.
+   *
+   * An update to an installed pack keeps the profile it already has; what has to
+   * move is what that profile activates. Reporting it separately from
+   * `createdRulesetIds` is what lets the import boundary say the ruleset was
+   * updated rather than either claiming a new one or saying nothing at all.
+   */
+  updatedRulesetIds: readonly ID[];
   activeRulesetId?: ID;
+}
+
+/** One profile whose membership a reconciliation brought back into line. */
+export interface RulesetMembershipRepair {
+  rulesetId: ID;
+  packId: ID;
+  previousEntryCount: number;
+  entryCount: number;
+  addedEntryCount: number;
+  removedEntryCount: number;
 }
 
 /**
@@ -147,16 +169,31 @@ export class ContentInstallService {
 
   /** Validates the files and reports the ruleset each pack would produce. */
   async preview(jsonFiles: readonly string[]): Promise<InstallPreview> {
+    const { content } = this.context.repositories;
     const set = await previewContentPackSet(jsonFiles, this.context.database);
-    const installed = new Set((await this.context.repositories.content.listRulesets()).map(profile => profile.id));
+    const [profiles, packs, entries] = await Promise.all([
+      content.listRulesets(),
+      content.listPacks(),
+      content.listEntries(),
+    ]);
+    const installed = new Set(profiles.map(profile => profile.id));
     // A dependency is satisfiable from another pack in the same set, so the set
     // is indexed once and consulted explicitly rather than inferred from sources.
     const inSet = new Map(set.documents.map(document => [document.pack.id, document.entries]));
+    /*
+     * A declared dependency may also already be installed. Reading it from the
+     * device as well as from the set is what keeps this preview describing the
+     * profile the confirmation will actually write, which derives membership
+     * from installed state inside its own transaction.
+     */
+    const byId = new Map(entries.map(entry => [entry.id, entry]));
+    const installedPackEntries = new Map(packs.map(pack => [pack.id, entriesOfPack(pack, byId, entries)]));
     const offers = set.documents.map<RulesetOffer>(document => {
-      const dependencies: ResolvedDependency[] = (document.pack.dependencies ?? []).flatMap(packId => {
-        const entries = inSet.get(packId);
-        return entries ? [{ packId, entries }] : [];
-      });
+      const dependencies = resolveDeclaredDependencies(
+        document.pack.dependencies ?? [],
+        inSet,
+        installedPackEntries,
+      );
       const proposal = proposeRulesetForPack(
         {
           id: document.pack.id,
@@ -174,7 +211,7 @@ export class ContentInstallService {
      * used. Read from the installed profiles rather than from the incoming
      * document, so a refusal reports what the device actually holds.
      */
-    const installedViews = await this.installedRulesets();
+    const installedViews = describeInstalledRulesets(profiles, entries);
     const offeredRulesetIds = new Set(
       offers.flatMap(offer => (offer.installedRulesetId ? [offer.installedRulesetId] : [])),
     );
@@ -198,6 +235,12 @@ export class ContentInstallService {
    * An unknown pack ID, or one whose profile already exists, is refused before
    * the transaction opens rather than silently skipped: quietly not creating the
    * profile the caller asked for is how content becomes unreachable again.
+   *
+   * Every written pack that *already* has a profile has that profile's
+   * membership advanced in the same transaction, whether or not the caller asked
+   * for anything. That is not an extra creation: it is the same logical profile,
+   * under the same ID, activating the pack as it now stands. Leaving it behind is
+   * what made an update install content that no ruleset could reach.
    */
   async confirm(
     preview: InstallPreview,
@@ -232,22 +275,41 @@ export class ContentInstallService {
     if (rejections.length) return invalid(rejections);
 
     const createdRulesetIds: ID[] = [];
+    const updatedRulesetIds: ID[] = [];
     try {
       await confirmImportSet(preview.set, this.context.database, command.signal, async (documents, database, now) => {
+        /*
+         * Read after the content is written, so membership is derived from what
+         * the device now actually holds rather than from what the preview
+         * expected it to hold. Inside the transaction, so a rollback takes the
+         * membership change with the content it describes.
+         */
+        const state = await readInstalledPackState(database);
         for (const document of documents) {
-          if (!requested.includes(document.pack.id)) continue;
-          const offer = offersById.get(document.pack.id);
-          if (!offer) continue;
+          const pack = state.packsById.get(document.pack.id);
+          if (!pack) continue;
+          const proposal = proposalForInstalledPack(pack, state);
+          const existing = await ownedProfile(pack.id, state, database);
+          if (existing) {
+            // The same logical profile, advanced to the pack as it now stands.
+            const update = reconcileRulesetMembership(existing, proposal, now);
+            if (update?.changed) {
+              await database.rulesetProfiles.put(update.profile);
+              updatedRulesetIds.push(existing.id);
+            }
+            continue;
+          }
+          if (!requested.includes(pack.id)) continue;
           // Refuse rather than overwrite: a profile that already exists may be
           // the one an existing character is resolved against. Every ID this
           // pack could be installed under is checked, so a profile created by an
           // earlier derivation is not duplicated under the current one.
           let taken = false;
-          for (const candidate of rulesetIdCandidatesForPack(offer.packId))
+          for (const candidate of rulesetIdCandidatesForPack(pack.id))
             if (await database.rulesetProfiles.get(candidate)) taken = true;
           if (taken) continue;
-          await database.rulesetProfiles.put(rulesetProfileFrom(offer, now));
-          createdRulesetIds.push(offer.rulesetId);
+          await database.rulesetProfiles.put(rulesetProfileFrom(proposal, now));
+          createdRulesetIds.push(proposal.rulesetId);
         }
       });
     } catch {
@@ -268,12 +330,14 @@ export class ContentInstallService {
         packs: preview.set.documents.length,
         entries: preview.set.documents.reduce((total, document) => total + document.entries.length, 0),
         created: createdRulesetIds.length,
+        updated: updatedRulesetIds.length,
       },
     });
     return ok({
       packIds: preview.set.documents.map(document => document.pack.id),
       entryCount: preview.set.documents.reduce((total, document) => total + document.entries.length, 0),
       createdRulesetIds,
+      updatedRulesetIds,
       ...(activeRulesetId ? { activeRulesetId } : {}),
     });
   }
@@ -304,22 +368,16 @@ export class ContentInstallService {
 
   /** Creates the profile for a pack that is already installed. */
   async createRulesetForPack(packId: ID): Promise<ServiceOutcome<{ rulesetId: ID }>> {
-    const { database, repositories } = this.context;
+    const { database } = this.context;
     const now = this.clock();
     return database.transaction(
       "rw",
       [database.contentPacks, database.contentEntries, database.rulesetProfiles],
       async (): Promise<ServiceOutcome<{ rulesetId: ID }>> => {
-        const pack = await database.contentPacks.get(packId);
+        const state = await readInstalledPackState(database);
+        const pack = state.packsById.get(packId);
         if (!pack) return notFound(packId);
-        const entries = await repositories.content.listEntries();
-        const byId = new Map(entries.map(entry => [entry.id, entry]));
-        const dependencies: ResolvedDependency[] = [];
-        for (const dependencyId of pack.dependencies ?? []) {
-          const dependency = await database.contentPacks.get(dependencyId);
-          if (dependency) dependencies.push({ packId: dependencyId, entries: entriesOfPack(dependency, byId, entries) });
-        }
-        const proposal = proposeRulesetForPack(pack, entriesOfPack(pack, byId, entries), dependencies);
+        const proposal = proposalForInstalledPack(pack, state);
         if (!proposal.usable)
           return invalid(
             proposal.missingCategories.map(category => ({
@@ -341,6 +399,75 @@ export class ContentInstallService {
     const { content } = this.context.repositories;
     const [profiles, entries] = await Promise.all([content.listRulesets(), content.listEntries()]);
     return describeInstalledRulesets(profiles, entries);
+  }
+
+  /**
+   * Brings every installed pack's own profile back in line with that pack.
+   *
+   * This repairs a device that updated a pack before the install transaction
+   * carried the profile with it: the pack is at its new version, the entries are
+   * installed, and the profile is still scoped to the membership it was created
+   * with. Nothing is deleted, nothing is reinstalled and no pack is downgraded.
+   *
+   * It is deliberately narrow. Only a profile that an installed pack
+   * unambiguously owns and that already declares an explicit membership is
+   * touched, and the replacement is derived from that pack's own entries plus
+   * its resolved declared dependencies — never from a shared source ID and never
+   * from a name. Everything else about the profile, including its ID, its name,
+   * `createdAt`, its policies and any exclusions, is left exactly as it is, so a
+   * character referencing it keeps resolving against the same profile.
+   *
+   * Idempotent: a profile that already matches its pack is not rewritten, so a
+   * second run reports nothing and no `updatedAt` moves.
+   */
+  async reconcileInstalledRulesets(): Promise<RulesetMembershipRepair[]> {
+    const { database } = this.context;
+    const now = this.clock();
+    const repairs = await database.transaction(
+      "rw",
+      [database.contentPacks, database.contentEntries, database.rulesetProfiles],
+      async (): Promise<RulesetMembershipRepair[]> => {
+        const state = await readInstalledPackState(database);
+        const repaired: RulesetMembershipRepair[] = [];
+        for (const pack of state.packs) {
+          const existing = await ownedProfile(pack.id, state, database);
+          if (!existing) continue;
+          const update = reconcileRulesetMembership(existing, proposalForInstalledPack(pack, state), now);
+          if (!update?.changed) continue;
+          await database.rulesetProfiles.put(update.profile);
+          repaired.push({
+            rulesetId: existing.id,
+            packId: pack.id,
+            previousEntryCount: existing.allowedEntryIds?.length ?? 0,
+            entryCount: update.profile.allowedEntryIds?.length ?? 0,
+            addedEntryCount: update.addedEntryIds.length,
+            removedEntryCount: update.removedEntryIds.length,
+          });
+        }
+        return repaired;
+      },
+    );
+    if (repairs.length)
+      this.log({ operation: "ruleset.reconcile", counts: { repaired: repairs.length } });
+    return repairs;
+  }
+
+  /**
+   * The installed rulesets, repaired first.
+   *
+   * Settings is where a user goes to find out what a ruleset currently reaches,
+   * so it is also where a stale profile has to stop being stale. The repair is
+   * safe enough to run without asking — it can only replace a pack-derived
+   * membership with the membership that same pack currently has — and running it
+   * here means a device that already imported the newer pack is corrected by
+   * opening the page, with nothing to reinstall and nothing to delete.
+   */
+  async inspectInstalledRulesets(): Promise<{
+    views: InstalledRulesetView[];
+    repaired: readonly RulesetMembershipRepair[];
+  }> {
+    const repaired = await this.reconcileInstalledRulesets();
+    return { views: await this.installedRulesets(), repaired };
   }
 
   async activeRulesetId(): Promise<ID | undefined> {
@@ -427,6 +554,81 @@ function describeInstallation(
   return legacy
     ? { alreadyInstalled: true, installedRulesetId: legacy, installedMatch: "legacy" }
     : { alreadyInstalled: false };
+}
+
+/**
+ * Declared dependencies resolved to the entries they contribute.
+ *
+ * A dependency may arrive in the same import set or already be installed. Both
+ * are looked up by pack identity; neither widens membership by source. A
+ * dependency that is available from neither is simply not resolved, and the
+ * proposal reports it as missing rather than guessing at its content.
+ */
+function resolveDeclaredDependencies(
+  declared: readonly ID[],
+  fromSet: ReadonlyMap<ID, readonly ContentEntry[]>,
+  fromInstalled: ReadonlyMap<ID, readonly ContentEntry[]>,
+): ResolvedDependency[] {
+  return declared.flatMap(packId => {
+    const entries = fromSet.get(packId) ?? fromInstalled.get(packId);
+    return entries ? [{ packId, entries }] : [];
+  });
+}
+
+/**
+ * Installed packs, the entries each one owns, and the profile IDs each owns.
+ *
+ * Read once and passed around, so creating a profile, updating one during an
+ * import and repairing one later all derive membership from the same installed
+ * state by the same rule.
+ */
+interface InstalledPackState {
+  packs: readonly ContentPack[];
+  packsById: ReadonlyMap<ID, ContentPack>;
+  entriesByPack: ReadonlyMap<ID, readonly ContentEntry[]>;
+  /** Profile ID to the single installed pack entitled to derive it. */
+  ownership: ReadonlyMap<ID, ID>;
+}
+
+async function readInstalledPackState(database: LedgerDB): Promise<InstalledPackState> {
+  const packs = await database.contentPacks.toArray();
+  const entries = await database.contentEntries.toArray();
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  return {
+    packs,
+    packsById: new Map(packs.map(pack => [pack.id, pack])),
+    entriesByPack: new Map(packs.map(pack => [pack.id, entriesOfPack(pack, byId, entries)])),
+    ownership: rulesetProfileOwnership(packs.map(pack => pack.id)),
+  };
+}
+
+/** The profile an installed pack expresses, as installed state stands now. */
+function proposalForInstalledPack(pack: ContentPack, state: InstalledPackState): RulesetProposal {
+  return proposeRulesetForPack(
+    pack,
+    state.entriesByPack.get(pack.id) ?? [],
+    resolveDeclaredDependencies(pack.dependencies ?? [], new Map(), state.entriesByPack),
+  );
+}
+
+/**
+ * The existing profile a pack owns, if it has one.
+ *
+ * The pack's current ID is preferred; a compatibility ID is accepted only when
+ * no other installed pack could claim it, so a profile two packs both map to is
+ * never attributed to one of them.
+ */
+async function ownedProfile(
+  packId: ID,
+  state: InstalledPackState,
+  database: LedgerDB,
+): Promise<RulesetProfile | undefined> {
+  for (const candidate of rulesetIdCandidatesForPack(packId)) {
+    if (state.ownership.get(candidate) !== packId) continue;
+    const profile = await database.rulesetProfiles.get(candidate);
+    if (profile) return profile;
+  }
+  return undefined;
 }
 
 /**
