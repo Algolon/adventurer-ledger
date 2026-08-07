@@ -27,10 +27,16 @@ const stepTitle = (page: Page) => page.locator(".m2-builder-head h2");
  * commit is in flight, so their returning to enabled is the observable signal
  * that the draft — including `lastStepId` — is durable. Reloading before that
  * is testing a torn write, not the resume contract.
+ *
+ * Enabled navigation is necessary but not sufficient: an edit within a step is
+ * saved on a debounce, so the controls can be ready while a write is still
+ * pending. The save control reads "Saving…" until that write lands, and these
+ * tests reload — the one case that loses an unflushed edit — so it settles too.
  */
 async function settled(page: Page) {
   await expect(page.getByRole("button", { name: "Back" })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^(Continue|Finish and open sheet)$/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save & close" })).toBeVisible();
 }
 
 async function openSettings(page: Page) {
