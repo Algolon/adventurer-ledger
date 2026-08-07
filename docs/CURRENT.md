@@ -5,6 +5,12 @@ favicon and complete `any`/`maskable` PWA icon sets are documented in
 [`BRAND.md`](BRAND.md); technical installation and local-storage identities stay
 unchanged.
 
+Runefolio has one theme (dark), one scroll axis (vertical) and one phone
+orientation (portrait). Those rules, what enforces each of them and the
+accessibility tradeoff portrait-only operation creates are stated in
+[`MOBILE_VISUAL_CONTRACT.md`](MOBILE_VISUAL_CONTRACT.md), which also carries the
+physical-Android checklist the emulated suite cannot replace.
+
 ## Pilot status
 
 `main` represents the current **workable pilot prototype**, not a feature-complete
@@ -167,9 +173,9 @@ M2.1 is **not** marked complete. Each claim below is recorded at the level it ha
 | Implemented | Every mandatory M2.1 acceptance criterion has code behind it. |
 | Verified locally | `npm ci`, typecheck, unit and integration tests, both builds, Pages verification, the full browser matrix, audit and privacy scan all pass from a clean worktree. |
 | Verified by GitHub CI | A Verify workflow runs the same clean sequence on the pushed head. Its result is reported on the pull request; do not treat a local run as CI evidence. |
-| Verified in a browser | Chromium, at 320, 360, 390, 412, 768, 1024 and 1440 CSS px, plus offline, reduced motion, forced colours, dark colour preference and axe checks. |
+| Verified in a browser | Chromium, at 320, 360, 375, 390, 412, 768, 1024 and 1440 CSS px, plus 200% zoom, offline, reduced motion, forced colours, an emulated **light** OS preference, and axe checks. |
 | Reviewed by the owner in a desktop browser | Done on 2026-08-04 against the production build. It found the dark-preference contrast defect and the builder UX corrections now applied. It was explicitly not a physical-device run. |
-| Requires physical Android validation | Not done. Touch targets are verified in CSS pixels only; real-device performance, install behaviour, PWA installation, offline relaunch and storage eviction are unverified. Playwright is not evidence of physical-device behaviour. |
+| Requires physical Android validation | Not done. Touch targets are verified in CSS pixels only; real-device performance, install behaviour, PWA installation, offline relaunch and storage eviction are unverified. **Orientation lock and the dark splash screen are also unverified**: viewport emulation neither installs the app nor exercises the Screen Orientation API, so the manifest's `orientation` and the runtime lock have no CI evidence at all. The checklist is in [`MOBILE_VISUAL_CONTRACT.md`](MOBILE_VISUAL_CONTRACT.md). Playwright is not evidence of physical-device behaviour. |
 
 ### Content status
 

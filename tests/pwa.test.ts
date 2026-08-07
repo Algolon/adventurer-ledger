@@ -22,7 +22,19 @@ describe("PWA foundation", () => {
       name: "Runefolio",
       short_name: "Runefolio",
       theme_color: "#0F1D29",
-      background_color: "#F6EBD6",
+      /*
+       * The splash background is the shipped dark shell, not the old parchment.
+       * A light `background_color` is painted by the platform before the app's
+       * own first frame, so a mismatch here is a white flash on every launch of
+       * the installed app — invisible to any test that only reads the DOM.
+       */
+      background_color: "#08121B",
+      /*
+       * Portrait-primary, not "any". This is the installed app's declared
+       * shape; `src/pwa/orientation.ts` and the portrait guard cover the
+       * platforms that do not honour it.
+       */
+      orientation: "portrait-primary",
     });
     expect(value.icons?.every((icon) => icon.src.startsWith(root))).toBe(true);
     expect(value.icons?.map((icon) => icon.src)).toEqual([

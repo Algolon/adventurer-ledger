@@ -18,6 +18,7 @@ import { PwaIndicator } from "@/src/ui/pwa-status";
 import { ContentWorkspace } from "@/src/ui/content-workspace";
 import { ServicesProvider, useServices } from "@/src/ui/services-context";
 import { CharacterLibrary, type LibraryDestination } from "@/src/ui/character-library";
+import { PortraitGuard, useMobileLandscape, usePortraitLock } from "@/src/ui/portrait-guard";
 import { CharacterBuilder } from "@/src/ui/character-builder";
 import { PlaySheet } from "@/src/ui/play-sheet";
 import { LevelUpDialog } from "@/src/ui/level-up-dialog";
@@ -46,6 +47,20 @@ export default function Home() {
 
 function Shell() {
   const { drafts, library, install, refresh } = useServices();
+  /*
+   * Portrait-first, in two parts.
+   *
+   * The lock is asked for once, and only where it can succeed — an installed
+   * app on a phone. Everywhere else it is a no-op, because a browser tab always
+   * refuses and there is nothing useful to say about that.
+   *
+   * The guard is the part that always works. It is a sibling of the shell, not
+   * a wrapper, so raising and lowering it never remounts the app: an
+   * in-progress build, a half-typed field and the scroll position all survive a
+   * rotation and are exactly where they were when the phone comes back upright.
+   */
+  usePortraitLock();
+  const sideways = useMobileLandscape();
   const [view, setView] = useState<View>("characters");
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
@@ -176,152 +191,162 @@ function Shell() {
   };
 
   return (
-    /*
-     * `m2-shell-task` tells the layout that a modal task owns the surface.
-     *
-     * On mobile the primary navigation and the task's action row are both
-     * pinned to the bottom edge, and the task row is painted over the top of
-     * the navigation. The result was navigation that looked available,
-     * announced itself as available, and could not be pressed at all. The task
-     * now hides it rather than covering it, and supplies its own way out.
-     */
-    <div className={modalTask ? "m2-shell m2-shell-task" : "m2-shell"}>
-      <header className="m2-appbar">
-        <div className="m2-appbar-brand">
-          <BrandMark decorative variant="inverse" />
-          <strong>Runefolio</strong>
-        </div>
-        <PwaIndicator />
-        <button
-          type="button"
-          className={view === "settings" ? "m2-appbar-settings m2-active" : "m2-appbar-settings"}
-          onClick={() => leaveTo("settings")}
-          aria-label="Open Settings"
-          aria-current={view === "settings" ? "page" : undefined}
-        >
-          <Settings aria-hidden="true" />
-          <span>Settings</span>
-        </button>
-      </header>
+    <>
+      {/*
+       * `m2-shell-task` tells the layout that a modal task owns the surface.
+       *
+       * On mobile the primary navigation and the task's action row are both
+       * pinned to the bottom edge, and the task row is painted over the top of
+       * the navigation. The result was navigation that looked available,
+       * announced itself as available, and could not be pressed at all. The task
+       * now hides it rather than covering it, and supplies its own way out.
+       *
+       * `inert` while the portrait guard is up is what actually keeps the UI
+       * underneath out of reach: it removes the whole subtree from the focus
+       * order, from pointer events and from the accessibility tree, so a
+       * keyboard, a screen reader and a stray tap all stop at the guard. Covering
+       * it with an opaque layer alone would have left every control tabbable
+       * behind the cover.
+       */}
+      <div className={modalTask ? "m2-shell m2-shell-task" : "m2-shell"} inert={sideways}>
+        <header className="m2-appbar">
+          <div className="m2-appbar-brand">
+            <BrandMark decorative variant="inverse" />
+            <strong>Runefolio</strong>
+          </div>
+          <PwaIndicator />
+          <button
+            type="button"
+            className={view === "settings" ? "m2-appbar-settings m2-active" : "m2-appbar-settings"}
+            onClick={() => leaveTo("settings")}
+            aria-label="Open Settings"
+            aria-current={view === "settings" ? "page" : undefined}
+          >
+            <Settings aria-hidden="true" />
+            <span>Settings</span>
+          </button>
+        </header>
 
-      <nav className="m2-rail" aria-label="Primary">
-        <ul>
-          {PRIMARY_NAV.map(item => (
-            <li key={item.id}>
+        <nav className="m2-rail" aria-label="Primary">
+          <ul>
+            {PRIMARY_NAV.map(item => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className={view === item.id ? "m2-nav-button m2-active" : "m2-nav-button"}
+                  aria-current={view === item.id ? "page" : undefined}
+                  onClick={() => leaveTo(item.id)}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                </button>
+              </li>
+            ))}
+            <li className="m2-rail-only">
               <button
                 type="button"
-                className={view === item.id ? "m2-nav-button m2-active" : "m2-nav-button"}
-                aria-current={view === item.id ? "page" : undefined}
-                onClick={() => leaveTo(item.id)}
+                className={view === "settings" ? "m2-nav-button m2-active" : "m2-nav-button"}
+                aria-current={view === "settings" ? "page" : undefined}
+                onClick={() => leaveTo("settings")}
               >
-                {item.icon}
-                <span>{item.label}</span>
+                <Settings aria-hidden="true" />
+                <span>Settings</span>
               </button>
             </li>
-          ))}
-          <li className="m2-rail-only">
-            <button
-              type="button"
-              className={view === "settings" ? "m2-nav-button m2-active" : "m2-nav-button"}
-              aria-current={view === "settings" ? "page" : undefined}
-              onClick={() => leaveTo("settings")}
-            >
-              <Settings aria-hidden="true" />
-              <span>Settings</span>
-            </button>
-          </li>
-        </ul>
-      </nav>
+          </ul>
+        </nav>
 
-      <main className="m2-main" id="main">
-        {editError && !modalTask ? (
-          <div className="m2-banner m2-banner-error" role="alert">
-            <strong>Edit character could not be opened</strong>
-            <p>{editError}</p>
-          </div>
-        ) : null}
-        {rulesetChoice ? (
-          <RulesetChoice
-            selection={rulesetChoice}
-            onChoose={id => {
-              void install.activate(id).then(() => createDraft(id));
-            }}
-            onCancel={() => setRulesetChoice(null)}
-            onOpenCompendium={() => {
-              setRulesetChoice(null);
-              setView("compendium");
-            }}
-          />
-        ) : modalTask && builderDraftId ? (
-          <CharacterBuilder
-            draftId={builderDraftId}
-            repairs={editRepairs}
-            onClose={() => {
-              setBuilderDraftId(null);
-              setEditRepairs([]);
-              refresh();
-            }}
-            onFinished={characterId => {
-              setBuilderDraftId(null);
-              setEditRepairs([]);
-              setActiveCharacterId(characterId);
-              setView("sheet");
-            }}
-          />
-        ) : view === "characters" ? (
-          <CharacterLibrary onNavigate={navigate} />
-        ) : view === "sheet" ? (
-          activeCharacterId ? (
-            <PlaySheet
-              characterId={activeCharacterId}
-              onLevelUp={() => setLevelUpFor(activeCharacterId)}
-              onEdit={() => navigate({ kind: "edit", characterId: activeCharacterId })}
+        <main className="m2-main" id="main">
+          {editError && !modalTask ? (
+            <div className="m2-banner m2-banner-error" role="alert">
+              <strong>Edit character could not be opened</strong>
+              <p>{editError}</p>
+            </div>
+          ) : null}
+          {rulesetChoice ? (
+            <RulesetChoice
+              selection={rulesetChoice}
+              onChoose={id => {
+                void install.activate(id).then(() => createDraft(id));
+              }}
+              onCancel={() => setRulesetChoice(null)}
+              onOpenCompendium={() => {
+                setRulesetChoice(null);
+                setView("compendium");
+              }}
+            />
+          ) : modalTask && builderDraftId ? (
+            <CharacterBuilder
+              draftId={builderDraftId}
+              repairs={editRepairs}
+              onClose={() => {
+                setBuilderDraftId(null);
+                setEditRepairs([]);
+                refresh();
+              }}
+              onFinished={characterId => {
+                setBuilderDraftId(null);
+                setEditRepairs([]);
+                setActiveCharacterId(characterId);
+                setView("sheet");
+              }}
+            />
+          ) : view === "characters" ? (
+            <CharacterLibrary onNavigate={navigate} />
+          ) : view === "sheet" ? (
+            activeCharacterId ? (
+              <PlaySheet
+                characterId={activeCharacterId}
+                onLevelUp={() => setLevelUpFor(activeCharacterId)}
+                onEdit={() => navigate({ kind: "edit", characterId: activeCharacterId })}
+              />
+            ) : (
+              <section className="m2-page">
+                <h2 className="m2-page-title">Sheet</h2>
+                <div className="m2-empty">
+                  <Swords aria-hidden="true" className="m2-empty-icon" />
+                  <h3>No character is open</h3>
+                  <p>Open one from Characters to start playing.</p>
+                  <button type="button" className="m2-button m2-button-primary" onClick={() => setView("characters")}>
+                    Go to Characters
+                  </button>
+                </div>
+              </section>
+            )
+          ) : view === "compendium" ? (
+            <ContentWorkspace view="Compendium" />
+          ) : view === "transfer" ? (
+            <TransferPanel
+              {...(activeCharacterId ? { characterId: activeCharacterId } : {})}
+              onImported={id => {
+                setActiveCharacterId(id);
+                setView("sheet");
+              }}
             />
           ) : (
-            <section className="m2-page">
-              <h2 className="m2-page-title">Sheet</h2>
-              <div className="m2-empty">
-                <Swords aria-hidden="true" className="m2-empty-icon" />
-                <h3>No character is open</h3>
-                <p>Open one from Characters to start playing.</p>
-                <button type="button" className="m2-button m2-button-primary" onClick={() => setView("characters")}>
-                  Go to Characters
-                </button>
-              </div>
-            </section>
-          )
-        ) : view === "compendium" ? (
-          <ContentWorkspace view="Compendium" />
-        ) : view === "transfer" ? (
-          <TransferPanel
-            {...(activeCharacterId ? { characterId: activeCharacterId } : {})}
-            onImported={id => {
-              setActiveCharacterId(id);
-              setView("sheet");
-            }}
-          />
-        ) : (
-          <SettingsView
-            onOpenCharacter={id => {
-              setActiveCharacterId(id);
-              setView("sheet");
-            }}
-          />
-        )}
-      </main>
+            <SettingsView
+              onOpenCharacter={id => {
+                setActiveCharacterId(id);
+                setView("sheet");
+              }}
+            />
+          )}
+        </main>
 
-      {levelUpFor && !rulesetChoice ? (
-        <LevelUpDialog
-          characterId={levelUpFor}
-          onClose={() => setLevelUpFor(null)}
-          onCommitted={() => {
-            setActiveCharacterId(levelUpFor);
-            setLevelUpFor(null);
-            setView("sheet");
-          }}
-        />
-      ) : null}
-    </div>
+        {levelUpFor && !rulesetChoice ? (
+          <LevelUpDialog
+            characterId={levelUpFor}
+            onClose={() => setLevelUpFor(null)}
+            onCommitted={() => {
+              setActiveCharacterId(levelUpFor);
+              setLevelUpFor(null);
+              setView("sheet");
+            }}
+          />
+        ) : null}
+      </div>
+      {sideways ? <PortraitGuard /> : null}
+    </>
   );
 }
 

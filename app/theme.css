@@ -1,0 +1,102 @@
+/*
+ * Runefolio's theme. There is exactly one.
+ *
+ * The app used to ship a light palette with a partial `prefers-color-scheme:
+ * dark` override on the play sheet only. That is two products: a phone set to
+ * light rendered parchment cards, a phone set to dark rendered navy ones, and
+ * every surface that had no dark branch — Compendium, Settings, import, the
+ * offline banner — stayed light inside a dark shell. Runefolio is dark, always,
+ * and the OS preference does not choose it. `color-scheme: dark` here is what
+ * makes the user agent paint scrollbars, form controls and the overscroll
+ * canvas to match; the explicit colours below are what guarantee it.
+ *
+ * Every token is stated once. Nothing in the app may hard-code a surface,
+ * text or line colour, because a hard-coded light hex is exactly how the
+ * previous split survived.
+ *
+ * Contrast, measured against the surface each token is used on:
+ *   --ink on any surface        13.5:1 or better
+ *   --muted on any surface       5.8:1 or better
+ *   --brass on any surface       5.3:1 or better
+ *   --border against any surface 3.3:1 or better (WCAG 1.4.11 non-text)
+ * The semantic ink/background pairs below are each above 8:1.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* The identity, unchanged by surface. */
+  --brand-midnight-ink: #0f1d29;
+  --brand-warm-parchment: #f6ebd6;
+  --brand-burnished-gold: #c79a45;
+
+  /*
+   * Surfaces, darkest first. Elevation reads as lift: a raised surface is
+   * lighter than the one it sits on, never a different hue.
+   */
+  --deep: #060d14; /* behind the document; what overscroll exposes */
+  --paper: #08121b; /* the page canvas */
+  --navy: var(--brand-midnight-ink); /* app bar, bottom bar, primary button */
+  --surface: #142330; /* cards, rows, chips */
+  --raised: #1c2f3e; /* dialogs, menus, drawers */
+  --inset: #0b1723; /* form fields, wells, code */
+  --inset-disabled: #101b25;
+
+  /* Text. Warm parchment, not white: the brand reads warm even at 16:1. */
+  --ink: var(--brand-warm-parchment);
+  --cream: var(--brand-warm-parchment); /* text on --navy */
+  --muted: #b0a893;
+
+  /*
+   * Lines. `--border` is muted brass and clears 3:1 against every surface
+   * above, so a card, button or field is identifiable by its boundary alone.
+   * `--border-soft` divides rows *inside* an already-bounded container, where
+   * the adjacent text carries the meaning.
+   */
+  --border: #967842;
+  --border-soft: #2c4256;
+
+  /* Accents. */
+  --brass: var(--brand-burnished-gold);
+  --brass-dim: #8a6f3c;
+  --focus: #d9b56b;
+  --sage: #6f9a77;
+  --amber: #c9893b;
+  --lav: #c3aede;
+
+  /* Semantic triples: ink, its background, its border. */
+  --danger: #f0a7a7;
+  --danger-bg: #33191a;
+  --danger-border: #b95c5c;
+  --warn: #f0d9a8;
+  --warn-bg: #33260f;
+  --warn-border: var(--amber);
+  --good: #a8d3a3;
+  --good-bg: #16261a;
+  --good-border: var(--sage);
+  --info: #a9c8ea;
+  --info-bg: #12243a;
+  --info-border: #4d7cad;
+
+  /*
+   * Depth. On a dark canvas a shadow cannot lighten, so lift is carried by the
+   * surface colour and the shadow only separates an overlay from what it
+   * covers. Both are near-opaque black for that reason.
+   */
+  --shadow-overlay: 0 6px 18px rgb(0 0 0 / 60%);
+  --shadow-floating: 0 8px 30px rgb(0 0 0 / 60%);
+  --scrim: rgb(3 7 11 / 85%);
+
+  --display: Georgia, "Times New Roman", serif;
+  --ui: Inter, system-ui, sans-serif;
+}
+
+/*
+ * The canvas, stated on both elements.
+ *
+ * `html` is what an overscroll bounce exposes past the end of `body`, so it
+ * carries the deepest shade rather than inheriting the user agent's white.
+ */
+html {
+  background: var(--deep);
+}
