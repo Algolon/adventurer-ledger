@@ -204,33 +204,31 @@ function CharacterRow({
       </button>
       {menuOpen ? (
         <AnchoredMenu label={`Actions for ${card.name}`} onClose={onToggleMenu}>
-          <li role="none">
-            <button role="menuitem" type="button" onClick={() => onNavigate({ kind: "edit", characterId: card.characterId })}>
+          <li>
+            <button type="button" onClick={() => onNavigate({ kind: "edit", characterId: card.characterId })}>
               Edit build for {card.name}
             </button>
           </li>
-          <li role="none">
-            <button role="menuitem" type="button" onClick={() => onNavigate({ kind: "level-up", characterId: card.characterId })}>
+          <li>
+            <button type="button" onClick={() => onNavigate({ kind: "level-up", characterId: card.characterId })}>
               Level up {card.name}
             </button>
           </li>
-          <li role="none">
-            <button role="menuitem" type="button" onClick={() => onNavigate({ kind: "transfer", characterId: card.characterId })}>
+          <li>
+            <button type="button" onClick={() => onNavigate({ kind: "transfer", characterId: card.characterId })}>
               Export or transfer {card.name}
             </button>
           </li>
-          <li role="none">
+          <li>
             <button
-              role="menuitem"
               type="button"
               onClick={() => onNavigate({ kind: "duplicate", characterId: card.characterId, revision: card.revision })}
             >
               Duplicate {card.name}
             </button>
           </li>
-          <li role="none">
+          <li>
             <button
-              role="menuitem"
               type="button"
               onClick={() => onNavigate({ kind: "archive", characterId: card.characterId, revision: card.revision })}
             >
@@ -242,9 +240,8 @@ function CharacterRow({
            * asks the question, it does not answer it, so no single press from
            * the row can delete anything.
            */}
-          <li role="none">
+          <li>
             <button
-              role="menuitem"
               type="button"
               className="m2-menu-destructive"
               /*

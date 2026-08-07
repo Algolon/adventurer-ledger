@@ -21,7 +21,7 @@
  * Exactly one option is expanded, because exactly one can be selected. There is
  * no separate expansion state to fall out of step with the selection.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, CircleHelp, TriangleAlert } from "lucide-react";
 import type { SelectionGrant, SelectionOptionView } from "@/src/services/selection-presenter";
 import type { Recommendation } from "@/src/services/build-planner";
@@ -102,6 +102,8 @@ export function ContentSelection({
    * click and restored after layout, so the thing that was touched stays exactly
    * where it was touched.
    */
+  /** Which option's "Why this?" copy is open. Never affects the selection. */
+  const [explaining, setExplaining] = useState<string | null>(null);
   const anchor = useRef<{ id: string; top: number; until: number } | null>(null);
   /** Set around our own scrolling, so it is not mistaken for the user's. */
   const selfScrolling = useRef(false);
@@ -257,10 +259,27 @@ export function ContentSelection({
                 </div>
               ) : null}
 
-              {recommendation && !isSelected ? (
-                <p className="m2-why-copy">
-                  <CircleHelp aria-hidden="true" /> {recommendation.why}
-                </p>
+              {/*
+               * "Why this?" is its own control, and reading it selects
+               * nothing. A recommendation is guidance the user may inspect and
+               * still decline, so the explanation has to be reachable without
+               * committing to the option — which is exactly what an inline
+               * paragraph beside a selectable row cannot promise.
+               */}
+              {recommendation ? (
+                <>
+                  <button
+                    type="button"
+                    className="m2-why"
+                    aria-expanded={explaining === option.id}
+                    onClick={() => setExplaining(explaining === option.id ? null : option.id)}
+                  >
+                    <CircleHelp aria-hidden="true" />
+                    Why this?
+                    <span className="m2-visually-hidden"> {option.label}</span>
+                  </button>
+                  {explaining === option.id ? <p className="m2-why-copy">{recommendation.why}</p> : null}
+                </>
               ) : null}
             </li>
           );

@@ -157,7 +157,8 @@ test.describe("AC-05 manual-sheet entry", () => {
 
     await page.getByRole("button", { name: /^Manual character sheet/ }).click();
     await next(page);
-    // Origin is not required for a manual sheet.
+    // Neither Species nor Background is required for a manual sheet.
+    await next(page);
     await next(page);
 
     for (const [ability, value] of ABILITY_ASSIGNMENT) await page.getByLabel(ability, { exact: true }).selectOption(value);

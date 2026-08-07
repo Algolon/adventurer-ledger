@@ -112,7 +112,7 @@ test.describe("the character overflow menu stays on screen", () => {
     expect(box.top).toBeGreaterThanOrEqual(0);
     // Clear of the fixed bottom bar, not merely inside the viewport.
     expect(box.bottom).toBeLessThanOrEqual(box.viewportHeight);
-    await expect(page.getByRole("menuitem", { name: /^Delete / })).toBeInViewport();
+    await expect(page.getByRole("button", { name: /^Delete / })).toBeInViewport();
   });
 
   test("the first row's menu is contained too", async ({ page }) => {
@@ -170,14 +170,14 @@ test.describe("the character overflow menu stays on screen", () => {
     await createCharacter(page, "Dismiss Probe");
 
     await openMenuFor(page, "Dismiss Probe");
-    await expect(page.getByRole("menuitem", { name: /^Delete / })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Delete / })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("menuitem", { name: /^Delete / })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Delete / })).toHaveCount(0);
 
     await openMenuFor(page, "Dismiss Probe");
-    await expect(page.getByRole("menuitem", { name: /^Delete / })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Delete / })).toBeVisible();
     await page.getByRole("heading", { name: "Characters", exact: true }).click();
-    await expect(page.getByRole("menuitem", { name: /^Delete / })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Delete / })).toHaveCount(0);
   });
 
   test("the trigger reports its expanded state", async ({ page }) => {
@@ -206,7 +206,7 @@ test.describe("deleting a character", () => {
     await createCharacter(page, "Careful Walker");
 
     await openMenuFor(page, "Careful Walker");
-    await page.getByRole("menuitem", { name: "Delete Careful Walker" }).click();
+    await page.getByRole("button", { name: "Delete Careful Walker" }).click();
 
     await expect(page.getByRole("alertdialog", { name: "Delete Careful Walker?" })).toBeVisible();
     // Still in the library, untouched, behind the confirmation.
@@ -218,7 +218,7 @@ test.describe("deleting a character", () => {
     await createCharacter(page, "Named Walker");
 
     await openMenuFor(page, "Named Walker");
-    await page.getByRole("menuitem", { name: "Delete Named Walker" }).click();
+    await page.getByRole("button", { name: "Delete Named Walker" }).click();
 
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("Named Walker");
@@ -236,7 +236,7 @@ test.describe("deleting a character", () => {
     await createCharacter(page, "Other Walker");
 
     await openMenuFor(page, "Kept Walker");
-    await page.getByRole("menuitem", { name: "Delete Kept Walker" }).click();
+    await page.getByRole("button", { name: "Delete Kept Walker" }).click();
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
@@ -252,7 +252,7 @@ test.describe("deleting a character", () => {
     await createCharacter(page, "Surviving Walker");
 
     await openMenuFor(page, "Doomed Walker");
-    await page.getByRole("menuitem", { name: "Delete Doomed Walker" }).click();
+    await page.getByRole("button", { name: "Delete Doomed Walker" }).click();
     await page.getByRole("button", { name: "Delete character" }).click();
 
     await expect(page.getByRole("heading", { name: "Characters", exact: true })).toBeVisible();
@@ -266,7 +266,7 @@ test.describe("deleting a character", () => {
     await createCharacter(page, "Surviving Walker");
 
     await openMenuFor(page, "Doomed Walker");
-    await page.getByRole("menuitem", { name: "Delete Doomed Walker" }).click();
+    await page.getByRole("button", { name: "Delete Doomed Walker" }).click();
     await page.getByRole("button", { name: "Delete character" }).click();
     await expect(page.getByRole("button", { name: /Open Doomed Walker/ })).toHaveCount(0);
 
@@ -285,7 +285,7 @@ test.describe("deleting a character", () => {
     await page.getByRole("button", { name: "Characters" }).click();
 
     await openMenuFor(page, "Open Walker");
-    await page.getByRole("menuitem", { name: "Delete Open Walker" }).click();
+    await page.getByRole("button", { name: "Delete Open Walker" }).click();
     await page.getByRole("button", { name: "Delete character" }).click();
 
     await expect(page.getByRole("heading", { name: "Characters", exact: true })).toBeVisible();
@@ -298,13 +298,13 @@ test.describe("deleting a character", () => {
 
     // Opening the build is what creates the character-bound edit draft.
     await openMenuFor(page, "Drafted Walker");
-    await page.getByRole("menuitem", { name: "Edit build for Drafted Walker" }).click();
-    await expect(page.getByText(/Step \d of 9/)).toBeVisible();
+    await page.getByRole("button", { name: "Edit build for Drafted Walker" }).click();
+    await expect(page.getByText(/Step \d+ of \d+/)).toBeVisible();
     await page.getByRole("button", { name: /^(Save & close|Saving…)$/ }).click();
     await expect(page.getByRole("heading", { name: "Characters", exact: true })).toBeVisible();
 
     await openMenuFor(page, "Drafted Walker");
-    await page.getByRole("menuitem", { name: "Delete Drafted Walker" }).click();
+    await page.getByRole("button", { name: "Delete Drafted Walker" }).click();
     await page.getByRole("button", { name: "Delete character" }).click();
 
     await expect(page.getByRole("button", { name: /Open Drafted Walker/ })).toHaveCount(0);
@@ -317,7 +317,7 @@ test.describe("deleting a character", () => {
     await createCharacter(page, "Temporary Walker");
 
     await openMenuFor(page, "Temporary Walker");
-    await page.getByRole("menuitem", { name: "Delete Temporary Walker" }).click();
+    await page.getByRole("button", { name: "Delete Temporary Walker" }).click();
     await page.getByRole("button", { name: "Delete character" }).click();
     await expect(page.getByRole("button", { name: /Open Temporary Walker/ })).toHaveCount(0);
 

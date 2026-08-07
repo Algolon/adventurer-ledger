@@ -239,9 +239,18 @@ export function AnchoredMenu({
     };
   }, [onClose]);
 
+  /*
+   * Deliberately a labelled group of buttons rather than `role="menu"`.
+   *
+   * The menu role carries a contract this widget does not honour: arrow-key
+   * navigation between items, a roving tabindex, and typeahead. Declaring the
+   * role without implementing the behaviour tells a screen-reader user to press
+   * a key that does nothing, which is worse than the plain list of buttons that
+   * Tab already reaches correctly.
+   */
   return (
     <div className="m2-anchored-menu" data-placement="bottom" ref={surface}>
-      <ul className="m2-row-menu" role="menu" aria-label={label}>
+      <ul className="m2-row-menu" aria-label={label}>
         {children}
       </ul>
     </div>

@@ -159,10 +159,10 @@ test("captures the character overflow menu and its delete confirmation", async (
   await page.getByRole("button", { name: "Characters" }).click();
 
   await page.getByRole("button", { name: "More actions for Menu Evidence" }).click();
-  await expect(page.getByRole("menuitem", { name: /^Delete / })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Delete / })).toBeVisible();
   await capture(page, testInfo, "390-11-overflow-menu");
 
-  await page.getByRole("menuitem", { name: "Delete Menu Evidence" }).click();
+  await page.getByRole("button", { name: "Delete Menu Evidence" }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await capture(page, testInfo, "390-12-delete-confirmation");
 });

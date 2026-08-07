@@ -164,7 +164,7 @@ test.describe("builder navigation is one coherent structure", () => {
 
     const progress = page.getByRole("progressbar");
     await expect(progress).toHaveAttribute("aria-valuenow", "1");
-    await expect(progress).toHaveAttribute("aria-valuemax", "8");
+    await expect(progress).toHaveAttribute("aria-valuemax", "9");
   });
 
   for (const width of [320, 375, 390, 412, 768, 1280]) {

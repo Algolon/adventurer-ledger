@@ -51,6 +51,8 @@ async function buildBrammel(page: Page) {
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await next();
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await next();
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await next();
