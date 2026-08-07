@@ -27,16 +27,26 @@ const stepTitle = (page: Page) => page.locator(".m2-builder-head h2");
  * commit is in flight, so their returning to enabled is the observable signal
  * that the draft — including `lastStepId` — is durable. Reloading before that
  * is testing a torn write, not the resume contract.
- *
- * Enabled navigation is necessary but not sufficient: an edit within a step is
- * saved on a debounce, so the controls can be ready while a write is still
- * pending. The save control reads "Saving…" until that write lands, and these
- * tests reload — the one case that loses an unflushed edit — so it settles too.
  */
 async function settled(page: Page) {
   await expect(page.getByRole("button", { name: "Back" })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^(Continue|Finish and open sheet)$/ })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Save & close" })).toBeVisible();
+}
+
+/**
+ * Waits until a step's own answer has reached the persisted draft.
+ *
+ * An edit made inside a step is saved on a debounce, so neither the pressed
+ * state of the control nor the enabled footer proves anything: both are local,
+ * and the save may not have been requested yet. The step list is drawn from the
+ * plan, and the plan is only recomputed from what the service actually wrote —
+ * so a step reading Complete is the first observable moment at which reloading
+ * is safe.
+ */
+async function persisted(page: Page, step: string) {
+  await page.getByRole("button", { name: "All steps" }).click();
+  await expect(page.getByRole("button", { name: new RegExp(`^${step} Complete$`) })).toBeVisible();
+  await page.getByRole("button", { name: "All steps" }).click();
 }
 
 async function openSettings(page: Page) {
@@ -79,6 +89,7 @@ async function buildToBackground(page: Page, name: string) {
 
   await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
   await settled(page);
+  await persisted(page, "Background");
 }
 
 test.describe("reopening lands where the user left off", () => {
