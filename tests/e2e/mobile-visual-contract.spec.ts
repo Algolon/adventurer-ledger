@@ -334,6 +334,16 @@ test.describe("no Runefolio surface scrolls horizontally on a phone", () => {
       await expectNoHorizontalScroll(page, `Settings at ${width} px`);
       for (const settingsPage of ["Rulesets", "Content packs", "Sources", "Storage"]) {
         await page.getByRole("button", { name: settingsPage, exact: true }).click();
+        /*
+         * Storage renders a narrow "not supported" line until
+         * `navigator.storage.estimate()` resolves, and only then paints the
+         * figures and the persistence button that actually set the card's
+         * width. Measuring without this wait raced the estimate: the sweep
+         * passed whenever it measured the placeholder, and the same tree that
+         * passed Verify twice failed the deploy on the third run. Waiting for
+         * the real content makes the surface deterministic.
+         */
+        if (settingsPage === "Storage") await expect(page.locator(".storage-card dl")).toBeVisible();
         await expectNoHorizontalScroll(page, `Settings · ${settingsPage} at ${width} px`);
         await page.getByRole("button", { name: "Back to Settings" }).click();
       }
@@ -380,6 +390,51 @@ test.describe("no Runefolio surface scrolls horizontally on a phone", () => {
       await page.getByRole("tab", { name: section }).click();
       await expectNoHorizontalScroll(page, `four-section sheet ${section} with a long name at 320 px`);
     }
+  });
+
+  /**
+   * Settings · Storage, measured against its own card rather than the viewport.
+   *
+   * The viewport check could not catch this reliably. `width: max-content` on
+   * the persistence button made the card as wide as the button's unwrapped
+   * label, and whether that reached past the viewport edge depended on the
+   * platform's font metrics: it stayed inside by 14 px on macOS and went
+   * outside on the Linux CI image. Verify passed twice and the deploy failed on
+   * the identical tree.
+   *
+   * Comparing each child with the card's own content box removes the font from
+   * the question. A child wider than the box it sits in is a defect at every
+   * width, on every platform, whether or not it happens to reach the edge of
+   * this particular screen.
+   */
+  test("nothing in the Storage card is wider than the card at 320 px", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "The phone width matrix runs once, in the mobile project.");
+    await page.setViewportSize({ width: 320, height: 780 });
+    await page.goto(APP_ROOT);
+    await openSettings(page);
+    await page.getByRole("button", { name: "Storage", exact: true }).click();
+    // The figures and the button arrive only once the estimate resolves.
+    await expect(page.locator(".storage-card dl")).toBeVisible();
+
+    const overflowing = await page.evaluate(() => {
+      const card = document.querySelector(".storage-card");
+      if (!(card instanceof HTMLElement)) return ["the Storage card did not render"];
+      const style = getComputedStyle(card);
+      const box = card.getBoundingClientRect();
+      const left = box.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth);
+      const right = box.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+      return Array.from(card.querySelectorAll("*")).flatMap(node => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width <= 1 || rect.height <= 1) return [];
+        const over = Math.max(rect.right - right, left - rect.left);
+        // 1 px absorbs sub-pixel rounding, as elsewhere in this suite.
+        if (over <= 1) return [];
+        const name = node.tagName.toLowerCase() + (node.className ? `.${String(node.className).split(" ")[0]}` : "");
+        return [`${name} is ${over.toFixed(1)}px wider than the card's content box (${(right - left).toFixed(1)}px)`];
+      });
+    });
+
+    expect(overflowing, "elements wider than the Storage card they sit in").toEqual([]);
   });
 
   /**
