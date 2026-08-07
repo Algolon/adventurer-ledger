@@ -458,15 +458,37 @@
  * allowed to shrink, so a long action label wraps instead of hanging off the
  * side of the document.
  */
-.m2-row-menu {
+/*
+ * The anchored surface. It carries the position so that the list inside it can
+ * be measured and nudged as one box, and so the correction is a transform that
+ * shifts nothing else on the page.
+ */
+.m2-anchored-menu {
   position: absolute;
   right: 0;
   top: 100%;
   z-index: 10;
-  width: max-content;
   min-width: 0;
-  max-width: 100%;
+  /*
+   * Never wider than the screen, whatever the character is called. `max-content`
+   * sizes the menu to its longest item, and an item containing a long name
+   * would otherwise size it past the viewport before any containment logic ran.
+   */
+  width: max-content;
+  max-width: min(100%, calc(100vw - 32px));
   margin: 4px 0 0;
+}
+
+/* Flipped above the trigger when there is not enough room below. */
+.m2-anchored-menu[data-placement="top"] {
+  top: auto;
+  bottom: 100%;
+  margin: 0 0 4px;
+}
+
+.m2-row-menu {
+  min-width: 0;
+  margin: 0;
   padding: 4px;
   list-style: none;
   border: 1px solid var(--border);
@@ -478,12 +500,26 @@
 .m2-row-menu button {
   width: 100%;
   min-height: 44px;
-  padding: 0 10px;
+  padding: 8px 10px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: inherit;
   text-align: left;
+  /* A long name wraps inside the menu instead of widening it. */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The destructive item. Colour is not the only signal — it is last, separated
+ * by a rule, and its label says what it does.
+ */
+.m2-row-menu .m2-menu-destructive {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px;
+  color: var(--danger);
+  font-weight: 650;
 }
 
 .m2-row-menu button:hover {
@@ -1037,6 +1073,175 @@
   font-size: 13px;
 }
 
+/*
+ * The content-selection pattern: a compact row that expands in place.
+ *
+ * Every box below sets `min-width: 0`. A grid or flex item defaults to a
+ * minimum of its own content, so one long trait name or an unbroken identifier
+ * anywhere inside the panel would push the whole column past the viewport — the
+ * failure the phone contract exists to prevent. Text that cannot be broken at a
+ * space is broken anywhere rather than allowed to overhang.
+ */
+.m2-select-card {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.m2-select-card > * {
+  min-width: 0;
+}
+
+/* The row's facts sit under the name, stacked, never in a sideways strip. */
+.m2-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 5px;
+  min-width: 0;
+}
+
+.m2-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.m2-fact-label {
+  color: var(--muted);
+}
+
+.m2-fact-value {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The expanded panel. Indented by a hairline rather than by padding so that the
+ * usable width barely narrows: at 320 px every column the content loses is a
+ * column the content has to overflow into.
+ */
+.m2-select-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 2px 0 4px;
+  padding: 12px 10px;
+  border: 1px solid var(--good-border);
+  border-radius: 9px;
+  background: var(--inset);
+}
+
+.m2-select-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.m2-select-section h4 {
+  margin: 0;
+  font: 700 13px var(--ui);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.m2-grant-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  list-style: none;
+}
+
+.m2-grant {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.m2-grant-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.m2-grant-head b {
+  overflow-wrap: anywhere;
+}
+
+.m2-grant small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.m2-grant-level {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/*
+ * Secondary information, closed by default. `summary` is a real disclosure
+ * control, so it carries its own keyboard behaviour and expanded state without
+ * a script; it is padded to a 44 px target because it is one on a phone.
+ */
+.m2-select-more > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--brass);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.m2-detail-list {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 0;
+  min-width: 0;
+}
+
+.m2-detail-list > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.m2-detail-list dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.m2-detail-list dd {
+  margin: 0;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.m2-select-done {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--good);
+  font-size: 13px;
+}
+
+.m2-select-done svg {
+  flex: 0 0 auto;
+  width: 16px;
+}
+
 .m2-field {
   display: grid;
   gap: 4px;
@@ -1418,6 +1623,32 @@
   padding: 10px 14px;
   border-top: 1px solid var(--border-soft);
   background: var(--surface);
+}
+
+/*
+ * A destructive confirmation's actions.
+ *
+ * Cancel and the destructive action are separated, and on a narrow screen they
+ * stack rather than sit thumb-width apart — two adjacent full-width buttons at
+ * 320 px is how the wrong one gets pressed. Cancel is first in the DOM, so it
+ * is also what focus and the reading order reach first.
+ */
+.m2-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  min-width: 0;
+  width: 100%;
+}
+
+.m2-dialog-actions .btn {
+  min-height: 44px;
+  flex: 1 1 auto;
+}
+
+.m2-dialog-actions .btn.danger {
+  background: var(--danger-bg);
 }
 
 /*

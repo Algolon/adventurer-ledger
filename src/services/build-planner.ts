@@ -14,7 +14,12 @@
  * a subclass, a feat's nested choice or a background's kit appear with no
  * planner change and no reference to any particular entry.
  */
-import { classMechanicsSchema } from "@/src/domain/content-pack";
+import {
+  backgroundMechanicsSchema,
+  classMechanicsSchema,
+  raceMechanicsSchema,
+  speciesMechanicsSchema,
+} from "@/src/domain/content-pack";
 import type { CharacterDraftBuild, CharacterPresentationMode } from "@/src/domain/character-record";
 import { ABILITIES } from "@/src/domain/character-record";
 import type { Ability, Category, ChoiceDefinition, ContentEntry, ID } from "@/src/domain/model";
@@ -31,6 +36,7 @@ import {
   draftContext,
   maxSupportedLevel,
   planActivation,
+  SPECIES_CATEGORIES,
   type ActivationPlan,
   type LevelCoverage,
   type SubclassRequirement,
@@ -496,6 +502,7 @@ export function planBuild(
     start: [],
     class: [],
     origin: [],
+    background: [],
     abilities: [],
     "class-choices": [],
     "spells-resources": [],
@@ -543,10 +550,15 @@ export function planBuild(
     if (!build.speciesId) stepIssues.origin.push({ code: "SPECIES_NOT_CHOSEN", fieldPath: "speciesId", severity: "error" });
     else if (!byId.has(build.speciesId))
       stepIssues.origin.push({ code: "SPECIES_SOURCE_MISSING", recordId: build.speciesId, severity: "error" });
+    /*
+     * The background is judged on its own step, next to the only control that
+     * can repair it. Reporting it against Species would mark a step incomplete
+     * for a decision that step does not present.
+     */
     if (!build.backgroundId)
-      stepIssues.origin.push({ code: "BACKGROUND_NOT_CHOSEN", fieldPath: "backgroundId", severity: "error" });
+      stepIssues.background.push({ code: "BACKGROUND_NOT_CHOSEN", fieldPath: "backgroundId", severity: "error" });
     else if (!byId.has(build.backgroundId))
-      stepIssues.origin.push({ code: "BACKGROUND_SOURCE_MISSING", recordId: build.backgroundId, severity: "error" });
+      stepIssues.background.push({ code: "BACKGROUND_SOURCE_MISSING", recordId: build.backgroundId, severity: "error" });
 
     /*
      * The level is judged where it is chosen, which is the class step.
@@ -715,17 +727,40 @@ export function recommendationsFor(
         rank: 1,
       });
 
-  if (stepId === "origin") {
-    for (const entry of entries.filter(item => item.category === "species"))
-      recommendations.push({ optionId: entry.id, label: entry.name, why: "A 30 ft. walking speed and sure footing suit a front-rank escort.", rank: 1 });
-    for (const entry of entries.filter(item => item.category === "background"))
+  /*
+   * Origin recommendations follow the two steps that replaced the single origin
+   * screen. The copy is derived from typed mechanics rather than asserted: an
+   * earlier version stated a speed and an ability pair outright, which was true
+   * of the fixture it was written against and a fabrication against any other
+   * content. Where the mechanics do not parse, the option is still offered — it
+   * simply carries the generic reason instead of an invented specific one.
+   */
+  if (stepId === "origin")
+    for (const entry of entries.filter(item => SPECIES_CATEGORIES.has(item.category))) {
+      const mechanics =
+        entry.category === "species" ? speciesMechanicsSchema.safeParse(entry.mechanics) : raceMechanicsSchema.safeParse(entry.mechanics);
       recommendations.push({
         optionId: entry.id,
         label: entry.name,
-        why: "Its +2/+1 increase lands on Strength and Constitution, which this class uses most.",
+        why: mechanics.success
+          ? `Its traits apply from level 1 and it moves at ${mechanics.data.speed} ft.`
+          : "Its traits apply from level 1.",
         rank: 1,
       });
-  }
+    }
+
+  if (stepId === "background")
+    for (const entry of entries.filter(item => item.category === "background")) {
+      const mechanics = backgroundMechanicsSchema.safeParse(entry.mechanics);
+      recommendations.push({
+        optionId: entry.id,
+        label: entry.name,
+        why: mechanics.success
+          ? `It raises ${mechanics.data.abilityScoreChoices.increasePattern.map(step => `+${step}`).join(" and ")} across abilities you pick, and grants an origin feat.`
+          : "It grants an origin feat and starting proficiencies.",
+        rank: 1,
+      });
+    }
 
   if (stepId === "abilities") {
     const ability = primaryAbility();

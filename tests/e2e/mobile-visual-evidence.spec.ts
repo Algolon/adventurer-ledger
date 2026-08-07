@@ -69,6 +69,8 @@ async function buildMartial(page: Page, name: string) {
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await continueStep(page);
@@ -101,6 +103,8 @@ async function buildCaster(page: Page, name: string) {
   await page.getByRole("button", { name: /^Runecaller/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^River Signs/ }).click();
   await continueStep(page);
@@ -151,6 +155,8 @@ for (const width of EVIDENCE_WIDTHS) {
     await page.getByRole("button", { name: /^Vanguard/ }).click();
     await continueStep(page);
     await page.getByRole("button", { name: /^Riverborn/ }).click();
+    await continueStep(page);
+
     await page.getByRole("button", { name: /^Caravan Warden/ }).click();
     await page.getByRole("button", { name: /^Trade Cant/ }).click();
     await continueStep(page);

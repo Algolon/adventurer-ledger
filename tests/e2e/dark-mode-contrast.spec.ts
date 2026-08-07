@@ -102,6 +102,8 @@ async function reachIdentity(page: Page) {
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await next(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await next(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await next(page);
@@ -146,6 +148,8 @@ test.describe("dark browser preference keeps typed text readable", () => {
     await page.getByRole("button", { name: /^Vanguard/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Riverborn/ }).click();
+    await next(page);
+
     await page.getByRole("button", { name: /^Caravan Warden/ }).click();
     await page.getByRole("button", { name: /^Trade Cant/ }).click();
     await next(page);

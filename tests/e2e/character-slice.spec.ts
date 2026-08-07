@@ -59,7 +59,7 @@ async function startNewCharacter(page: Page) {
   await page.goto(APP_ROOT);
   await expect(page.getByRole("heading", { name: "No characters on this device yet" })).toBeVisible();
   await page.getByRole("button", { name: "New character" }).last().click();
-  await expect(page.getByText("Step 1 of 8")).toBeVisible();
+  await expect(page.getByText("Step 1 of 9")).toBeVisible();
 }
 
 /** Walks the applicable steps and commits Brammel at level 1. */
@@ -68,23 +68,25 @@ async function buildBrammel(page: Page, { name = "Brammel Voss" }: { name?: stri
   await page.getByLabel("Character name", { exact: true }).fill(name);
   await continueStep(page);
 
-  await expect(page.getByText("Step 2 of 8")).toBeVisible();
+  await expect(page.getByText("Step 2 of 9")).toBeVisible();
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await continueStep(page);
 
-  await expect(page.getByText("Step 3 of 8")).toBeVisible();
+  await expect(page.getByText("Step 3 of 9")).toBeVisible();
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await continueStep(page);
 
-  await expect(page.getByText("Step 4 of 8")).toBeVisible();
+  await expect(page.getByText("Step 5 of 9")).toBeVisible();
   for (const [ability, value] of ABILITY_ASSIGNMENT) await page.getByLabel(ability, { exact: true }).selectOption(value);
   await page.getByLabel("+2 to").selectOption("strength");
   await page.getByLabel("+1 to").selectOption("constitution");
   await continueStep(page);
 
-  await expect(page.getByText("Step 5 of 8")).toBeVisible();
+  await expect(page.getByText("Step 6 of 9")).toBeVisible();
   await page.getByRole("button", { name: /^Guarded Hand/ }).click();
   await page.getByRole("button", { name: /^Riverlore/ }).click();
   await page.getByRole("button", { name: /^Haulage/ }).click();
@@ -92,15 +94,15 @@ async function buildBrammel(page: Page, { name = "Brammel Voss" }: { name?: stri
 
   // This class grants no spells, so the Spells step is not in the sequence at
   // all: Equipment follows Class choices directly.
-  await expect(page.getByText("Step 6 of 8")).toBeVisible();
+  await expect(page.getByText("Step 7 of 9")).toBeVisible();
   await page.getByRole("button", { name: /^Warden pack/ }).click();
   await continueStep(page);
 
-  await expect(page.getByText("Step 7 of 8")).toBeVisible();
+  await expect(page.getByText("Step 8 of 9")).toBeVisible();
   await page.getByLabel("Nickname").fill("Boss");
   await continueStep(page);
 
-  await expect(page.getByText("Step 8 of 8")).toBeVisible();
+  await expect(page.getByText("Step 9 of 9")).toBeVisible();
   await page.getByRole("button", { name: "Finish and open sheet" }).click();
   await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible();
 }
@@ -114,6 +116,8 @@ async function buildSereth(page: Page, { name = "Sereth Marsh" }: { name?: strin
   await continueStep(page);
 
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^River Signs/ }).click();
   await continueStep(page);
@@ -243,7 +247,7 @@ test.describe("draft persistence", () => {
     await continueStep(page);
     await page.getByRole("button", { name: /^Vanguard/ }).click();
     await continueStep(page);
-    await expect(page.getByText("Step 3 of 8")).toBeVisible();
+    await expect(page.getByText("Step 3 of 9")).toBeVisible();
     /*
      * The footer re-enables only once the navigation is persisted, so this is
      * the point at which `lastStepId` is durable. Reloading before it is
@@ -256,7 +260,7 @@ test.describe("draft persistence", () => {
     // The library lists the unfinished build with its resume step.
     await expect(page.getByText("Unfinished builds")).toBeVisible();
     await page.getByRole("button", { name: /Resume building/ }).click();
-    await expect(page.getByText("Step 3 of 8")).toBeVisible();
+    await expect(page.getByText("Step 3 of 9")).toBeVisible();
     // The earlier choice survived the reload.
     await page.getByRole("button", { name: "Steps" }).click();
     await expect(page.getByRole("button", { name: /Class.*Complete/s })).toBeVisible();
@@ -279,21 +283,21 @@ test.describe("draft persistence", () => {
   test("guided mode keeps the user at an unresolved dependency", async ({ page }) => {
     await startNewCharacter(page);
     await continueStep(page);
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
     // Continue without choosing a class.
     await continueStep(page);
     await expect(errorSummary(page)).toContainText("Choose a class");
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
   });
 
   test("flexible mode may skip a step and save an incomplete build", async ({ page }) => {
     await startNewCharacter(page);
     await page.getByRole("button", { name: "Guided mode" }).click();
     await continueStep(page);
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
     await continueStep(page);
     // Flexible mode advances without resolving the class.
-    await expect(page.getByText("Step 3 of 8")).toBeVisible();
+    await expect(page.getByText("Step 3 of 9")).toBeVisible();
     await page.reload();
     await expect(page.getByText("Unfinished builds")).toBeVisible();
   });
@@ -663,7 +667,7 @@ test.describe("responsive and accessibility", () => {
     }
     await expect(page.locator(":focus")).toContainText("Continue");
     await page.keyboard.press("Enter");
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
   });
 
   test("traps focus inside a modal surface", async ({ page }) => {

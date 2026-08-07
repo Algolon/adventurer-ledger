@@ -14,7 +14,7 @@ const next = (page: Page) => page.getByRole("button", { name: "Continue" }).clic
 async function openBuilder(page: Page) {
   await page.goto(APP_ROOT);
   await page.getByRole("button", { name: "New character" }).last().click();
-  await expect(page.getByText("Step 1 of 8")).toBeVisible();
+  await expect(page.getByText("Step 1 of 9")).toBeVisible();
 }
 
 async function reachAbilities(page: Page) {
@@ -23,10 +23,12 @@ async function reachAbilities(page: Page) {
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await next(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await next(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await next(page);
-  await expect(page.getByText("Step 4 of 8")).toBeVisible();
+  await expect(page.getByText("Step 5 of 9")).toBeVisible();
 }
 
 /**
@@ -75,7 +77,7 @@ test.describe("Basics holds the name and the ruleset", () => {
     await openBuilder(page);
     await page.getByLabel("Character name", { exact: true }).fill("Brammel Voss");
     await next(page);
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
     await page.getByRole("button", { name: "Back" }).click();
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue("Brammel Voss");
 
@@ -103,14 +105,14 @@ test.describe("a step with nothing to decide is omitted", () => {
     await page.getByLabel("+1 to").selectOption("constitution");
     await next(page);
 
-    await expect(page.getByText("Step 5 of 8")).toBeVisible();
+    await expect(page.getByText("Step 6 of 9")).toBeVisible();
     await page.getByRole("button", { name: /^Guarded Hand/ }).click();
     await page.getByRole("button", { name: /^Riverlore/ }).click();
     await page.getByRole("button", { name: /^Haulage/ }).click();
     await next(page);
 
     // Straight to Equipment: no empty "Not needed" screen in between.
-    await expect(page.getByText("Step 6 of 8")).toBeVisible();
+    await expect(page.getByText("Step 7 of 9")).toBeVisible();
     await expect(page.getByRole("button", { name: /^Warden pack/ })).toBeVisible();
     await expect(page.getByText("Not needed")).toHaveCount(0);
 

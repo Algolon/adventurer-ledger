@@ -8,10 +8,10 @@
  * row's primary activation goes to the most appropriate destination, and Edit,
  * Level up, Duplicate, Export/Transfer and Archive stay secondary.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRight, Import, Plus, Swords } from "lucide-react";
 import { useAsync, useServices } from "@/src/ui/services-context";
-import { StateBadge } from "@/src/ui/primitives";
+import { AnchoredMenu, StateBadge } from "@/src/ui/primitives";
 import type { DraftCard, LibraryCard } from "@/src/services/character-services";
 
 export type LibraryDestination =
@@ -22,6 +22,7 @@ export type LibraryDestination =
   | { kind: "transfer"; characterId?: string }
   | { kind: "duplicate"; characterId: string; revision: number }
   | { kind: "archive"; characterId: string; revision: number }
+  | { kind: "delete"; characterId: string; name: string }
   | { kind: "new" };
 
 const relative = (iso: string) => {
@@ -158,6 +159,8 @@ function CharacterRow({
   onToggleMenu(): void;
   onNavigate(destination: LibraryDestination): void;
 }) {
+  const moreRef = useRef<HTMLButtonElement>(null);
+
   const open = () => {
     if (card.primaryDestination === "build") onNavigate({ kind: "edit", characterId: card.characterId });
     else onNavigate({ kind: "sheet", characterId: card.characterId, readOnly: card.primaryDestination === "read-only-sheet" });
@@ -191,6 +194,7 @@ function CharacterRow({
       </button>
       <button
         type="button"
+        ref={moreRef}
         className="m2-row-more"
         aria-expanded={menuOpen}
         aria-label={`More actions for ${card.name}`}
@@ -199,39 +203,67 @@ function CharacterRow({
         <span aria-hidden="true">···</span>
       </button>
       {menuOpen ? (
-        <ul className="m2-row-menu">
-          <li>
-            <button type="button" onClick={() => onNavigate({ kind: "edit", characterId: card.characterId })}>
+        <AnchoredMenu label={`Actions for ${card.name}`} onClose={onToggleMenu}>
+          <li role="none">
+            <button role="menuitem" type="button" onClick={() => onNavigate({ kind: "edit", characterId: card.characterId })}>
               Edit build for {card.name}
             </button>
           </li>
-          <li>
-            <button type="button" onClick={() => onNavigate({ kind: "level-up", characterId: card.characterId })}>
+          <li role="none">
+            <button role="menuitem" type="button" onClick={() => onNavigate({ kind: "level-up", characterId: card.characterId })}>
               Level up {card.name}
             </button>
           </li>
-          <li>
-            <button type="button" onClick={() => onNavigate({ kind: "transfer", characterId: card.characterId })}>
+          <li role="none">
+            <button role="menuitem" type="button" onClick={() => onNavigate({ kind: "transfer", characterId: card.characterId })}>
               Export or transfer {card.name}
             </button>
           </li>
-          <li>
+          <li role="none">
             <button
+              role="menuitem"
               type="button"
               onClick={() => onNavigate({ kind: "duplicate", characterId: card.characterId, revision: card.revision })}
             >
               Duplicate {card.name}
             </button>
           </li>
-          <li>
+          <li role="none">
             <button
+              role="menuitem"
               type="button"
               onClick={() => onNavigate({ kind: "archive", characterId: card.characterId, revision: card.revision })}
             >
               Archive {card.name}
             </button>
           </li>
-        </ul>
+          {/*
+           * Destructive, and last. Selecting it opens a confirmation: this tap
+           * asks the question, it does not answer it, so no single press from
+           * the row can delete anything.
+           */}
+          <li role="none">
+            <button
+              role="menuitem"
+              type="button"
+              className="m2-menu-destructive"
+              /*
+               * Close the menu and put focus back on the trigger *before* the
+               * confirmation mounts. The dialog restores focus to whatever was
+               * active when it opened, so this is what makes Cancel return to
+               * the control the user came from rather than to a menu item that
+               * no longer exists.
+               */
+              onClick={() => {
+                onToggleMenu();
+                moreRef.current?.focus();
+                onNavigate({ kind: "delete", characterId: card.characterId, name: card.name });
+              }}
+            >
+              Delete {card.name}
+            </button>
+          </li>
+        </AnchoredMenu>
       ) : null}
     </li>
   );

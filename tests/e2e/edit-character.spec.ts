@@ -28,7 +28,7 @@ async function startNewCharacter(page: Page) {
   await page.goto(APP_ROOT);
   await expect(page.getByRole("heading", { name: "No characters on this device yet" })).toBeVisible();
   await page.getByRole("button", { name: "New character" }).last().click();
-  await expect(page.getByText("Step 1 of 8")).toBeVisible();
+  await expect(page.getByText("Step 1 of 9")).toBeVisible();
 }
 
 async function buildBrammel(page: Page) {
@@ -37,6 +37,8 @@ async function buildBrammel(page: Page) {
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await continueStep(page);
@@ -52,7 +54,7 @@ async function buildBrammel(page: Page) {
   await continueStep(page);
   await page.getByLabel("Nickname").fill("Boss");
   await continueStep(page);
-  await expect(page.getByText("Step 8 of 8")).toBeVisible();
+  await expect(page.getByText("Step 9 of 9")).toBeVisible();
   await page.getByRole("button", { name: "Finish and open sheet" }).click();
   await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
 }
@@ -63,6 +65,8 @@ async function buildSereth(page: Page) {
   await page.getByRole("button", { name: /^Runecaller/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^River Signs/ }).click();
   await continueStep(page);

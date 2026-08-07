@@ -11,7 +11,7 @@
  * which falls back to the bottom bar under zoom or width pressure because the
  * query is expressed in CSS pixels.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import { BookOpen, Settings, Swords, UserRound } from "lucide-react";
 import { BrandMark } from "@/src/ui/brand-mark";
 import { PwaIndicator } from "@/src/ui/pwa-status";
@@ -22,6 +22,7 @@ import { PortraitGuard, useMobileLandscape, usePortraitLock } from "@/src/ui/por
 import { CharacterBuilder } from "@/src/ui/character-builder";
 import { PlaySheet } from "@/src/ui/play-sheet";
 import { LevelUpDialog } from "@/src/ui/level-up-dialog";
+import { Dialog } from "@/src/ui/primitives";
 import { SettingsView } from "@/src/ui/settings-view";
 import { TransferPanel } from "@/src/ui/transfer-panel";
 import type { RulesetSelection } from "@/src/services/content-install-service";
@@ -65,6 +66,11 @@ function Shell() {
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(null);
   const [levelUpFor, setLevelUpFor] = useState<string | null>(null);
+  /** The character a delete confirmation is currently asking about. */
+  const [deleteTarget, setDeleteTarget] = useState<{ characterId: string; name: string } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** Guards a double-press: one confirmation must produce one delete. */
+  const deletingRef = useRef<string | null>(null);
   /** Set when more than one usable ruleset exists and none has been activated. */
   const [rulesetChoice, setRulesetChoice] = useState<RulesetSelection | null>(null);
   /** Saved values the installed content cannot confirm, reported by the hydration. */
@@ -163,6 +169,14 @@ function Shell() {
           void library
             .setArchived(destination.characterId, destination.revision, true, `ui:archive:${Date.now()}`)
             .then(refresh);
+          return;
+        /*
+         * Delete only asks. The menu item raises the question and the
+         * confirmation answers it, so nothing is removed by the press that
+         * opened the menu or by the press that chose the item.
+         */
+        case "delete":
+          setDeleteTarget({ characterId: destination.characterId, name: destination.name });
           return;
       }
     },
@@ -344,6 +358,47 @@ function Shell() {
             }}
           />
         ) : null}
+
+        {deleteTarget ? (
+          <DeleteCharacterDialog
+            name={deleteTarget.name}
+            error={deleteError}
+            onCancel={() => {
+              setDeleteTarget(null);
+              setDeleteError(null);
+            }}
+            onConfirm={() => {
+              const { characterId } = deleteTarget;
+              if (deletingRef.current === characterId) return;
+              deletingRef.current = characterId;
+              void library
+                .delete(characterId)
+                .then(outcome => {
+                  /*
+                   * `not-found` means it is already gone — a repeated confirm,
+                   * or a delete from another tab. The user asked for it to not
+                   * exist, and it does not, so that is success from here.
+                   */
+                  if (outcome.status !== "ok" && outcome.status !== "not-found") {
+                    setDeleteError("That character could not be deleted on this device. Nothing has been changed.");
+                    return;
+                  }
+                  setDeleteTarget(null);
+                  setDeleteError(null);
+                  // Whatever was open about that character is no longer a thing
+                  // that can be shown, so the app returns to the library.
+                  if (activeCharacterId === characterId) setActiveCharacterId(null);
+                  if (levelUpFor === characterId) setLevelUpFor(null);
+                  setBuilderDraftId(null);
+                  setView("characters");
+                  refresh();
+                })
+                .finally(() => {
+                  deletingRef.current = null;
+                });
+            }}
+          />
+        ) : null}
       </div>
       {sideways ? <PortraitGuard /> : null}
     </>
@@ -418,5 +473,64 @@ function RulesetChoice({
         Cancel
       </button>
     </section>
+  );
+}
+
+/**
+ * The one confirmation that stands between the menu and a permanent local
+ * delete.
+ *
+ * `alertdialog` because it interrupts to report a consequence, so the
+ * description is announced rather than only the title. Focus opens on Cancel:
+ * the destructive action must never be what a habitual Enter reaches, and
+ * Escape or Cancel returns focus to the control that opened the menu, which the
+ * Dialog primitive already restores.
+ *
+ * One explicit confirmation is the whole friction. Nothing here asks the user
+ * to retype the name — the product uses no such convention elsewhere, and
+ * inventing one here would be ceremony rather than safety.
+ */
+function DeleteCharacterDialog({
+  name,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  error: string | null;
+  onCancel(): void;
+  onConfirm(): void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const describedBy = useId();
+  return (
+    <Dialog
+      title={`Delete ${name}?`}
+      role="alertdialog"
+      describedBy={describedBy}
+      initialFocusRef={cancelRef}
+      onClose={onCancel}
+      footer={
+        <div className="m2-dialog-actions">
+          <button type="button" className="btn" ref={cancelRef} onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn danger" onClick={onConfirm}>
+            Delete character
+          </button>
+        </div>
+      }
+    >
+      <p id={describedBy}>
+        This permanently deletes <b>{name}</b> from this device, along with its build history, any unfinished edit and
+        its play state. Nothing is synchronised, so there is no copy elsewhere to restore from.
+      </p>
+      <p className="m2-muted">Your content packs, rulesets and other characters are not affected.</p>
+      {error ? (
+        <p className="m2-inline-issue" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </Dialog>
   );
 }

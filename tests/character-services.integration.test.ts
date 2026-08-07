@@ -86,7 +86,7 @@ describe("CharacterDraftService", () => {
     // No class is chosen yet, so no spell choices apply and that step is not in
     // the sequence. It appears if and when a spell-capable class is selected.
     expect(created.plan.steps.map(step => step.id)).toEqual([
-      "start", "class", "origin", "abilities", "class-choices", "equipment", "identity", "review",
+      "start", "class", "origin", "background", "abilities", "class-choices", "equipment", "identity", "review",
     ]);
     expect(created.plan.systemSummaries.find(summary => summary.id === "spellcasting")?.applicable).toBe(false);
     expect(created.plan.nextUnresolvedStepId).toBe("class");

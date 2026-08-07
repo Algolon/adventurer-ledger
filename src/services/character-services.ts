@@ -29,6 +29,7 @@ import {
   type BuilderStepId,
 } from "@/src/services/build-planner";
 import { reconcileAbilityAllocation } from "@/src/services/ability-allocation";
+import { changeBackground } from "@/src/services/background-change";
 import { draftBuildFromCharacter, type EditDraftRepairNote } from "@/src/services/edit-draft";
 import {
   applyRulesetChange,
@@ -467,16 +468,39 @@ async function reconcileOriginChange(
   patch: Readonly<Partial<CharacterDraftBuild>>,
   loadScope: () => Promise<{ entries: ContentEntry[] }>,
 ): Promise<CharacterDraftBuild> {
-  if ("abilityIncreases" in patch || "abilityScores" in patch) return merged;
+  const backgroundChanged = "backgroundId" in patch && patch.backgroundId !== previous.backgroundId;
   const changedOrigin = ORIGIN_OWNING_KEYS.some(key => key in patch && patch[key] !== previous[key]);
   if (!changedOrigin) return merged;
-  if (!Object.keys(merged.abilityIncreases).length) return merged;
 
   const { entries } = await loadScope();
-  const allocation = reconcileAbilityAllocation(merged, entries);
-  if (!allocation.invalid.length) return merged;
+  let next = merged;
+
+  /*
+   * A replaced background takes its own answers with it.
+   *
+   * Reconciling only the ability increases left the rest behind: the nested
+   * decisions the old background declared, and the equipment choices inside the
+   * kit it granted, stayed in the draft. The planner stopped reporting them
+   * because an unreachable choice is never walked — but they were still written
+   * and still committed. This prunes at the boundary that performs the write, so
+   * every route to a background change gets the same treatment, and the rest of
+   * the patch is re-applied on top so an explicit edit in the same command still
+   * wins.
+   *
+   * `changeBackground` is idempotent, and this only runs when the patch actually
+   * moves the background, so a repeated or replayed update cannot cascade.
+   */
+  if (backgroundChanged) next = { ...changeBackground(previous, patch.backgroundId, entries).build, ...patch };
+
+  // A patch that sets the allocation itself is left alone: that is the abilities
+  // step doing its own arithmetic, and second-guessing it would fight the edit.
+  if ("abilityIncreases" in patch || "abilityScores" in patch) return next;
+  if (!Object.keys(next.abilityIncreases).length) return next;
+
+  const allocation = reconcileAbilityAllocation(next, entries);
+  if (!allocation.invalid.length) return next;
   return {
-    ...merged,
+    ...next,
     abilityBaseScores: { ...allocation.base },
     abilityIncreases: { ...allocation.increases },
     abilityScores: { ...allocation.final },
@@ -1151,6 +1175,82 @@ export class CharacterLibraryService {
     this.log({ operation: archived ? "character.archive" : "character.unarchive", recordId: characterId });
     return outcome;
   }
+
+  /**
+   * Deletes a character and everything whose lifecycle it owns.
+   *
+   * The tables below are exactly those the schema keys by `characterId`, plus
+   * the drafts that name it in `editingCharacterId`. Ownership is read off the
+   * schema rather than assumed: a record is deleted because the character is
+   * the only thing that can reach it, which is why content packs, sources,
+   * entries, ruleset profiles, app preferences and every other character are
+   * absent from the list and stay untouched.
+   *
+   * It runs as one transaction. A local-first hard delete that half-succeeds
+   * would leave runtime state and version history pointing at a character that
+   * no longer exists, and nothing in the app would ever surface it again — so
+   * either all of it goes or none of it does.
+   *
+   * The returned counts are how the tests assert the cascade against real
+   * relationships instead of against a guess about them.
+   */
+  async delete(characterId: ID): Promise<ServiceOutcome<CharacterDeletionReceipt>> {
+    const { database, repositories } = this.context;
+    const outcome = await database.transaction(
+      "rw",
+      [
+        database.characters,
+        database.characterVersions,
+        database.characterSnapshots,
+        database.characterDrafts,
+        database.characterRuntimeStates,
+        database.characterActions,
+        database.characterOverrides,
+        database.characterDerivedSnapshots,
+        database.validationIssues,
+        database.overrideDecisions,
+      ],
+      async (): Promise<ServiceOutcome<CharacterDeletionReceipt>> => {
+        const character = await repositories.characters.get(characterId);
+        // A second delete of the same character is `not-found`, not a crash.
+        // The UI treats that as "already gone" and returns to the library.
+        if (!character) return notFound(characterId);
+
+        const removed: CharacterDeletionReceipt["removed"] = {
+          versions: await database.characterVersions.where("characterId").equals(characterId).delete(),
+          snapshots: await database.characterSnapshots.where("characterId").equals(characterId).delete(),
+          drafts: await database.characterDrafts.where("editingCharacterId").equals(characterId).delete(),
+          runtimeStates: await database.characterRuntimeStates.where("characterId").equals(characterId).delete(),
+          actions: await database.characterActions.where("characterId").equals(characterId).delete(),
+          overrides: await database.characterOverrides.where("characterId").equals(characterId).delete(),
+          derivedSnapshots: await database.characterDerivedSnapshots.where("characterId").equals(characterId).delete(),
+          validationIssues: await database.validationIssues.where("characterId").equals(characterId).delete(),
+          overrideDecisions: await database.overrideDecisions.where("characterId").equals(characterId).delete(),
+        };
+        await database.characters.delete(characterId);
+        return ok({ characterId, removed });
+      },
+    );
+    // The name is deliberately absent: a diagnostic identifies a record by ID.
+    this.log({ operation: "character.delete", recordId: characterId });
+    return outcome;
+  }
+}
+
+/** What a delete actually removed, per owned table. */
+export interface CharacterDeletionReceipt {
+  characterId: ID;
+  removed: {
+    versions: number;
+    snapshots: number;
+    drafts: number;
+    runtimeStates: number;
+    actions: number;
+    overrides: number;
+    derivedSnapshots: number;
+    validationIssues: number;
+    overrideDecisions: number;
+  };
 }
 
 export interface LibraryCard {

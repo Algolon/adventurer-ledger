@@ -66,7 +66,7 @@ async function buildToOrigin(page: Page, name: string) {
   await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
   await page.getByLabel("Create this character at level").selectOption("5");
   await next(page);
-  await expect(stepTitle(page)).toHaveText("Origin");
+  await expect(stepTitle(page)).toHaveText("Species");
   await page.getByRole("button", { name: /^Cairnfolk/ }).click();
   await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
   await page.getByRole("button", { name: /^Cairnlore/ }).click();
@@ -87,7 +87,7 @@ test.describe("reopening lands where the user left off", () => {
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: /Resume building/ }).click();
 
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
     await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("button", { name: /^Ferry Clerk/ })).toHaveAttribute("aria-pressed", "true");
   });
@@ -101,7 +101,7 @@ test.describe("reopening lands where the user left off", () => {
 
     // Deliberately go back to re-read something.
     await page.getByRole("button", { name: "Back" }).click();
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
     await settled(page);
 
     await page.reload();
@@ -109,7 +109,7 @@ test.describe("reopening lands where the user left off", () => {
     await page.getByRole("button", { name: /Resume building/ }).click();
 
     // The place the user chose, not the place the plan would prefer.
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
   });
 
   test("class and level survive a reload taken from a later step", async ({ page }) => {
@@ -155,7 +155,7 @@ test.describe("an action waiting on persistence cannot be double-submitted", () 
       });
 
     await expect(stepTitle(page)).toHaveText("Class & level");
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
   });
 
   test("pressing Finish twice creates exactly one character", async ({ page }) => {
@@ -258,7 +258,7 @@ test.describe("the primary nav is not a dead control while building", () => {
     // Nothing was lost: the draft is listed and resumes where it was left.
     await expect(page.getByText("Unfinished builds")).toBeVisible();
     await page.getByRole("button", { name: /Resume building/ }).click();
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
     await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
   });
 

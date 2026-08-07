@@ -17,7 +17,7 @@
  * and the commit writes that level directly.
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, CircleHelp, ListChecks, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ListChecks, TriangleAlert } from "lucide-react";
 import {
   BUILDER_STEPS,
   recommendationsFor,
@@ -27,6 +27,11 @@ import {
   type PlannedStep,
   type RequiredChoice,
 } from "@/src/services/build-planner";
+import { SPECIES_CATEGORIES } from "@/src/services/choice-planner";
+import { originIncreasePatternFor } from "@/src/services/ability-allocation";
+import { changeBackground } from "@/src/services/background-change";
+import { presentBackground, presentClass, presentSpecies } from "@/src/services/selection-presenter";
+import { ContentSelection, PendingDecisions } from "@/src/ui/content-selection";
 import { ABILITIES, type CharacterDraftBuild } from "@/src/domain/character-record";
 import type { Ability, ContentEntry } from "@/src/domain/model";
 import { RULESET_PRIVACY_LABELS, selectedEquipmentFor, standardArrayFor } from "@/src/services/content-scope";
@@ -37,9 +42,6 @@ import type { DraftSnapshot } from "@/src/services/character-services";
 import type { EditDraftRepairNote } from "@/src/services/edit-draft";
 import type { RulesetChangePreview } from "@/src/services/ruleset-change";
 import type { InstalledRulesetView } from "@/src/services/content-install-service";
-
-/** Origin categories the builder offers. `race` is the older spelling. */
-const ORIGIN_CATEGORIES = new Set<ContentEntry["category"]>(["species", "race"]);
 
 const ISSUE_LABELS: Record<string, string> = {
   CLASS_NOT_CHOSEN: "Choose a class",
@@ -1028,6 +1030,21 @@ function StepContent({
   // has already run rather than starting a second traversal on every render.
   const recommendations = presentation === "guided" ? recommendationsFor(step.id, build, entries, plan) : [];
 
+  /*
+   * The decisions this step owns.
+   *
+   * Ownership comes from the planner's typed activation routing — a choice is a
+   * species choice because a species route reached the entry that declares it —
+   * so this component never inspects a name to decide where something belongs.
+   * An empty list renders nothing at all, which is what keeps a species with no
+   * nested decision from showing a "Choices to make" heading with nothing under
+   * it.
+   */
+  const stepChoices = plan.requiredChoices.filter(choice => choice.stepId === step.id);
+  const outstanding = stepChoices.filter(choice => !choice.resolved).length;
+  const choicePanel = stepChoices.length ? <ChoiceList choices={stepChoices} onChange={onChange} /> : undefined;
+  const pending = <PendingDecisions outstanding={outstanding} total={stepChoices.length} />;
+
   switch (step.id) {
     case "start":
       return (
@@ -1044,11 +1061,16 @@ function StepContent({
     case "class":
       return (
         <div className="m2-step">
-          <OptionStep
+          <ContentSelection
             legend="Class"
-            options={entries.filter(entry => entry.category === "class").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
-            selected={build.manualSheet ? [] : build.classId ? [build.classId] : []}
+            intro="What this adventurer is, mechanically. This step explains the class and sets the starting level; its detailed decisions come later, on Class choices."
+            options={entries
+              .filter(entry => entry.category === "class")
+              .map(entry => presentClass(entry, entries, build.level))}
+            selectedId={build.manualSheet ? undefined : build.classId}
             recommendations={recommendations}
+            extra={<ClassPendingSummary plan={plan} build={build} />}
+            emptyMessage="This ruleset installs no class. Import a content pack that defines one."
             /*
              * A different class has a different subclass list, so the stored
              * subclass identity is dropped rather than left pointing elsewhere.
@@ -1100,31 +1122,78 @@ function StepContent({
         </div>
       );
 
+    /*
+     * Species. The storage ID is still `origin`, so a draft saved before the
+     * background moved to its own step resumes here unchanged.
+     */
     case "origin":
       return (
         <div className="m2-step">
-          <OptionStep
+          <ContentSelection
             legend="Species"
+            intro="What you are. Everything your species gives you — and any lineage or ancestry decision it asks for — is here."
             // `race` is the older category for the same decision. A ruleset that
             // still uses it must remain selectable, not silently offer nothing.
-            options={entries.filter(entry => ORIGIN_CATEGORIES.has(entry.category)).map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
-            selected={build.speciesId ? [build.speciesId] : []}
+            options={entries
+              .filter(entry => SPECIES_CATEGORIES.has(entry.category))
+              .map(entry => presentSpecies(entry, entries))}
+            selectedId={build.speciesId}
             recommendations={recommendations}
+            choices={choicePanel}
+            extra={pending}
+            emptyMessage="This ruleset installs no species. Import a content pack that defines one."
+            /*
+             * Only the identity changes. Selections made under the previous
+             * species stay in the draft keyed by their own choice IDs, where
+             * they are unreachable for the new species and waiting intact if
+             * the user changes back. Clearing them here would discard work that
+             * is not actually incompatible with anything.
+             */
             onSelect={id => onChange({ speciesId: id })}
           />
-          <OptionStep
+        </div>
+      );
+
+    /*
+     * Background. A new persistent step ID: a draft that predates it has simply
+     * never reached it, which is how every unvisited step already behaves.
+     */
+    case "background":
+      return (
+        <div className="m2-step">
+          <ContentSelection
             legend="Background"
-            options={entries.filter(entry => entry.category === "background").map(entry => ({ id: entry.id, label: entry.name, summary: entry.summary }))}
-            selected={build.backgroundId ? [build.backgroundId] : []}
+            intro="Where you came from. It sets your ability increases, an origin feat, proficiencies and your starting kit."
+            options={entries
+              .filter(entry => entry.category === "background")
+              .map(entry => presentBackground(entry, entries))}
+            selectedId={build.backgroundId}
             recommendations={recommendations}
-            onSelect={id => onChange({ backgroundId: id })}
+            choices={choicePanel}
+            extra={pending}
+            emptyMessage="This ruleset installs no background. Import a content pack that defines one."
+            /*
+             * Changing the background removes what the old one owned rather
+             * than leaving it unreachable in the draft: its nested answers, its
+             * equipment selections and any increase the incoming background
+             * does not authorise. Species, class, base scores and identity are
+             * not the background's to touch.
+             */
+            onSelect={id => onChange(current => changeBackground(current, id, entries).build)}
           />
-          <ChoiceGroups build={build} plan={plan} stepId="origin" onChange={onChange} />
         </div>
       );
 
     case "abilities":
-      return <AbilitiesStep build={build} entries={entries} recommendations={recommendations} onChange={onChange} />;
+      return (
+        <AbilitiesStep
+          build={build}
+          entries={entries}
+          allocation={plan.abilities}
+          recommendations={recommendations}
+          onChange={onChange}
+        />
+      );
 
     case "class-choices":
       return build.manualSheet ? (
@@ -1468,66 +1537,42 @@ function IdentityStep({
   );
 }
 
-function OptionStep({
-  legend,
-  options,
-  selected,
-  recommendations,
-  onSelect,
-  multiple,
+/** Toggles one option within a choice, honouring its own min/max. */
+const toggleChoice =
+  (onChange: (patch: DraftPatch) => void) => (choiceId: string, optionId: string, max: number) =>
+    onChange(current => {
+      const existing = current.choiceSelections[choiceId] ?? [];
+      const next = existing.includes(optionId)
+        ? existing.filter(item => item !== optionId)
+        : max === 1
+          ? [optionId]
+          : [...existing, optionId].slice(-max);
+      return { choiceSelections: { ...current.choiceSelections, [choiceId]: next } };
+    });
+
+/**
+ * A list of already-filtered decisions.
+ *
+ * The caller decides which choices belong here and whether there are any at
+ * all, so this renders nothing of its own when the list is empty rather than
+ * announcing an absence. On Species and Background it is rendered inside the
+ * selected option, which is the thing that produced the decisions.
+ */
+function ChoiceList({
+  choices,
+  onChange,
 }: {
-  legend: string;
-  options: readonly { id: string; label: string; summary?: string }[];
-  selected: readonly string[];
-  recommendations: readonly { optionId: string; why: string }[];
-  onSelect(id: string): void;
-  multiple?: boolean;
+  choices: readonly RequiredChoice[];
+  onChange(patch: DraftPatch): void;
 }) {
-  const [explaining, setExplaining] = useState<string | null>(null);
+  if (!choices.length) return null;
+  const toggle = toggleChoice(onChange);
   return (
-    <fieldset className="m2-fieldset">
-      <legend>{legend}</legend>
-      <ul className="m2-options">
-        {options.map(option => {
-          const recommendation = recommendations.find(item => item.optionId === option.id);
-          const isSelected = selected.includes(option.id);
-          return (
-            <li key={option.id}>
-              <button
-                type="button"
-                className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
-                aria-pressed={isSelected}
-                onClick={() => onSelect(option.id)}
-              >
-                <span className="m2-option-mark" aria-hidden="true">
-                  {isSelected ? <Check /> : multiple ? "＋" : "○"}
-                </span>
-                <span>
-                  <b>{option.label}</b>
-                  {option.summary ? <small>{option.summary}</small> : null}
-                </span>
-                {recommendation ? <span className="m2-badge m2-badge-recommended">Recommended</span> : null}
-              </button>
-              {recommendation ? (
-                <>
-                  <button
-                    type="button"
-                    className="m2-why"
-                    aria-expanded={explaining === option.id}
-                    onClick={() => setExplaining(explaining === option.id ? null : option.id)}
-                  >
-                    <CircleHelp aria-hidden="true" />
-                    Why this?
-                    <span className="m2-visually-hidden"> {option.label}</span>
-                  </button>
-                  {explaining === option.id ? <p className="m2-why-copy">{recommendation.why}</p> : null}
-                </>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-    </fieldset>
+    <div className="m2-step">
+      {choices.map(choice => (
+        <ChoiceGroup key={choice.choiceId} choice={choice} onToggle={toggle} />
+      ))}
+    </div>
   );
 }
 
@@ -1544,24 +1589,32 @@ function ChoiceGroups({
 }) {
   const groups = plan.requiredChoices.filter(choice => choice.stepId === stepId);
   if (!groups.length) return <p className="m2-muted">No choices are required here yet.</p>;
+  return <ChoiceList choices={groups} onChange={onChange} />;
+}
 
-  const toggle = (choiceId: string, optionId: string, max: number) =>
-    onChange(current => {
-      const existing = current.choiceSelections[choiceId] ?? [];
-      const next = existing.includes(optionId)
-        ? existing.filter(item => item !== optionId)
-        : max === 1
-          ? [optionId]
-          : [...existing, optionId].slice(-max);
-      return { choiceSelections: { ...current.choiceSelections, [choiceId]: next } };
-    });
-
+/**
+ * How much the selected class will still ask for, stated on the class screen.
+ *
+ * The class step explains the class; it does not present the class's decisions.
+ * Saying how many there are — and naming the subclass as one of them when the
+ * level has reached it — is what stops "Class choices" later being a surprise.
+ */
+function ClassPendingSummary({ plan, build }: { plan: DraftSnapshot["plan"]; build: CharacterDraftBuild }) {
+  if (!build.classId) return null;
+  const owned = plan.requiredChoices.filter(choice => choice.stepId === "class-choices");
+  const subclassDue = Boolean(plan.subclass?.reached && plan.subclass.options.length);
+  const total = owned.length + (subclassDue ? 1 : 0);
+  if (!total) return null;
+  const outstanding = owned.filter(choice => !choice.resolved).length + (plan.subclass?.unresolved ? 1 : 0);
   return (
-    <div className="m2-step">
-      {groups.map(choice => (
-        <ChoiceGroup key={choice.choiceId} choice={choice} onToggle={toggle} />
-      ))}
-    </div>
+    <section className="m2-select-section">
+      <h4>Decisions this class will ask for</h4>
+      <p className="m2-muted">
+        {total} {total === 1 ? "decision" : "decisions"} on Class choices
+        {subclassDue ? ", including its subclass" : ""}.
+        {outstanding ? ` ${outstanding} still open.` : " All of them are already answered."}
+      </p>
+    </section>
   );
 }
 
@@ -1653,19 +1706,36 @@ function ChoiceGroup({
 function AbilitiesStep({
   build,
   entries,
+  allocation,
   recommendations,
   onChange,
 }: {
   build: CharacterDraftBuild;
   entries: readonly ContentEntry[];
+  allocation: DraftSnapshot["plan"]["abilities"];
   recommendations: readonly { optionId: string; why: string }[];
   onChange(patch: DraftPatch): void;
 }) {
-  const background = build.backgroundId ? entries.find(entry => entry.id === build.backgroundId) : undefined;
-  const choices = (background?.mechanics as { abilityScoreChoices?: { abilities?: string[]; increasePattern?: number[] } } | undefined)
-    ?.abilityScoreChoices;
-  const allowed = (choices?.abilities ?? []) as Ability[];
-  const pattern = choices?.increasePattern ?? [];
+  /*
+   * The origin's declared allowance, read through the same typed selector the
+   * planner uses. Reading the raw mechanics here instead is how the two ended up
+   * disagreeing about what was legal.
+   */
+  const origin = originIncreasePatternFor(build, entries);
+  const allowed = origin?.abilities ?? [];
+  const distributions = origin?.patterns ?? [];
+
+  /*
+   * Which distribution the user is working in.
+   *
+   * It is not stored: the allocation itself says which one it fits, so a
+   * reopened draft infers it rather than trusting a separate field that could
+   * disagree with the increases beside it. Local state exists only so that
+   * choosing a distribution before placing anything into it holds on screen.
+   */
+  const [chosenPattern, setChosenPattern] = useState<number | undefined>(undefined);
+  const patternIndex = chosenPattern ?? allocation.activePatternIndex ?? 0;
+  const pattern = distributions[patternIndex] ?? [];
 
   const withTotals = (base: Partial<Record<Ability, number>>, increases: Partial<Record<Ability, number>>) => {
     const final: Partial<Record<Ability, number>> = {};
@@ -1684,45 +1754,133 @@ function AbilitiesStep({
       return withTotals(base, current.abilityIncreases);
     });
 
-  /**
-   * Increases are stored keyed by ability, so each slot is identified by its
-   * amount. The accepted origin pattern is +2/+1, whose amounts are distinct; a
-   * future pattern with repeated amounts would need a slot-keyed draft field.
+  /*
+   * Slots are addressed by position, not by amount.
+   *
+   * Increases are stored keyed by ability — each ability may hold one — which
+   * represents +1/+1/+1 perfectly well but says nothing about which slot is
+   * which. Addressing a slot by its amount worked only while every amount in a
+   * distribution was distinct, and silently collapsed the moment one repeated.
+   * Reading the stored increases back into slots in canonical ability order is
+   * deterministic, and for repeated amounts the slot a placement lands in does
+   * not matter: +1 to three abilities is the same allocation however it is
+   * labelled.
    */
-  const increaseIn = (source: Readonly<Partial<Record<Ability, number>>>, amount: number) =>
-    (Object.entries(source).find(([, value]) => value === amount)?.[0] as Ability | undefined);
-  const increaseFor = (amount: number) => increaseIn(build.abilityIncreases, amount);
+  const slotAbilities = (source: Readonly<Partial<Record<Ability, number>>>): (Ability | undefined)[] => {
+    const holders = new Map<number, Ability[]>();
+    for (const ability of ABILITIES) {
+      const value = source[ability];
+      if (typeof value !== "number") continue;
+      holders.set(value, [...(holders.get(value) ?? []), ability]);
+    }
+    const taken = new Map<number, number>();
+    return pattern.map(amount => {
+      const index = taken.get(amount) ?? 0;
+      taken.set(amount, index + 1);
+      return (holders.get(amount) ?? [])[index];
+    });
+  };
 
-  const setIncrease = (amount: number, ability: Ability | undefined) =>
+  const setIncrease = (slot: number, ability: Ability | undefined) =>
     onChange(current => {
+      const assigned = slotAbilities(current.abilityIncreases);
+      assigned[slot] = ability;
       const increases: Partial<Record<Ability, number>> = {};
-      for (const patternAmount of pattern) {
-        const target = patternAmount === amount ? ability : increaseIn(current.abilityIncreases, patternAmount);
-        if (target) increases[target] = patternAmount;
+      for (const [index, amount] of pattern.entries()) {
+        const target = assigned[index];
+        // One ability holds at most one increase, so a repeat clears the older
+        // slot rather than overwriting a score twice.
+        if (target && increases[target] === undefined) increases[target] = amount;
       }
       return withTotals(current.abilityBaseScores, increases);
     });
+
+  /** Switching distribution keeps only what the incoming one can still hold. */
+  const selectPattern = (index: number) => {
+    setChosenPattern(index);
+    const incoming = distributions[index] ?? [];
+    onChange(current => {
+      const remaining = [...incoming];
+      const increases: Partial<Record<Ability, number>> = {};
+      for (const ability of ABILITIES) {
+        const amount = current.abilityIncreases[ability];
+        if (typeof amount !== "number") continue;
+        const slot = remaining.indexOf(amount);
+        if (slot < 0) continue;
+        remaining.splice(slot, 1);
+        increases[ability] = amount;
+      }
+      return withTotals(current.abilityBaseScores, increases);
+    });
+  };
+
+  /** "+2 and +1 to two abilities" — the shape, in a player's words. */
+  const describePattern = (amounts: readonly number[]) => {
+    const counts = ["one", "two", "three", "four", "five", "six"];
+    const spread = counts[amounts.length - 1] ?? String(amounts.length);
+    const unique = [...new Set(amounts)];
+    return unique.length === 1
+      ? `+${unique[0]} to ${spread} abilities`
+      : `${amounts.map(amount => `+${amount}`).join(" and ")} across ${spread} abilities`;
+  };
 
   const remaining = remainingArraySlots(
     standardArrayFor(entries) ?? [],
     ABILITIES.map(ability => build.abilityBaseScores[ability]),
   );
 
+  const assigned = slotAbilities(build.abilityIncreases);
   const originIncreases =
     pattern.length ? (
       <fieldset className="m2-fieldset">
         <legend>Origin increases</legend>
         <p className="m2-muted">
+          {origin ? `From ${origin.sourceLabel}. ` : ""}
           These are added on top of the base scores, whichever method produced them. Base + origin = final.
         </p>
+
+        {/*
+         * Some origins allow more than one way to spend the same allowance.
+         * It is offered as a plain choice between shapes rather than as a
+         * pattern index or a slot vector, and it appears only when the content
+         * actually declares an alternative.
+         */}
+        {distributions.length > 1 ? (
+          <div className="m2-field">
+            <span id="increase-shape-label">How to spend it</span>
+            <ul className="m2-options" role="group" aria-labelledby="increase-shape-label">
+              {distributions.map((amounts, index) => {
+                const isSelected = index === patternIndex;
+                return (
+                  <li key={describePattern(amounts)}>
+                    <button
+                      type="button"
+                      className={isSelected ? "m2-option m2-option-selected" : "m2-option"}
+                      aria-pressed={isSelected}
+                      onClick={() => selectPattern(index)}
+                    >
+                      <span className="m2-option-mark" aria-hidden="true">
+                        {isSelected ? <Check /> : "○"}
+                      </span>
+                      <span>
+                        <b>{describePattern(amounts)}</b>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
+
         <div className="m2-ability-grid">
-          {pattern.map(amount => (
-            <label key={amount} className="m2-field" htmlFor={`increase-${amount}`}>
+          {pattern.map((amount, slot) => (
+            <label key={`slot-${slot}`} className="m2-field" htmlFor={`increase-slot-${slot}`}>
               <span>+{amount} to</span>
               <select
-                id={`increase-${amount}`}
-                value={increaseFor(amount) ?? ""}
-                onChange={event => setIncrease(amount, event.target.value ? (event.target.value as Ability) : undefined)}
+                id={`increase-slot-${slot}`}
+                value={assigned[slot] ?? ""}
+                onChange={event => setIncrease(slot, event.target.value ? (event.target.value as Ability) : undefined)}
               >
                 <option value="">—</option>
                 {allowed.map(ability => (
