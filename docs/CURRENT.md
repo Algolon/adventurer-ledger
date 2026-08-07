@@ -294,6 +294,25 @@ dependencies join it only through a typed mechanism. Reusing an installed source
 ID can no longer widen an existing profile. Profiles written earlier keep source
 scoping and resolve exactly as they did.
 
+**That membership follows the pack when the pack is updated.** `allowedEntryIds`
+used to be written once, at install, so updating a pack from 3 entries to 5 left
+its profile scoped to the original 3: the new entries were installed and no
+ruleset reached them. The import transaction now advances the existing profile
+for every written pack — same profile ID, same `createdAt`, same name, same
+policies and exclusions, `updatedAt` moved only when the membership genuinely
+changed — and reports it as `updatedRulesetIds` rather than creating a second
+ruleset. Because it runs inside the import's own transaction, a rolled-back
+import rolls the membership back with the content.
+
+**A device that already took the newer pack repairs itself.**
+`reconcileInstalledRulesets` compares each installed pack with the profile that
+pack owns and replaces only stale pack-owned membership; `inspectInstalledRulesets`
+runs it when Settings → Rulesets loads. Nothing is reinstalled, downgraded or
+deleted, no character reference moves, and the active ruleset is untouched. It is
+deliberately narrow: only a profile with an explicit membership that exactly one
+installed pack can claim is touched, membership comes from that pack's own
+entries plus its resolved declared dependencies, and a second run is a no-op.
+
 **Profile IDs keep the whole pack ID.** `rulesetIdForPack` stripped a leading
 `pack:`, so `pack:x` and `x` collided on one profile. It no longer strips;
 `legacyRulesetIdsForPack` reports the earlier derivation and the install boundary

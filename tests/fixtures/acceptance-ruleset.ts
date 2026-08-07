@@ -834,6 +834,51 @@ export function acceptancePack(): ContentPackDocument {
 /** The pack as one JSON document, for the import pipeline. */
 export const acceptancePackJson = () => JSON.stringify(acceptancePack());
 
+/** The two original entries a later version of the acceptance pack adds. */
+export const ACCEPTANCE_ADDED_IDS = {
+  species: "species:eb-reedfolk",
+  feat: "feat:eb-reedwise",
+} as const;
+
+/**
+ * The acceptance pack one version on, with two new entries and nothing else
+ * touched.
+ *
+ * Every original entry is restated at its existing revision, so the import is
+ * additive: two added, none updated, the rest unchanged. It exists so a test can
+ * ask what happens to an already-installed ruleset — and to the characters built
+ * against it — when the pack behind it grows.
+ */
+export function acceptancePackWithAddition(version = "1.1.0"): ContentPackDocument {
+  const document = acceptancePack();
+  return contentPackSchema.parse({
+    ...document,
+    pack: { ...document.pack, version },
+    entries: [
+      ...document.entries,
+      entry({
+        id: ACCEPTANCE_ADDED_IDS.species,
+        slug: "eb-reedfolk",
+        name: "Reedfolk",
+        category: "species",
+        summary: "Raised in the reed channels below the crossing.",
+        mechanics: { creatureType: "humanoid", sizeChoices: ["medium"], speed: 30, traitIds: [], lineageIds: [] },
+      }),
+      entry({
+        id: ACCEPTANCE_ADDED_IDS.feat,
+        slug: "eb-reedwise",
+        name: "Reedwise",
+        category: "feat",
+        summary: "You read standing water the way others read a road.",
+        mechanics: { category: "general", repeatable: false },
+      }),
+    ],
+  });
+}
+
+export const acceptancePackWithAdditionJson = (version = "1.1.0") =>
+  JSON.stringify(acceptancePackWithAddition(version));
+
 export const COLLISION_PACK_ID = "pack:emberline-collision";
 export const COLLISION_CLASS_ID = "class:eb-tollkeeper";
 

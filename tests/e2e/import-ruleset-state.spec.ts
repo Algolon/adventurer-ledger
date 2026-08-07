@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { acceptancePack } from "@/tests/fixtures/acceptance-ruleset";
+import { acceptancePack, acceptancePackWithAddition } from "@/tests/fixtures/acceptance-ruleset";
 
 /**
  * Importing content leaves one unambiguous state, and says which one.
@@ -178,5 +178,60 @@ test.describe("higher installed entry revisions are reported precisely", () => {
     await page.getByRole("button", { name: "Rulesets" }).click();
     await expect(page.getByRole("heading", { name: "Emberline acceptance slice" })).toBeVisible();
     await expect(page.getByText(/creation levels 1 to 5/)).toBeVisible();
+  });
+});
+
+/**
+ * The reported defect, end to end.
+ *
+ * A pack was updated and grew; the ruleset built from it kept the membership it
+ * was created with, so Settings went on reporting the old entry count and New
+ * character went on offering the old origins. The update is the only user action
+ * here: no reinstall, no second ruleset and no reload.
+ */
+test.describe("updating an installed pack makes its new content reachable", () => {
+  test("raises the ruleset's entry count and offers the new origin", async ({ page }) => {
+    const before = acceptancePack().entries.length;
+    const after = acceptancePackWithAddition().entries.length;
+    expect(after).toBe(before + 2);
+
+    await page.goto(APP_ROOT);
+    await openImports(page);
+    await install(page, packJson());
+
+    await page.getByRole("button", { name: "Back to Settings" }).click();
+    await page.getByRole("button", { name: "Rulesets" }).click();
+    await expect(page.getByText(new RegExp(`${before} entries`))).toBeVisible();
+
+    await page.getByRole("button", { name: "Back to Settings" }).click();
+    await page.getByRole("button", { name: "Imports and exports" }).click();
+    await preview(page, JSON.stringify(acceptancePackWithAddition()));
+
+    // An update, and the existing ruleset is named as what will advance.
+    await expect(page.getByRole("heading", { name: "Ready to update" })).toBeVisible();
+    await expect(page.getByText(new RegExp(`will be updated to activate all ${after} entries`))).toBeVisible();
+    await page.getByRole("button", { name: "Confirm atomic import" }).click();
+    await expect(page.getByText(/existing ruleset\(s\) updated/)).toBeVisible();
+
+    // One ruleset, at the new size.
+    await page.getByRole("button", { name: "Back to Settings" }).click();
+    await page.getByRole("button", { name: "Rulesets" }).click();
+    await expect(page.getByRole("heading", { name: "Emberline acceptance slice" })).toHaveCount(1);
+    await expect(page.getByText(new RegExp(`${after} entries`))).toBeVisible();
+
+    // And the origin that only exists in the new version is offered in the
+    // builder, which is where the defect was actually noticed.
+    await page.getByRole("button", { name: "Characters", exact: true }).click();
+    await page.getByRole("button", { name: "New character" }).last().click();
+    await expect(page.getByText(/^Step 1 of/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Emberline acceptance slice/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.getByLabel("Character name", { exact: true }).fill("Sedge Marrick");
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
+    await expect(page.getByRole("button", { name: /^Reedfolk/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toBeVisible();
   });
 });
