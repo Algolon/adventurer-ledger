@@ -253,8 +253,17 @@
   white-space: nowrap;
 }
 
+/*
+ * The single track is stated rather than implied.
+ *
+ * A grid container with no declared columns sizes its implicit track to the
+ * widest child's min-content contribution, so one child asking for
+ * `max-content` silently sets the width of the whole card. `minmax(0, 1fr)`
+ * means no child can ever do that again.
+ */
 .storage-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   padding: 22px;
 }
@@ -292,10 +301,23 @@
   font-weight: 750;
 }
 
+/*
+ * `width: max-content` here was the actual cause of a 320 px overflow.
+ *
+ * It made the button as wide as its unwrapped label, which set the card's
+ * implicit track, which set the page width. `max-width: 100%` did not save it:
+ * the percentage resolves against the very track the button had just widened.
+ * Whether the document overflowed then came down to font metrics — the label
+ * measured 268.6 px against 248 px of room on macOS and stayed inside the
+ * viewport by 14 px, while the wider Linux fallback font pushed it out. The
+ * button now takes the track it is given and wraps its label instead.
+ */
 .storage-card .btn {
-  width: max-content;
+  justify-self: start;
   max-width: 100%;
   min-height: 44px;
+  white-space: normal;
+  text-align: center;
 }
 
 .storage-warning {
