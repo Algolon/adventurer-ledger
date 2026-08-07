@@ -163,6 +163,106 @@ export function rulesetProfileFrom(proposal: RulesetProposal, now: string): Rule
   };
 }
 
+/**
+ * What an installed pack's existing profile should hold today.
+ *
+ * A profile's membership is written once, at install. An update to the same pack
+ * used to leave it exactly as it was, so a pack that grew from 3 entries to 5
+ * kept a profile scoped to the original 3: the new entries were installed and
+ * unreachable, and every character resolved against that profile still saw the
+ * old content. This expresses the correction as a value, so the same rule
+ * applies whether it runs inside an import transaction or as a later repair.
+ *
+ * `undefined` means the profile is not one this derivation owns the membership
+ * of: a profile with no explicit `allowedEntryIds` is scoped by source and
+ * already sees a pack's new entries, and rewriting it to an explicit set would
+ * *narrow* it rather than repair it.
+ */
+export interface RulesetMembershipUpdate {
+  /** The profile as it should now read. Identical to the input when unchanged. */
+  profile: RulesetProfile;
+  changed: boolean;
+  addedEntryIds: readonly ID[];
+  removedEntryIds: readonly ID[];
+}
+
+/** Order-insensitive comparison of two already-sorted ID lists. */
+const sameIds = (left: readonly ID[], right: readonly ID[]) =>
+  left.length === right.length && left.every((id, index) => id === right[index]);
+
+/**
+ * Advances an existing profile's pack-owned membership to the proposal.
+ *
+ * Everything that makes the profile *that* profile is kept: its ID, its name,
+ * `createdAt`, every policy field, and any `disallowedEntryIds` a user chose.
+ * Only the three derived fields the pack owns — its entry membership, the
+ * sources that membership spans and the categories it covers — are replaced,
+ * and `updatedAt` moves only when one of them genuinely differs. Membership is
+ * taken from the proposal alone, so nothing joins by sharing a source ID and
+ * nothing is matched by name.
+ */
+export function reconcileRulesetMembership(
+  existing: RulesetProfile,
+  proposal: RulesetProposal,
+  now: string,
+): RulesetMembershipUpdate | undefined {
+  if (!existing.allowedEntryIds?.length) return undefined;
+  const entryIds = [...proposal.activeEntryIds];
+  const sourceIds = [...proposal.activeSourceIds];
+  const categories = [...proposal.allowedCategories];
+  const currentEntryIds = [...existing.allowedEntryIds].sort();
+  const next = new Set(entryIds);
+  const current = new Set(currentEntryIds);
+  const addedEntryIds = entryIds.filter(id => !current.has(id));
+  const removedEntryIds = currentEntryIds.filter(id => !next.has(id));
+  const changed =
+    addedEntryIds.length > 0 ||
+    removedEntryIds.length > 0 ||
+    !sameIds([...existing.activeSourceIds].sort(), sourceIds) ||
+    !sameIds([...existing.allowedCategories].sort(), categories);
+  return {
+    profile: changed
+      ? {
+          ...existing,
+          activeSourceIds: sourceIds,
+          allowedEntryIds: entryIds,
+          allowedCategories: categories,
+          updatedAt: now,
+        }
+      : existing,
+    changed,
+    addedEntryIds,
+    removedEntryIds,
+  };
+}
+
+/**
+ * The profile IDs each installed pack unambiguously owns.
+ *
+ * A pack maps to its current profile ID and, for compatibility, to the ID an
+ * earlier derivation produced. That earlier derivation was not injective: it
+ * stripped a `pack:` prefix, so `pack:x` and `x` collapsed onto one profile ID.
+ * A profile claimed by two installed packs therefore cannot be attributed to
+ * either, and repairing its membership from one of them could rewrite the
+ * profile a character built from the other resolves against. Those are left
+ * alone; only a profile ID exactly one installed pack can claim is owned.
+ */
+export function rulesetProfileOwnership(packIds: readonly ID[]): Map<ID, ID> {
+  const claims = new Map<ID, Set<ID>>();
+  for (const packId of packIds)
+    for (const profileId of rulesetIdCandidatesForPack(packId)) {
+      const owners = claims.get(profileId) ?? new Set<ID>();
+      owners.add(packId);
+      claims.set(profileId, owners);
+    }
+  const owned = new Map<ID, ID>();
+  for (const [profileId, owners] of claims) {
+    if (owners.size !== 1) continue;
+    for (const packId of owners) owned.set(profileId, packId);
+  }
+  return owned;
+}
+
 export interface InstalledRulesetView {
   id: ID;
   name: string;

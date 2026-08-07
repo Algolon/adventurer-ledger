@@ -44,10 +44,17 @@ async function importPack(page: Page, json: string, { createRuleset }: { createR
   await page.getByLabel("Pack JSON").fill(json);
   await page.getByRole("button", { name: "Preview import" }).click();
   await expect(page.getByRole("heading", { name: "Ready to import" })).toBeVisible();
-  if (createRuleset)
-    await page
-      .getByLabel("Create a ruleset profile so this content can be selected in the builder")
-      .check();
+  /*
+   * The offer is checked by default, so "do not create a ruleset" has to be
+   * expressed rather than assumed. It used not to matter for a pack whose only
+   * route to usability is an installed dependency, because the offer was not
+   * rendered at all for it — now that a preview resolves a declared dependency
+   * from the device as well as from the set, it is, and the helper says which it
+   * wants either way.
+   */
+  const offer = page.getByLabel("Create a ruleset profile so this content can be selected in the builder");
+  if (createRuleset) await offer.check();
+  else if (await offer.count()) await offer.uncheck();
   await page.getByRole("button", { name: "Confirm atomic import" }).click();
   await expect(page.getByText(/Import completed atomically/)).toBeVisible();
 }
