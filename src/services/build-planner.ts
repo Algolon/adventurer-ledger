@@ -53,6 +53,11 @@ import {
   type ProficiencySource,
 } from "@/src/services/proficiency-planner";
 import { createPlanningIndex, type PlanningIndex } from "@/src/services/planning-context";
+import {
+  EMPTY_SPELL_AVAILABILITY,
+  planSpellAvailability,
+  type SpellAvailability,
+} from "@/src/services/spell-availability";
 import { BUILDER_STEPS, type BuilderStepId } from "@/src/services/builder-steps";
 import type { ServiceIssue } from "@/src/services/contracts";
 
@@ -185,6 +190,15 @@ export interface BuildPlan {
   proficiencies: ProficiencyPlan;
   /** Granted equipment, attributed to the entry that grants it. */
   equipmentGrants: readonly EquipmentGrantView[];
+  /**
+   * The spells this build can reach, and how.
+   *
+   * The domain a later spell selection draws from, not a set of decisions: every
+   * row states whether it is already known, and reaching a spell list never
+   * makes one so. Empty for a build that reaches no list and is granted no
+   * spell, which is every non-caster.
+   */
+  spellAvailability: SpellAvailability;
   /** Highest starting level the installed content honestly supports. */
   maxLevel: number;
   /** False when the class defines no progression row for the draft's level. */
@@ -497,6 +511,15 @@ export function planBuild(
   const equipmentGrants = manualSheet ? [] : equipmentGrantsForBuild(build, entries, activation);
   const equipmentChoices = manualSheet ? [] : requiredEquipmentChoices(build, entries, activation);
   const hasSpells = classHasSpells(build, entries);
+  /*
+   * The spell domain this build draws from, expanded once for the pass.
+   *
+   * A manual sheet declares its own numbers and reaches no ruleset content, so
+   * it gets none — the same rule the equipment and choice layers above follow.
+   */
+  const spellAvailability = manualSheet
+    ? EMPTY_SPELL_AVAILABILITY
+    : planSpellAvailability(activation, entries, build);
 
   const stepIssues: Record<BuilderStepId, ServiceIssue[]> = {
     start: [],
@@ -687,6 +710,7 @@ export function planBuild(
     ...(activation.subclass ? { subclass: activation.subclass } : {}),
     proficiencies,
     equipmentGrants,
+    spellAvailability,
     maxLevel: maxSupportedLevel(entries, build.classId),
     levelCovered: activation.levelCovered,
     levelCoverage: activation.levelCoverage,

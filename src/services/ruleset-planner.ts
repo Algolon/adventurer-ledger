@@ -173,10 +173,10 @@ export function rulesetProfileFrom(proposal: RulesetProposal, now: string): Rule
  * old content. This expresses the correction as a value, so the same rule
  * applies whether it runs inside an import transaction or as a later repair.
  *
- * `undefined` means the profile is not one this derivation owns the membership
- * of: a profile with no explicit `allowedEntryIds` is scoped by source and
- * already sees a pack's new entries, and rewriting it to an explicit set would
- * *narrow* it rather than repair it.
+ * A profile with no explicit `allowedEntryIds` is scoped by source, so it
+ * already sees a pack's new entries and must never be rewritten to an explicit
+ * set — that would *narrow* it rather than repair it. It is not left untouched,
+ * though: see `advanceScopeOnly` below.
  */
 export interface RulesetMembershipUpdate {
   /** The profile as it should now read. Identical to the input when unchanged. */
@@ -184,6 +184,8 @@ export interface RulesetMembershipUpdate {
   changed: boolean;
   addedEntryIds: readonly ID[];
   removedEntryIds: readonly ID[];
+  /** Categories the profile did not previously reach and now does. */
+  addedCategories: readonly Category[];
 }
 
 /** Order-insensitive comparison of two already-sorted ID lists. */
@@ -206,15 +208,17 @@ export function reconcileRulesetMembership(
   proposal: RulesetProposal,
   now: string,
 ): RulesetMembershipUpdate | undefined {
-  if (!existing.allowedEntryIds?.length) return undefined;
+  if (!existing.allowedEntryIds?.length) return advanceScopeOnly(existing, proposal, now);
   const entryIds = [...proposal.activeEntryIds];
   const sourceIds = [...proposal.activeSourceIds];
   const categories = [...proposal.allowedCategories];
   const currentEntryIds = [...existing.allowedEntryIds].sort();
   const next = new Set(entryIds);
   const current = new Set(currentEntryIds);
+  const currentCategories = new Set(existing.allowedCategories);
   const addedEntryIds = entryIds.filter(id => !current.has(id));
   const removedEntryIds = currentEntryIds.filter(id => !next.has(id));
+  const addedCategories = categories.filter(category => !currentCategories.has(category));
   const changed =
     addedEntryIds.length > 0 ||
     removedEntryIds.length > 0 ||
@@ -233,6 +237,74 @@ export function reconcileRulesetMembership(
     changed,
     addedEntryIds,
     removedEntryIds,
+    addedCategories,
+  };
+}
+
+/**
+ * A source-scoped profile, widened to what its pack now ships.
+ *
+ * These are profiles written before explicit membership existed. Their contract
+ * is "everything published against these sources", and a pack update that only
+ * adds entries is therefore already inside their scope — with one exception that
+ * made content installed and unreachable at the same time.
+ *
+ * `allowedCategories` is a second filter, applied after source membership, and
+ * it was frozen at the categories the pack shipped on the day the profile was
+ * written. A pack that later starts shipping a category it never had — a spell,
+ * a rule, anything — installs entries the profile's sources match and its
+ * category list rejects. The import reports success, the entries are on the
+ * device, and nothing can see them.
+ *
+ * The correction is deliberately the smallest one that holds:
+ *
+ *  - **Union, never replace.** A source-scoped profile reaches more than its
+ *    pack, so a category the pack has dropped may still be the only way some
+ *    other installed entry is reachable. Removing it would narrow a profile
+ *    under the guise of repairing it.
+ *  - **An empty list stays empty.** No categories means no category filter at
+ *    all. Filling it in would impose a restriction where the profile has
+ *    deliberately declined to have one.
+ *  - **No `allowedEntryIds` is written.** Converting source scope into an
+ *    explicit entry set would replace "everything from these sources" with a
+ *    snapshot, quietly dropping every entry the profile currently reaches
+ *    through a source but not through this pack.
+ *
+ * Sources move by the same union rule, so a pack that grows into a second source
+ * of its own stays reachable rather than becoming the next version of this bug.
+ */
+function advanceScopeOnly(
+  existing: RulesetProfile,
+  proposal: RulesetProposal,
+  now: string,
+): RulesetMembershipUpdate {
+  const unchanged = {
+    profile: existing,
+    changed: false,
+    addedEntryIds: [],
+    removedEntryIds: [],
+    addedCategories: [],
+  } as const;
+  // No filter is not the same as an empty filter; leave it alone.
+  if (!existing.allowedCategories.length) return unchanged;
+
+  const currentCategories = new Set(existing.allowedCategories);
+  const addedCategories = proposal.allowedCategories.filter(category => !currentCategories.has(category));
+  const currentSources = new Set(existing.activeSourceIds);
+  const addedSourceIds = proposal.activeSourceIds.filter(sourceId => !currentSources.has(sourceId));
+  if (!addedCategories.length && !addedSourceIds.length) return unchanged;
+
+  return {
+    profile: {
+      ...existing,
+      activeSourceIds: [...existing.activeSourceIds, ...addedSourceIds],
+      allowedCategories: [...existing.allowedCategories, ...addedCategories],
+      updatedAt: now,
+    },
+    changed: true,
+    addedEntryIds: [],
+    removedEntryIds: [],
+    addedCategories,
   };
 }
 
