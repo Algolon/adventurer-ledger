@@ -185,9 +185,12 @@ After deployment, on a real Android phone:
    and confirm the name is still there afterwards.
 7. Confirm the app bar clears the status bar and the bottom bar clears the home
    indicator or gesture bar, with no content trapped under either.
-8. Overscroll the top and bottom of a long sheet and confirm no light band
+8. Open Settings from the bottom bar, then use the system Back gesture. Expect to
+   return to the screen Settings was opened from, still inside Runefolio. Repeat
+   from Compendium and from an open build.
+9. Overscroll the top and bottom of a long sheet and confirm no light band
    appears.
-9. Repeat 2–5 on iOS Safari's "Add to Home Screen", where the lock API is absent
-   and the guard is the only layer in force.
+10. Repeat 2–5 on iOS Safari's "Add to Home Screen", where the lock API is absent
+    and the guard is the only layer in force.
 
 Record the device, OS version and browser version with the result.

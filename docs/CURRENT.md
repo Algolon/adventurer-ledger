@@ -35,9 +35,15 @@ scheduled here.
 - **Ruleset selection.** Every installed profile is offered explicitly; nothing
   is chosen by list order, and switching one build's ruleset never silently
   repoints the device default.
-- **Mobile creation navigation.** The creation task is operable at 360–412 CSS
+- **Mobile creation navigation.** The creation task is operable at 320–412 CSS
   px: the primary navigation is hidden while the task owns the surface rather
-  than being covered by it, and the task carries its own Save & close.
+  than being covered by it, and the task carries its own Save & close. Step
+  changes are page-like — the next step is painted at its top with no visible
+  scroll travel — and the mode, discard and exit controls share one compact row.
+- **Global destinations.** Characters, Sheet, Compendium and Settings are the
+  four items of the bottom bar. Entering Settings pushes one history entry, so
+  the Android Back gesture returns to the screen it was entered from rather than
+  closing the app.
 - **Save, close and resume unfinished drafts.** Closing waits for both the
   pending edit and the step-position write, the draft is listed under Unfinished
   builds, and resuming returns to the same step with every value intact.
@@ -155,6 +161,82 @@ untouched. The prune is deterministic and idempotent, and it runs at the draft
 service boundary that performs the write, so every route to a background change
 gets it. Grants are not pruned because grants are not stored — they are derived
 on every read.
+
+## Second physical-device corrective pass
+
+Everything in this section comes from a Samsung Galaxy S23 session after PR #18.
+Each item is a defect a real handset showed and Chromium at the same width did
+not.
+
+**Step transitions are page-like.** The previous pass reset the scroll position
+between steps but animated it, so Continue read as the *old* step scrolling away
+rather than as navigation. The reset now runs in a layout effect — after React
+swaps the step in and before the browser paints, so the new step's first painted
+frame is already at its top — and it is instant rather than smooth. Focus still
+moves to the step heading with `preventScroll`, and a validation failure still
+keeps focus on the error summary. `tests/e2e/step-scroll-focus.spec.ts` records
+every scroll position the viewport visits and fails if any of them is between
+the old offset and the top; before the change it visited nineteen.
+
+**Guidance no longer changes the shape of what it guides.** The "Recommended"
+badge was a third column in the option row's grid, so guided mode gave the
+at-a-glance facts about 110 px less width than flexible mode and labels such as
+"Saves" and "Primary" wrapped. The badge has moved out of the row's layout
+entirely, into the meta line guided mode was already adding for "Why this?"; the
+card carries a non-flow brass edge so the recommendation stays scannable, and
+the option announces it through `aria-describedby`. Guided and flexible now
+measure identically, which is what `tests/e2e/guidance-stability.spec.ts`
+asserts — box by box, not by screenshot.
+
+**The builder's utility row is one compact row.** `Guided|Flexible`, `Discard`
+and `Save & close` at 13 px with 44 px targets intact. The mode control is two
+segments rather than one button whose label was the mode it was in: both labels
+are always rendered, so the control is a fixed width and changing mode moves
+nothing. At 320 px an editing session's three controls wrap rather than
+overflowing.
+
+**Mobile density.** Secondary text is one step below body (16 → 14 px), the step
+title is 21 px rather than 26, and card padding and stack gaps are tighter
+throughout the creation surfaces. Nothing else shrank: headings, values and
+every control keep their size and their 44 px minimum. At 360 px the Class step
+went from 1268 px of document to 1028, and its first option card from 203 px to
+124. `tests/e2e/mobile-density.spec.ts` holds the ceilings and re-measures every
+control on the step.
+
+**Large class choices are tasks, not walls.** A generic class choice used to
+render every option it had, which made Weapon Mastery and the level-based
+ability-score improvement hard to scan. A choice offering more than
+`LARGE_CHOICE_OPTION_THRESHOLD` options now collapses to a summary — what is
+being decided, what is chosen, how many remain, and one control to open it — and
+exactly one picker is open at a time. **The rule is the option count and nothing
+else.** No public UI logic reads a choice's name, its class or its source, so a
+ruleset that names these decisions differently gets the same treatment and this
+product learns nothing about any particular book. Small decisions are unchanged,
+including every decision the shipped synthetic ruleset contains. The Background
+`increasePatterns` ability UI is untouched: it is already a shape-first compact
+selector.
+
+**Review answers one question.** Review exists to tell a player whether this is
+the character they meant to make, so the parts that explained how the app
+arrives at an answer are gone: the "Automatic values come from…" paragraph, the
+per-proficiency "automatic" and "chosen in …" annotations, and the grouping by
+granting entry. "Choices by source" is "Your choices" and "Issues by severity"
+is "Still to resolve". The decisions themselves, the unmade ones, the resulting
+proficiencies, the equipment and the outstanding issues all remain.
+
+**Settings is a global destination with history behind it.** It was a large gear
+in the top-right of the app bar, which read as settings for whatever screen it
+sat above, and it had no history entry — so on an installed phone, where the
+system Back gesture is the only Back there is, leaving Settings left Runefolio.
+It is now the fourth item in the bottom bar beside Characters, Sheet and
+Compendium, and the gear in the header is gone. The history model is small and
+whole: root destinations push nothing, because tabs are not pages; entering
+Settings pushes exactly one entry recording where it was entered from; leaving
+it — by the Back gesture, by tapping another destination, or by opening a
+character from inside it — unwinds that one entry; entering Settings while
+already there does nothing. A reload replaces any Settings marker on the current
+entry, because the app always restarts at Characters and an entry claiming
+otherwise would leave a Back press with nothing behind it.
 
 ## Character management
 

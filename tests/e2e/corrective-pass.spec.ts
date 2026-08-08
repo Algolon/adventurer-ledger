@@ -300,7 +300,7 @@ test.describe("a rapidly typed name survives whatever happens next", () => {
     await page.getByRole("button", { name: "Back" }).click();
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue(NAME);
 
-    await page.getByRole("button", { name: /^(Guided|Flexible) mode$/ }).click();
+    await page.getByRole("button", { name: "Flexible", exact: true }).click();
     await expect(page.getByLabel("Character name", { exact: true })).toHaveValue(NAME);
 
     await page.reload();
@@ -846,7 +846,7 @@ test.describe("the ruleset confirmation is a real modal", () => {
         }),
       );
     }
-    const behind = stops.filter(stop => /Continue|Back|All steps|Guided mode|Characters|Compendium|Settings/.test(stop));
+    const behind = stops.filter(stop => /Continue|Back|All steps|Guided|Flexible|Characters|Compendium|Settings/.test(stop));
     expect(behind).toEqual([]);
   });
 });

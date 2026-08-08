@@ -386,7 +386,14 @@ test.describe("the library's Edit build route", () => {
 });
 
 test.describe("the edit route at phone widths and in both themes", () => {
-  for (const width of [360, 390, 412] as const)
+  /*
+   * 320 px is in this loop because editing is the widest the utility row ever
+   * gets: it is the only mode that carries Discard as well as the mode control
+   * and Save & close. Three controls do not fit one row at 320 px, so the row
+   * wraps — which is the graceful failure the phone contract asks for, and is
+   * checked here rather than assumed.
+   */
+  for (const width of [320, 360, 390, 412] as const)
     test(`opens prefilled and reaches Review at ${width} px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 780 });
       await startNewCharacter(page);
@@ -397,6 +404,30 @@ test.describe("the edit route at phone widths and in both themes", () => {
       // The task footer's primary action stays reachable without horizontal scroll.
       await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+      // The full three-control utility row: present, tappable, inside the viewport.
+      const utility = await page.evaluate(() => {
+        const row = document.querySelector(".m2-builder-utility");
+        if (!row) return null;
+        return [...row.querySelectorAll("button")].map(control => {
+          const box = control.getBoundingClientRect();
+          return {
+            label: (control.getAttribute("aria-label") || control.textContent || "").trim(),
+            height: Math.round(box.height),
+            right: Math.round(box.right),
+          };
+        });
+      });
+      expect(utility?.map(control => control.label)).toEqual([
+        "Guided",
+        "Flexible",
+        "Discard changes",
+        "Save & close",
+      ]);
+      for (const control of utility ?? []) {
+        expect(control.height, `${control.label} is under the 44 px minimum`).toBeGreaterThanOrEqual(44);
+        expect(control.right, `${control.label} overhangs the viewport`).toBeLessThanOrEqual(width);
+      }
 
       await goToReview(page);
       await expect(page.getByRole("button", { name: /Save changes and open sheet/ })).toBeVisible();

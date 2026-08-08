@@ -96,7 +96,20 @@ describe("one global dark theme", () => {
     const theme = STYLESHEETS.find(sheet => sheet.name === TOKEN_SOURCE)?.source ?? "";
     const declared = new Set(Array.from(theme.matchAll(/(--[a-z0-9-]+)\s*:/gi), match => match[1]));
     // Properties a component supplies itself, with the element that sets them.
-    const suppliedByComponents = new Set(["--sheet-tab-count", "--appbar-height", "--appbar-content", "--rail-height"]);
+    const suppliedByComponents = new Set([
+      "--sheet-tab-count",
+      "--appbar-height",
+      "--appbar-content",
+      "--rail-height",
+      /*
+       * The main region's inline padding, declared on `.m2-shell`. It is a
+       * layout measurement rather than a theme colour, and it is named because
+       * the full-bleed sheet-section strip has to cancel exactly it: the two
+       * were separate literals until tightening one left the other bleeding
+       * past the viewport edge.
+       */
+      "--main-pad-x",
+    ]);
     const missing = new Set<string>();
     for (const sheet of STYLESHEETS) {
       for (const match of sheet.source.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {

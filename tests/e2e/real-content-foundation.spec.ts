@@ -180,9 +180,18 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
     // ---- review ------------------------------------------------------------
     await expect(page.getByRole("definition").filter({ hasText: "Level 5" })).toBeVisible();
     await expect(page.getByRole("definition").filter({ hasText: "Kindled Watch" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Proficiencies by source" })).toBeVisible();
-    await expect(page.getByText(/Signalling — automatic/)).toBeVisible();
-    await expect(page.getByText(/Ledgerwork — chosen in Beaconkeeper skills/)).toBeVisible();
+    /*
+     * Review names the proficiencies the character ends up with, not the route
+     * the engine took to each one. Both of these were previously annotated with
+     * their provenance — "— automatic", "— chosen in Beaconkeeper skills" — and
+     * that annotation is what made the screen read as an implementation report.
+     * The facts a player checks are still all here.
+     */
+    await expect(page.getByRole("heading", { name: "Proficiencies" })).toBeVisible();
+    const granted = page.locator(".m2-inline-list li");
+    await expect(granted.filter({ hasText: "Signalling" })).toBeVisible();
+    await expect(granted.filter({ hasText: "Ledgerwork" })).toBeVisible();
+    await expect(page.getByText(/— automatic/)).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Equipment" })).toBeVisible();
 
     await page.getByRole("button", { name: "Finish and open sheet" }).click();

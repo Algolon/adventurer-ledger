@@ -181,14 +181,32 @@ export function ContentSelection({
         {options.map(option => {
           const isSelected = option.id === selectedId;
           const recommendation = recommendations.find(item => item.optionId === option.id);
+          const badgeId = `${panelId}-${option.id}-recommended`;
           return (
-            <li key={option.id} className={isSelected ? "m2-select-card m2-select-card-open" : "m2-select-card"}>
+            <li
+              key={option.id}
+              className={[
+                "m2-select-card",
+                isSelected ? "m2-select-card-open" : "",
+                // A card-level marker, so the signal survives without the badge
+                // needing a place in the row's own layout. See the CSS.
+                recommendation ? "m2-select-card-recommended" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
               {/*
                * Both states, because the control genuinely has both: it selects
                * the option, and selecting it is what reveals the panel. They are
                * not independent — there is no way to expand without selecting —
                * so `aria-expanded` describes the consequence rather than
                * offering a second control that does not exist.
+               *
+               * `aria-describedby` is what keeps the recommendation attached to
+               * the option for a screen reader now that the badge is no longer
+               * a child of this button: the control still announces "…
+               * Recommended", while the badge itself has been taken out of the
+               * row's layout entirely.
                */}
               <button
                 type="button"
@@ -197,6 +215,7 @@ export function ContentSelection({
                 aria-pressed={isSelected}
                 aria-expanded={isSelected}
                 aria-controls={`${panelId}-${option.id}`}
+                {...(recommendation ? { "aria-describedby": badgeId } : {})}
                 onClick={event => select(option.id, event.currentTarget)}
               >
                 <span className="m2-option-mark" aria-hidden="true">
@@ -221,7 +240,6 @@ export function ContentSelection({
                     </span>
                   ) : null}
                 </span>
-                {recommendation ? <span className="m2-badge m2-badge-recommended">Recommended</span> : null}
               </button>
 
               {isSelected ? (
@@ -276,24 +294,46 @@ export function ContentSelection({
               ) : null}
 
               {/*
-               * "Why this?" is its own control, and reading it selects
+               * The recommendation, stated beside the option rather than inside
+               * it.
+               *
+               * It used to be a badge in the row's own grid, which gave guided
+               * mode a third column that flexible mode did not have. The facts
+               * underneath — "Saves", "Primary" — lost about a hundred pixels of
+               * width the moment guidance was switched on, and wrapped mid-label
+               * as a result. Turning guidance on and off changed the shape of
+               * the information, which is precisely what a recommendation must
+               * not do: the option is the same option either way.
+               *
+               * So the badge shares the row that already exists for "Why this?",
+               * which guided mode was adding anyway. Guided now costs no
+               * horizontal space at all and no extra vertical row over what it
+               * already cost, and the card carries a non-flow edge marker (see
+               * `.m2-select-card-recommended`) so the signal is still scannable
+               * while scrolling.
+               *
+               * "Why this?" remains its own control, and reading it selects
                * nothing. A recommendation is guidance the user may inspect and
                * still decline, so the explanation has to be reachable without
-               * committing to the option — which is exactly what an inline
-               * paragraph beside a selectable row cannot promise.
+               * committing to the option.
                */}
               {recommendation ? (
                 <>
-                  <button
-                    type="button"
-                    className="m2-why"
-                    aria-expanded={explaining === option.id}
-                    onClick={() => setExplaining(explaining === option.id ? null : option.id)}
-                  >
-                    <CircleHelp aria-hidden="true" />
-                    Why this?
-                    <span className="m2-visually-hidden"> {option.label}</span>
-                  </button>
+                  <div className="m2-option-meta">
+                    <span className="m2-badge m2-badge-recommended" id={badgeId}>
+                      Recommended
+                    </span>
+                    <button
+                      type="button"
+                      className="m2-why"
+                      aria-expanded={explaining === option.id}
+                      onClick={() => setExplaining(explaining === option.id ? null : option.id)}
+                    >
+                      <CircleHelp aria-hidden="true" />
+                      Why this?
+                      <span className="m2-visually-hidden"> {option.label}</span>
+                    </button>
+                  </div>
                   {explaining === option.id ? <p className="m2-why-copy">{recommendation.why}</p> : null}
                 </>
               ) : null}

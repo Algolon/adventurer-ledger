@@ -271,12 +271,13 @@ test.describe("draft persistence", () => {
     await continueStep(page);
     await page.getByRole("button", { name: /^Vanguard/ }).click();
 
-    await page.getByRole("button", { name: "Guided mode" }).click();
-    await expect(page.getByRole("button", { name: "Flexible mode" })).toBeVisible();
+    await page.getByRole("button", { name: "Flexible", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Flexible", exact: true })).toHaveAttribute("aria-pressed", "true");
     // The class stays selected across the mode change.
     await expect(page.getByRole("button", { name: /^Vanguard/ })).toHaveAttribute("aria-pressed", "true");
 
-    await page.getByRole("button", { name: "Flexible mode" }).click();
+    await page.getByRole("button", { name: "Guided", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Guided", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("button", { name: /^Vanguard/ })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -292,7 +293,7 @@ test.describe("draft persistence", () => {
 
   test("flexible mode may skip a step and save an incomplete build", async ({ page }) => {
     await startNewCharacter(page);
-    await page.getByRole("button", { name: "Guided mode" }).click();
+    await page.getByRole("button", { name: "Flexible", exact: true }).click();
     await continueStep(page);
     await expect(page.getByText("Step 2 of 9")).toBeVisible();
     await continueStep(page);

@@ -455,7 +455,19 @@ test.describe("no Runefolio surface scrolls horizontally on a phone", () => {
 
     await page.getByRole("tab", { name: "Character" }).click();
     await page.getByRole("button", { name: /^Level up/ }).click();
-    await expect(page.getByRole("heading", { name: /Level up/ })).toBeVisible();
+    /*
+     * The dialog by role, and then the comparison it exists to show.
+     *
+     * This waited on a heading matching /Level up/, which only the dialog's
+     * *loading* and *error* states carry — once the preview resolves the title
+     * is "Level 1 to 2". So the assertion was really a race with the preview,
+     * and it passed only while the loading frame happened to still be on screen
+     * when the first poll ran. It has been quietly measuring timing rather than
+     * the dialog, and the tables underneath it are what this test is about.
+     */
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("table").first()).toBeVisible();
     await expectNoHorizontalScroll(page, "the level-up dialog at 320 px");
 
     // The scroll region that used to wrap these tables is gone, not merely

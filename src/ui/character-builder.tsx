@@ -16,7 +16,7 @@
  * afterwards — the planner accumulates every level's progression into one build
  * and the commit writes that level directly.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ListChecks, TriangleAlert } from "lucide-react";
 import {
   BUILDER_STEPS,
@@ -229,23 +229,35 @@ export function CharacterBuilder({
   }, [commitErrors]);
 
   /**
-   * A step begins at its own heading.
+   * A step change is a page change: the next step is already at its top the
+   * first time it is painted.
    *
-   * Nothing used to move the viewport between steps, so on a phone Continue
-   * swapped the content underneath a scrolled window and the next step opened
-   * partway down itself. Focus moves with the scroll so the step change is a
-   * real landmark for a screen reader too, and `preventScroll` keeps the browser
-   * from making its own jump before this one — the two together are what stops
-   * the second hop the pilot saw when the keyboard closed.
+   * The previous pass moved the viewport but animated it, and on a physical
+   * phone that reads as the *old* step sliding away rather than as navigation —
+   * Continue, a visible upward scroll, then the new step. Two things cause that
+   * and both are fixed here.
+   *
+   * `useLayoutEffect` rather than `useEffect`. A layout effect runs after React
+   * has swapped the step into the DOM and *before* the browser paints, so the
+   * scroll position is established in the same frame as the new content. A
+   * passive effect runs after paint, which guarantees at least one frame of the
+   * new step drawn at the old offset — the flicker the pilot reported.
+   *
+   * Instant, not smooth. A smooth scroll is travel the user watches, and the
+   * thing being travelled through is the step they just left. Web pages do not
+   * animate their way to the top of the next page, and this should not either.
+   * The reduced-motion query is gone with it: there is no motion left to
+   * reduce, which is the stronger answer to the same accessibility concern.
+   *
+   * Focus then moves to the heading so the change is a real landmark for a
+   * screen reader too. `preventScroll` is what stops the browser adding a
+   * second, competing scroll of its own on top of the one just made.
    *
    * This deliberately keys on the step alone. A validation failure does not
    * change the step, so the error summary above keeps its own focus and a
    * repaired field is never yanked away from the user mid-edit.
    */
-  useEffect(() => {
-    const heading = stepHeadingRef.current;
-    if (!heading) return;
-    heading.focus({ preventScroll: true });
+  useLayoutEffect(() => {
     /*
      * The document scrolls, not an inner pane, and the heading lives inside the
      * sticky `.m2-builder-head` — so scrolling the heading into view would ask
@@ -253,10 +265,8 @@ export function CharacterBuilder({
      * liked. Returning the document to its top is what actually puts the step
      * at its start, with the app bar and the step head where they belong.
      */
-    window.scrollTo({
-      top: 0,
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-    });
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    stepHeadingRef.current?.focus({ preventScroll: true });
   }, [stepId]);
 
   /**
@@ -604,14 +614,25 @@ export function CharacterBuilder({
       ]);
   };
 
-  const togglePresentation = async () => {
+  /**
+   * Moves the build into a named mode, rather than flipping whichever mode it
+   * is in.
+   *
+   * The control used to be one button carrying the *current* mode as its label,
+   * so "Guided mode" was simultaneously a statement of where the build was and
+   * the control that left it. Choosing a mode by name removes that ambiguity,
+   * and it is what lets the two options be on screen together — which is in turn
+   * what stops the control changing width when the mode changes.
+   *
+   * Selecting the mode already in force is a no-op. It must not spend a
+   * revision, because a write that changes nothing still invalidates every
+   * in-flight expectation against the old one.
+   */
+  const setPresentation = async (mode: "guided" | "flexible") => {
+    if (draft.presentation === mode) return;
     await flushPending();
     await queueRef.current;
-    const outcome = await drafts.changePresentation(
-      draftId,
-      revisionRef.current ?? snapshot.revision,
-      draft.presentation === "guided" ? "flexible" : "guided",
-    );
+    const outcome = await drafts.changePresentation(draftId, revisionRef.current ?? snapshot.revision, mode);
     if (outcome.status === "ok") {
       revisionRef.current = outcome.result.revision;
       snapshotRef.current = outcome.result;
@@ -699,42 +720,78 @@ export function CharacterBuilder({
   return (
     <div className="m2-builder">
       <header className="m2-builder-head">
-        <div>
-          <p className="m2-eyebrow">
-            Step {index + 1} of {steps.length}
-          </p>
-          <h2 className="m2-step-heading" tabIndex={-1} ref={stepHeadingRef}>
-            {current.label}
-          </h2>
-        </div>
-        <div className="m2-builder-actions">
-          <button
-            type="button"
-            className="m2-mode-toggle"
-            onClick={togglePresentation}
-            aria-pressed={draft.presentation === "flexible"}
-          >
-            {draft.presentation === "guided" ? "Guided mode" : "Flexible mode"}
-          </button>
-          {draft.editingCharacterId ? (
+        {/*
+         * One compact utility row: the mode, the way out, and — while editing —
+         * the way to abandon the edit.
+         *
+         * These were three full-height pills wrapped across the top of every
+         * step, and on a phone they cost more vertical space than the step
+         * heading they sat beside. They are chrome, not content: same 44 px
+         * targets, smaller type, tighter padding, one row. Below about 360 px
+         * the row wraps rather than overflowing, which is the graceful failure
+         * the phone contract asks for — nothing here may push the document
+         * sideways.
+         */}
+        <div className="m2-builder-utility">
+          {/*
+           * A two-segment control, not a toggle whose label is the state.
+           *
+           * Both modes are always on screen, so the control cannot change width
+           * when the mode changes — the layout jump the pilot reported — and
+           * "Guided" stops being both a description of where the build is and
+           * the button that leaves it. `aria-pressed` on each segment is what
+           * carries which one is in force.
+           */}
+          <div className="m2-mode-switch" role="group" aria-label="Guidance">
             <button
               type="button"
-              className="m2-save-close"
+              aria-pressed={draft.presentation === "guided"}
+              onClick={() => void setPresentation("guided")}
+            >
+              Guided
+            </button>
+            <button
+              type="button"
+              aria-pressed={draft.presentation === "flexible"}
+              onClick={() => void setPresentation("flexible")}
+            >
+              Flexible
+            </button>
+          </div>
+          {draft.editingCharacterId ? (
+            /*
+             * "Discard" visibly, "Discard changes" to assistive technology: the
+             * visible word is contained in the accessible name, so the two
+             * agree, and the row keeps a word it can fit at 320 px.
+             */
+            <button
+              type="button"
+              className="m2-utility-action"
+              aria-label="Discard changes"
               onClick={() => setConfirmDiscard(true)}
               disabled={pendingAction !== null}
             >
-              Discard changes
+              Discard
             </button>
           ) : null}
           <button
             type="button"
-            className="m2-save-close"
+            className="m2-utility-action"
             onClick={() => void saveAndClose()}
             disabled={pendingAction !== null}
             aria-busy={pendingAction === "close" || undefined}
           >
             {pendingAction === "close" ? "Saving…" : "Save & close"}
           </button>
+        </div>
+
+        <div className="m2-builder-title">
+          <p className="m2-eyebrow">
+            Step {index + 1} of {steps.length}
+          </p>
+          <h2 className="m2-step-heading" tabIndex={-1} ref={stepHeadingRef}>
+            {current.label}
+          </h2>
         </div>
       </header>
 
@@ -1116,7 +1173,7 @@ function StepContent({
         <div className="m2-step">
           <ContentSelection
             legend="Class"
-            intro="What this adventurer is, mechanically. This step explains the class and sets the starting level; its detailed decisions come later, on Class choices."
+            intro="What this adventurer is, mechanically. Its detailed decisions come later, on Class choices."
             options={entries
               .filter(entry => entry.category === "class")
               .map(entry => presentClass(entry, entries, build.level))}
@@ -1184,7 +1241,7 @@ function StepContent({
         <div className="m2-step">
           <ContentSelection
             legend="Species"
-            intro="What you are. Everything your species gives you — and any lineage or ancestry decision it asks for — is here."
+            intro="What you are, with any lineage or ancestry decision it asks for."
             // `race` is the older category for the same decision. A ruleset that
             // still uses it must remain selectable, not silently offer nothing.
             options={entries
@@ -1216,7 +1273,7 @@ function StepContent({
         <div className="m2-step">
           <ContentSelection
             legend="Background"
-            intro="Where you came from. It sets your ability increases, an origin feat, proficiencies and your starting kit."
+            intro="Where you came from: your ability increases, an origin feat, proficiencies and starting kit."
             options={entries
               .filter(entry => entry.category === "background")
               .map(entry => presentBackground(entry, entries))}
@@ -1604,12 +1661,40 @@ const toggleChoice =
     });
 
 /**
+ * How many options a decision may offer before it is presented as a task.
+ *
+ * Physical testing found Weapon Mastery and the level-based ability-score
+ * improvement hard to scan, because a generic class choice renders every
+ * possibility it has at once. On a phone that is a wall: a screen of
+ * near-identical rows with no way to tell how many decisions are on it, which
+ * of them are done, or where one ends and the next begins.
+ *
+ * The threshold is a *size*, deliberately, and the only thing consulted. No
+ * public UI logic anywhere keys on a choice's name, its class, or which book it
+ * came from — the app has no business knowing that "Weapon Mastery" is special,
+ * and content that names its choices differently would get none of this if it
+ * did. Six is the line because it is roughly the point at which a list stops
+ * being one glance: the small ruleset choices this product ships (a stance with
+ * two options, four class skills) stay exactly as they were, and anything that
+ * genuinely needs scrolling becomes a task with a summary.
+ */
+export const LARGE_CHOICE_OPTION_THRESHOLD = 6;
+
+/** True when a decision is big enough to be worth collapsing to a summary. */
+export const isLargeChoice = (choice: RequiredChoice) =>
+  choice.options.length > LARGE_CHOICE_OPTION_THRESHOLD;
+
+/**
  * A list of already-filtered decisions.
  *
  * The caller decides which choices belong here and whether there are any at
  * all, so this renders nothing of its own when the list is empty rather than
  * announcing an absence. On Species and Background it is rendered inside the
  * selected option, which is the thing that produced the decisions.
+ *
+ * Exactly one large decision is open at a time, and that state lives here
+ * because "one at a time" is a property of the set, not of any member of it.
+ * Two open pickers on a phone is the wall again with extra steps.
  */
 function ChoiceList({
   choices,
@@ -1620,19 +1705,177 @@ function ChoiceList({
   onChange(patch: DraftPatch): void;
   withinSourceId?: string;
 }) {
+  const [openChoiceId, setOpenChoiceId] = useState<string | null>(null);
   if (!choices.length) return null;
   const toggle = toggleChoice(onChange);
   return (
     <div className="m2-step">
-      {choices.map(choice => (
-        <ChoiceGroup
-          key={choice.choiceId}
-          choice={choice}
-          onToggle={toggle}
-          {...(withinSourceId ? { withinSourceId } : {})}
-        />
-      ))}
+      {choices.map(choice =>
+        isLargeChoice(choice) ? (
+          <LargeChoiceGroup
+            key={choice.choiceId}
+            choice={choice}
+            onToggle={toggle}
+            open={openChoiceId === choice.choiceId}
+            onOpenChange={next => setOpenChoiceId(next ? choice.choiceId : null)}
+            {...(withinSourceId ? { withinSourceId } : {})}
+          />
+        ) : (
+          <ChoiceGroup
+            key={choice.choiceId}
+            choice={choice}
+            onToggle={toggle}
+            {...(withinSourceId ? { withinSourceId } : {})}
+          />
+        ),
+      )}
     </div>
+  );
+}
+
+/** The labels of what has been chosen, in the order the options are offered. */
+const selectedLabelsFor = (choice: RequiredChoice) =>
+  choice.options.filter(option => choice.selected.includes(option.id)).map(option => option.label);
+
+/**
+ * What a decision still wants, in a player's words.
+ *
+ * Stated as a sentence rather than a fraction because "1 of 2" leaves the
+ * reader to work out whether they are finished, and this screen's whole job is
+ * to answer that without being read closely.
+ */
+function remainingLabel(choice: RequiredChoice): string {
+  const outstanding = choice.min - choice.selected.length;
+  if (outstanding > 0) return `Choose ${outstanding} more`;
+  if (choice.selected.length < choice.max) return `Choose up to ${choice.max - choice.selected.length} more`;
+  return "Change";
+}
+
+/**
+ * A large decision, presented as a task rather than as a wall of options.
+ *
+ * Collapsed it states the four things a task has to state: what is being
+ * decided, what has been chosen so far, how many are still wanted, and how to
+ * act on it. Expanded it is the same option list the small decisions use — the
+ * options themselves were never the problem, having all of them on screen
+ * unbidden was — and it collapses back to the result once the decision is made.
+ *
+ * The whole option list stays mounted-on-demand rather than hidden with CSS, so
+ * forty options are forty elements only while they are being looked at.
+ */
+function LargeChoiceGroup({
+  choice,
+  onToggle,
+  open,
+  onOpenChange,
+  withinSourceId,
+}: {
+  choice: RequiredChoice;
+  onToggle(choiceId: string, optionId: string, max: number): void;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  withinSourceId?: string;
+}) {
+  const panelId = useId();
+  const chosen = selectedLabelsFor(choice);
+  /*
+   * Closing on the press that satisfies the decision would yank the list away
+   * mid-interaction, and a decision that allows several picks is not finished
+   * just because one was made. The user closes it, or it closes when another
+   * task is opened.
+   */
+  return (
+    <fieldset className={choice.resolved ? "m2-task m2-task-done" : "m2-task"}>
+      <legend>
+        {choice.label}
+        <small className="m2-muted">
+          {" "}
+          choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
+        </small>
+      </legend>
+
+      <ChoiceProvenance choice={choice} withinSourceId={withinSourceId} />
+
+      <div className="m2-task-summary">
+        <p className="m2-task-state">
+          {chosen.length ? (
+            <>
+              <Check aria-hidden="true" className="m2-task-tick" />
+              <span>{chosen.join(", ")}</span>
+            </>
+          ) : (
+            <span className="m2-review-open">Nothing chosen yet</span>
+          )}
+        </p>
+        <button
+          type="button"
+          className="m2-button m2-button-small"
+          aria-expanded={open}
+          /*
+           * Only while the panel exists. `aria-controls` naming an element that
+           * is not in the document is an invalid reference — assistive
+           * technology has nothing to follow and validators are right to flag
+           * it. `aria-expanded` is what carries the state either way.
+           */
+          {...(open ? { "aria-controls": panelId } : {})}
+          onClick={() => onOpenChange(!open)}
+        >
+          {open ? "Done" : remainingLabel(choice)}
+          <span className="m2-visually-hidden"> — {choice.label}</span>
+        </button>
+      </div>
+
+      {/*
+       * The running count, but only while it says something the two lines above
+       * do not. Part-way through a multi-pick decision it is the most useful
+       * thing on the card; with nothing chosen it repeats "Nothing chosen yet"
+       * and "Choose 2 more" back at the reader, which is two lines of screen
+       * spent restating the same fact on a surface this pass exists to thin
+       * out.
+       */}
+      {!choice.resolved && choice.selected.length > 0 ? (
+        <p className="m2-inline-issue" role="status">
+          <TriangleAlert aria-hidden="true" /> {choice.selected.length} of {choice.min} chosen
+        </p>
+      ) : null}
+
+      {open ? (
+        <div id={panelId}>
+          <ChoiceOptionList choice={choice} onToggle={onToggle} />
+        </div>
+      ) : null}
+    </fieldset>
+  );
+}
+
+/**
+ * Which entry asks for this decision, and from when.
+ *
+ * Kept out of both group components so the two cannot drift into describing the
+ * same provenance differently.
+ */
+function ChoiceProvenance({
+  choice,
+  withinSourceId,
+}: {
+  choice: RequiredChoice;
+  withinSourceId?: string;
+}) {
+  /*
+   * Provenance stays visible — which entry asks for this, and from when —
+   * except when it would only restate the card the decision is sitting in.
+   * Inside the selected Stonevigil, "From Stonevigil" is a line of text that
+   * tells the reader where they already are. A trait-declared choice still
+   * names its trait, because that genuinely says something the card does
+   * not: the trait asks, not the species.
+   */
+  if (withinSourceId === choice.sourceEntryId)
+    return choice.level === undefined ? null : <p className="m2-muted">From level {choice.level}</p>;
+  return (
+    <p className="m2-muted">
+      From {choice.sourceLabel}
+      {choice.level === undefined ? "" : ` · level ${choice.level}`}
+    </p>
   );
 }
 
@@ -1678,6 +1921,14 @@ function ClassPendingSummary({ plan, build }: { plan: DraftSnapshot["plan"]; bui
   );
 }
 
+/**
+ * A small decision: every option on screen, because every option fits.
+ *
+ * Anything above `LARGE_CHOICE_OPTION_THRESHOLD` goes through
+ * `LargeChoiceGroup` instead. Two stances or four class skills do not need
+ * disclosing behind a summary — that would add a press to a decision that was
+ * already one glance.
+ */
 function ChoiceGroup({
   choice,
   onToggle,
@@ -1697,27 +1948,34 @@ function ChoiceGroup({
           choose {choice.min === choice.max ? choice.min : `${choice.min}–${choice.max}`}
         </small>
       </legend>
-      {/*
-       * Provenance stays visible — which entry asks for this, and from when —
-       * except when it would only restate the card the decision is sitting in.
-       * Inside the selected Stonevigil, "From Stonevigil" is a line of text that
-       * tells the reader where they already are. A trait-declared choice still
-       * names its trait, because that genuinely says something the card does
-       * not: the trait asks, not the species.
-       */}
-      {withinSourceId === choice.sourceEntryId ? (
-        choice.level === undefined ? null : <p className="m2-muted">From level {choice.level}</p>
-      ) : (
-        <p className="m2-muted">
-          From {choice.sourceLabel}
-          {choice.level === undefined ? "" : ` · level ${choice.level}`}
-        </p>
-      )}
+      <ChoiceProvenance choice={choice} {...(withinSourceId ? { withinSourceId } : {})} />
       {!choice.resolved ? (
         <p className="m2-inline-issue" role="status">
           <TriangleAlert aria-hidden="true" /> {choice.selected.length} of {choice.min} chosen
         </p>
       ) : null}
+      <ChoiceOptionList choice={choice} onToggle={onToggle} />
+    </fieldset>
+  );
+}
+
+/**
+ * The options of one decision, and the explanations that belong to them.
+ *
+ * Shared by both presentations, so a large decision's picker is exactly the
+ * list a small decision shows — including the incompatible and already-granted
+ * treatments, which would otherwise be easy to implement once and forget in the
+ * other place.
+ */
+function ChoiceOptionList({
+  choice,
+  onToggle,
+}: {
+  choice: RequiredChoice;
+  onToggle(choiceId: string, optionId: string, max: number): void;
+}) {
+  return (
+    <>
       <ul className="m2-options">
         {choice.options.map(option => {
           const isSelected = choice.selected.includes(option.id);
@@ -1764,7 +2022,7 @@ function ChoiceGroup({
           );
         })}
       </ul>
-    </fieldset>
+    </>
   );
 }
 
@@ -2420,13 +2678,21 @@ function ReviewStep({
   const warnings = plan.issues.filter(issue => issue.severity !== "error");
   const equipment = selectedEquipmentFor(plan.equipmentGrants, build.equipmentSelections);
 
-  /** Proficiencies grouped by the entry that grants them. */
-  const bySource = new Map<string, { label: string; grants: typeof plan.proficiencies.grants }>();
-  for (const grant of plan.proficiencies.grants) {
-    const existing = bySource.get(grant.source.entryId);
-    if (existing) bySource.set(grant.source.entryId, { label: existing.label, grants: [...existing.grants, grant] });
-    else bySource.set(grant.source.entryId, { label: grant.source.entryLabel, grants: [grant] });
-  }
+  /**
+   * Every proficiency this character ends up with, named once, in order.
+   *
+   * This used to be grouped by the entry that granted each one, with every row
+   * annotated "automatic" or "chosen in …". That is a provenance report: it
+   * answers "how did the engine arrive at this", and the pilot's reaction to it
+   * was that Review read as implementation. Review answers one question — is
+   * this the character I meant to make — and for that the useful fact is which
+   * proficiencies the character *has*. A wrong pick is just as visible in a
+   * plain list, and a proficiency granted twice is one line rather than two
+   * identical-looking ones under different headings.
+   */
+  const proficiencies = [...new Map(plan.proficiencies.grants.map(grant => [grant.proficiencyId, grant])).values()]
+    .map(grant => grant.label)
+    .sort((left, right) => left.localeCompare(right));
 
   return (
     <div className="m2-step">
@@ -2532,40 +2798,51 @@ function ReviewStep({
             </div>
           ))}
       </dl>
-      <p className="m2-muted">
-        Automatic values come from the active ruleset&apos;s content. Anything you entered yourself is listed as a manual
-        value and is never described as rules-derived.
-      </p>
+      {/*
+       * The sentence that used to sit here — "Automatic values come from the
+       * active ruleset's content…" — explained how the app works, to a reader
+       * who is checking whether a character is the one they meant to make. It
+       * answered a question nobody was asking at this point, and it set the
+       * tone the pilot described as implementation-heavy. It is gone; nothing
+       * on this screen now claims a manual value is rules-derived, which is
+       * what the sentence was defending against.
+       */}
 
-      <h4>Choices by source</h4>
-      <ul className="m2-plain-list">
-        {plan.requiredChoices.map(choice => (
-          <li key={choice.choiceId}>
-            <b>{choice.label}</b> <small className="m2-muted">({choice.sourceLabel})</small>:{" "}
-            {choice.selected.length
-              ? choice.selected
+      {/*
+       * "Your choices", not "Choices by source". The list was never grouped by
+       * source — the source was a parenthetical after every row — and naming
+       * the section after the provenance made a list of the player's own
+       * decisions read as an audit trail of the engine's. The decisions
+       * themselves are exactly what Review is for, including the ones still
+       * unmade, so nothing is dropped here but the framing.
+       */}
+      <h4>Your choices</h4>
+      {plan.requiredChoices.length ? (
+        <ul className="m2-plain-list">
+          {plan.requiredChoices.map(choice => (
+            <li key={choice.choiceId}>
+              <b>{choice.label}</b>:{" "}
+              {choice.selected.length ? (
+                choice.selected
                   .map(id => choice.options.find(option => option.id === id)?.label ?? "No longer offered")
                   .join(", ")
-              : "Not chosen"}
-          </li>
-        ))}
-      </ul>
-
-      <h4>Proficiencies by source</h4>
-      {bySource.size ? (
-        <ul className="m2-plain-list">
-          {[...bySource.entries()].map(([entryId, group]) => (
-            <li key={entryId}>
-              <b>{group.label}</b>
-              <ul className="m2-plain-list">
-                {group.grants.map(grant => (
-                  <li key={`${grant.proficiencyId}-${grant.choiceId ?? "auto"}`}>
-                    {grant.label} —{" "}
-                    {grant.kind === "automatic" ? "automatic" : `chosen in ${grant.choiceLabel ?? "an earlier step"}`}
-                  </li>
-                ))}
-              </ul>
+              ) : (
+                // The one case worth calling out, because it is the mistake
+                // this screen exists to catch.
+                <span className="m2-review-open">Not chosen</span>
+              )}
             </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m2-muted">Nothing in this build asks you to choose.</p>
+      )}
+
+      <h4>Proficiencies</h4>
+      {proficiencies.length ? (
+        <ul className="m2-inline-list">
+          {proficiencies.map(label => (
+            <li key={label}>{label}</li>
           ))}
         </ul>
       ) : (
@@ -2586,7 +2863,13 @@ function ReviewStep({
         <p className="m2-muted">Nothing in this build grants starting equipment.</p>
       )}
 
-      <h4>Issues by severity</h4>
+      {/*
+       * "Issues by severity" named the engine's classification rather than the
+       * reader's question. What a player wants to know here is whether anything
+       * still needs them, so the heading says that and the two lists keep their
+       * distinct treatments.
+       */}
+      <h4>Still to resolve</h4>
       {errors.length ? (
         <ul className="m2-plain-list m2-issue-errors">
           {errors.map((issue, position) => (
@@ -2594,7 +2877,7 @@ function ReviewStep({
           ))}
         </ul>
       ) : (
-        <p className="m2-muted">No blocking issues.</p>
+        <p className="m2-muted">Nothing is blocking this character.</p>
       )}
       {warnings.length ? (
         <ul className="m2-plain-list m2-issue-warnings">

@@ -265,8 +265,10 @@ test.describe("standard array assignment", () => {
     await page.getByLabel("Dexterity", { exact: true }).selectOption("14");
 
     // Guided -> flexible -> guided must not reset anything.
-    await page.getByRole("button", { name: /mode$/ }).click();
-    await page.getByRole("button", { name: /mode$/ }).click();
+    await page.getByRole("button", { name: "Flexible", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Flexible", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Guided", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Guided", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Strength", { exact: true })).toHaveValue("15");
 
     await page.reload();
