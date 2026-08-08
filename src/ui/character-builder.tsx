@@ -193,6 +193,7 @@ export function CharacterBuilder({
   const snapshotRef = useRef<DraftSnapshot | null>(null);
   /** Focus moves here when a submit produces issues, so it is announced. */
   const errorSummaryRef = useRef<HTMLDivElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   /** Debounced free-text edits that have not reached the draft service yet. */
   const pendingRef = useRef<Partial<CharacterDraftBuild>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -226,6 +227,37 @@ export function CharacterBuilder({
   useEffect(() => {
     if (commitErrors.length) errorSummaryRef.current?.focus();
   }, [commitErrors]);
+
+  /**
+   * A step begins at its own heading.
+   *
+   * Nothing used to move the viewport between steps, so on a phone Continue
+   * swapped the content underneath a scrolled window and the next step opened
+   * partway down itself. Focus moves with the scroll so the step change is a
+   * real landmark for a screen reader too, and `preventScroll` keeps the browser
+   * from making its own jump before this one — the two together are what stops
+   * the second hop the pilot saw when the keyboard closed.
+   *
+   * This deliberately keys on the step alone. A validation failure does not
+   * change the step, so the error summary above keeps its own focus and a
+   * repaired field is never yanked away from the user mid-edit.
+   */
+  useEffect(() => {
+    const heading = stepHeadingRef.current;
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    /*
+     * The document scrolls, not an inner pane, and the heading lives inside the
+     * sticky `.m2-builder-head` — so scrolling the heading into view would ask
+     * the browser to reveal something already pinned and settle wherever it
+     * liked. Returning the document to its top is what actually puts the step
+     * at its start, with the app bar and the step head where they belong.
+     */
+    window.scrollTo({
+      top: 0,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  }, [stepId]);
 
   /**
    * Autosaves are serialised through one queue and read the revision from a ref
@@ -671,7 +703,9 @@ export function CharacterBuilder({
           <p className="m2-eyebrow">
             Step {index + 1} of {steps.length}
           </p>
-          <h2>{current.label}</h2>
+          <h2 className="m2-step-heading" tabIndex={-1} ref={stepHeadingRef}>
+            {current.label}
+          </h2>
         </div>
         <div className="m2-builder-actions">
           <button
