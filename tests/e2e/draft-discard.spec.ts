@@ -24,7 +24,7 @@ async function startDraft(page: Page, name: string) {
 }
 
 const openDraftMenu = (page: Page, name: string) =>
-  page.getByRole("button", { name: `More actions for ${name}` }).click();
+  page.getByRole("button", { name: `More actions for unfinished build ${name}` }).click();
 
 test.describe("discarding an unfinished build", () => {
   test("asks before it removes anything, and Cancel keeps the build", async ({ page }) => {
@@ -73,6 +73,18 @@ test.describe("discarding an unfinished build", () => {
     await page.getByLabel("Character name", { exact: true }).fill("Proof");
     await next(page);
     await expect(page.getByRole("button", { name: /^Vanguard/ })).toBeVisible();
+  });
+
+  test("is distinguishable from the character an edit draft belongs to", async ({ page }) => {
+    // An edit draft carries its character's name, so both rows sit in the
+    // library under one name. The controls must still say which is which.
+    await startDraft(page, "Twin Named");
+
+    await expect(page.getByRole("button", { name: "More actions for unfinished build Twin Named" })).toHaveCount(1);
+    await openDraftMenu(page, "Twin Named");
+    // The build's menu discards; it never offers to delete a character.
+    await expect(page.getByRole("button", { name: "Discard Twin Named" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete Twin Named" })).toBeHidden();
   });
 
   test("names the resume step in the user's words, not the engine's", async ({ page }) => {

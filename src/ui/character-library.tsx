@@ -180,18 +180,25 @@ function DraftRow({
         <ChevronRight aria-hidden="true" />
         <span className="m2-visually-hidden">Resume building {draft.name}</span>
       </button>
+      {/*
+       * Named as the *build*, not just by the character's name. A draft opened
+       * to edit a committed character carries that character's name, so both
+       * rows would otherwise offer a control called "More actions for Ada" and
+       * nothing but row order would say which one discarded a build and which
+       * one deleted a character.
+       */}
       <button
         type="button"
         ref={moreRef}
         className="m2-row-more"
         aria-expanded={menuOpen}
-        aria-label={`More actions for ${draft.name}`}
+        aria-label={`More actions for unfinished build ${draft.name}`}
         onClick={onToggleMenu}
       >
         <span aria-hidden="true">···</span>
       </button>
       {menuOpen ? (
-        <AnchoredMenu label={`Actions for ${draft.name}`} onClose={onToggleMenu}>
+        <AnchoredMenu label={`Actions for unfinished build ${draft.name}`} onClose={onToggleMenu}>
           <li>
             <button type="button" onClick={onResume}>
               Resume building {draft.name}
