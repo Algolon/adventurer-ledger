@@ -73,6 +73,12 @@ const ACTION_GROUPS: readonly { kind: DerivedAction["kind"]; label: string }[] =
   { kind: "reaction", label: "Reactions" },
 ];
 
+/** "Rage", "Rage and Giant Ancestry", "Rage, Giant Ancestry and Second Wind". */
+function listConcepts(labels: readonly string[]): string {
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
 export function PlaySheet({
   characterId,
   onLevelUp,
@@ -213,6 +219,21 @@ export function PlaySheet({
         <div className="m2-banner m2-banner-warning" role="alert">
           <strong>This character is not finished</strong>
           <p>Values that cannot be calculated yet show as —. Use Edit character to finish the build.</p>
+        </div>
+      ) : sheet.unavailableValues.length > 0 ? (
+        /*
+         * Creation owes nothing here, so this must not say "not finished" and
+         * must not send the user to Edit character: nothing they can decide
+         * resolves a value the installed content never defines.
+         */
+        <div className="m2-banner m2-banner-warning" role="alert">
+          <strong>Some values could not be calculated</strong>
+          <p>
+            {listConcepts(sheet.unavailableValues.map(item => item.label))}{" "}
+            {sheet.unavailableValues.length === 1 ? "shows" : "show"} as — because the content installed on this device
+            does not define {sheet.unavailableValues.length === 1 ? "it" : "them"} at this level. The rest of this
+            character is complete.
+          </p>
         </div>
       ) : null}
 

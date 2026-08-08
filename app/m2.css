@@ -944,6 +944,22 @@
   font: 600 26px/1.15 var(--display);
 }
 
+/*
+ * The step heading takes focus when the step changes, so a screen reader
+ * announces where it now is instead of leaving the user's cursor wherever the
+ * previous step left it. That focus is programmatic, so it must not paint a
+ * ring at every Continue; a keyboard user who reaches it themselves still gets
+ * one through `:focus-visible`.
+ */
+.m2-step-heading:focus {
+  outline: none;
+}
+
+.m2-step-heading:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
 .m2-mode-toggle {
   min-height: 44px;
   padding: 0 14px;

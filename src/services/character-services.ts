@@ -429,6 +429,41 @@ export class CharacterDraftService {
     });
   }
 
+  /**
+   * Removes an unfinished draft outright.
+   *
+   * `abandon` above marks a draft so the library stops listing it, and the
+   * record stays. That is the right thing when an edit is walked away from, but
+   * it left a user who simply regretted starting a character with no way to
+   * remove one: the only route was to finish the build and then delete the
+   * committed character.
+   *
+   * Nothing else in the schema keys by draft ID — a draft's selections live on
+   * its own `build` — so the row is the whole of what the draft owns, and this
+   * needs none of the cascade that deleting a character does. A draft opened
+   * against a committed character owns only itself here too: dropping it
+   * abandons the edit and leaves the character exactly as it was committed,
+   * which is why `characters` is not in the transaction at all.
+   */
+  async discard(draftId: ID, expectedRevision: number): Promise<ServiceOutcome<DraftDiscardReceipt>> {
+    const { database, repositories } = this.context;
+    const outcome = await database.transaction(
+      "rw",
+      database.characterDrafts,
+      async (): Promise<ServiceOutcome<DraftDiscardReceipt>> => {
+        const current = await repositories.drafts.get(draftId);
+        // A second discard is `not-found`, not a crash: the library treats that
+        // as already gone and simply refreshes.
+        if (!current) return notFound(draftId);
+        if (current.revision !== expectedRevision) return stale(draftId, expectedRevision, current.revision);
+        await database.characterDrafts.delete(draftId);
+        return ok({ draftId, editedCharacterId: current.editingCharacterId ?? null });
+      },
+    );
+    this.log({ operation: "draft.discard", recordId: draftId });
+    return outcome;
+  }
+
   async get(draftId: ID): Promise<DraftSnapshot | undefined> {
     const draft = await this.context.repositories.drafts.get(draftId);
     return draft ? this.snapshot(draft) : undefined;
@@ -1237,6 +1272,18 @@ export class CharacterLibraryService {
   }
 }
 
+/**
+ * What discarding a draft removed.
+ *
+ * `editedCharacterId` is the character the draft was editing, if any. It is
+ * reported precisely because it was *not* touched: the caller can assert the
+ * committed character survived its draft being thrown away.
+ */
+export interface DraftDiscardReceipt {
+  draftId: ID;
+  editedCharacterId: ID | null;
+}
+
 /** What a delete actually removed, per owned table. */
 export interface CharacterDeletionReceipt {
   characterId: ID;
@@ -1270,6 +1317,8 @@ export interface LibraryCard {
 
 export interface DraftCard {
   draftId: ID;
+  /** The compare-and-swap token a discard sends, so a stale row cannot remove a draft edited elsewhere. */
+  revision: number;
   name: string;
   issueCount: number;
   updatedAt: string;
@@ -1353,6 +1402,7 @@ export class CharacterQueryService {
             const plan = planBuild(draft.build, entries, draft.presentation);
             return {
               draftId: draft.id,
+              revision: draft.revision,
               name: draft.build.name.trim() || "Unnamed character",
               issueCount: plan.issueCount,
               updatedAt: draft.updatedAt,

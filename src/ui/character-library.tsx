@@ -13,6 +13,7 @@ import { ChevronRight, Import, Plus, Swords } from "lucide-react";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import { AnchoredMenu, StateBadge } from "@/src/ui/primitives";
 import type { DraftCard, LibraryCard } from "@/src/services/character-services";
+import { BUILDER_STEPS } from "@/src/services/builder-steps";
 
 export type LibraryDestination =
   | { kind: "sheet"; characterId: string; readOnly?: boolean }
@@ -23,6 +24,13 @@ export type LibraryDestination =
   | { kind: "duplicate"; characterId: string; revision: number }
   | { kind: "archive"; characterId: string; revision: number }
   | { kind: "delete"; characterId: string; name: string }
+  /*
+   * Discarding an unfinished build and deleting a committed character are named
+   * apart on purpose. One throws away a build in progress; the other removes a
+   * character with play state and history behind it, and reading "Delete" in
+   * both places would make the smaller act look like the larger one.
+   */
+  | { kind: "discard"; draftId: string; name: string; revision: number }
   | { kind: "new" };
 
 const relative = (iso: string) => {
@@ -100,7 +108,14 @@ export function CharacterLibrary({ onNavigate }: { onNavigate(destination: Libra
           <h3 className="m2-section-title">Unfinished builds</h3>
           <ul className="m2-list">
             {drafts.map(draft => (
-              <DraftRow key={draft.draftId} draft={draft} onResume={() => onNavigate({ kind: "build", draftId: draft.draftId })} />
+              <DraftRow
+                key={draft.draftId}
+                draft={draft}
+                menuOpen={menuFor === draft.draftId}
+                onToggleMenu={() => setMenuFor(menuFor === draft.draftId ? null : draft.draftId)}
+                onResume={() => onNavigate({ kind: "build", draftId: draft.draftId })}
+                onNavigate={onNavigate}
+              />
             ))}
           </ul>
         </>
@@ -126,7 +141,22 @@ export function CharacterLibrary({ onNavigate }: { onNavigate(destination: Libra
   );
 }
 
-function DraftRow({ draft, onResume }: { draft: DraftCard; onResume(): void }) {
+function DraftRow({
+  draft,
+  menuOpen,
+  onToggleMenu,
+  onResume,
+  onNavigate,
+}: {
+  draft: DraftCard;
+  menuOpen: boolean;
+  onToggleMenu(): void;
+  onResume(): void;
+  onNavigate(destination: LibraryDestination): void;
+}) {
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const resumeLabel = BUILDER_STEPS.find(step => step.id === draft.resumeStepId)?.label;
+
   return (
     <li className="m2-row">
       <button type="button" className="m2-row-primary" onClick={onResume}>
@@ -139,11 +169,60 @@ function DraftRow({ draft, onResume }: { draft: DraftCard; onResume(): void }) {
             <StateBadge state="incomplete" /> {draft.issueCount} issue{draft.issueCount === 1 ? "" : "s"} · edited on this
             device {relative(draft.updatedAt)}
           </small>
-          <small className="m2-muted">Resume: {draft.resumeStepId.replace(/-/g, " ")}</small>
+          {/*
+           * The step's own label, not its ID. This printed the raw identifier
+           * with its hyphens swapped for spaces, so the user read "spells
+           * resources" — the engine's vocabulary, in the one place the library
+           * tells them where they left off.
+           */}
+          {resumeLabel ? <small className="m2-muted">Resume: {resumeLabel}</small> : null}
         </span>
         <ChevronRight aria-hidden="true" />
         <span className="m2-visually-hidden">Resume building {draft.name}</span>
       </button>
+      {/*
+       * Named as the *build*, not just by the character's name. A draft opened
+       * to edit a committed character carries that character's name, so both
+       * rows would otherwise offer a control called "More actions for Ada" and
+       * nothing but row order would say which one discarded a build and which
+       * one deleted a character.
+       */}
+      <button
+        type="button"
+        ref={moreRef}
+        className="m2-row-more"
+        aria-expanded={menuOpen}
+        aria-label={`More actions for unfinished build ${draft.name}`}
+        onClick={onToggleMenu}
+      >
+        <span aria-hidden="true">···</span>
+      </button>
+      {menuOpen ? (
+        <AnchoredMenu label={`Actions for unfinished build ${draft.name}`} onClose={onToggleMenu}>
+          <li>
+            <button type="button" onClick={onResume}>
+              Resume building {draft.name}
+            </button>
+          </li>
+          {/* Destructive, and last. This tap asks the question; the
+              confirmation answers it. */}
+          <li>
+            <button
+              type="button"
+              className="m2-menu-destructive"
+              // Focus returns to the trigger before the dialog mounts, so
+              // Cancel lands back on the control the user came from.
+              onClick={() => {
+                onToggleMenu();
+                moreRef.current?.focus();
+                onNavigate({ kind: "discard", draftId: draft.draftId, name: draft.name, revision: draft.revision });
+              }}
+            >
+              Discard {draft.name}
+            </button>
+          </li>
+        </AnchoredMenu>
+      ) : null}
     </li>
   );
 }

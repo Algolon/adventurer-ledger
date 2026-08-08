@@ -71,6 +71,10 @@ function Shell() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   /** Guards a double-press: one confirmation must produce one delete. */
   const deletingRef = useRef<string | null>(null);
+  /** The unfinished build a discard confirmation is currently asking about. */
+  const [discardTarget, setDiscardTarget] = useState<{ draftId: string; name: string; revision: number } | null>(null);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const discardingRef = useRef<string | null>(null);
   /** Set when more than one usable ruleset exists and none has been activated. */
   const [rulesetChoice, setRulesetChoice] = useState<RulesetSelection | null>(null);
   /** Saved values the installed content cannot confirm, reported by the hydration. */
@@ -177,6 +181,14 @@ function Shell() {
          */
         case "delete":
           setDeleteTarget({ characterId: destination.characterId, name: destination.name });
+          return;
+        // Same contract for an unfinished build: the menu asks, the dialog answers.
+        case "discard":
+          setDiscardTarget({
+            draftId: destination.draftId,
+            name: destination.name,
+            revision: destination.revision,
+          });
           return;
       }
     },
@@ -399,6 +411,48 @@ function Shell() {
             }}
           />
         ) : null}
+
+        {discardTarget ? (
+          <DiscardDraftDialog
+            name={discardTarget.name}
+            error={discardError}
+            onCancel={() => {
+              setDiscardTarget(null);
+              setDiscardError(null);
+            }}
+            onConfirm={() => {
+              const { draftId, revision } = discardTarget;
+              if (discardingRef.current === draftId) return;
+              discardingRef.current = draftId;
+              void drafts
+                .discard(draftId, revision)
+                .then(outcome => {
+                  /*
+                   * `not-found` means the build is already gone — a repeated
+                   * confirm, or a discard from another tab. The user asked for
+                   * it not to exist, and it does not.
+                   */
+                  if (outcome.status !== "ok" && outcome.status !== "not-found") {
+                    setDiscardError(
+                      outcome.status === "stale"
+                        ? "That build changed on this device while the question was open. Nothing has been discarded — open it again to see where it is now."
+                        : "That build could not be discarded on this device. Nothing has been changed.",
+                    );
+                    return;
+                  }
+                  setDiscardTarget(null);
+                  setDiscardError(null);
+                  // The builder cannot stay open on a build that no longer exists.
+                  if (builderDraftId === draftId) setBuilderDraftId(null);
+                  setView("characters");
+                  refresh();
+                })
+                .finally(() => {
+                  discardingRef.current = null;
+                });
+            }}
+          />
+        ) : null}
       </div>
       {sideways ? <PortraitGuard /> : null}
     </>
@@ -490,6 +544,61 @@ function RulesetChoice({
  * to retype the name — the product uses no such convention elsewhere, and
  * inventing one here would be ceremony rather than safety.
  */
+/**
+ * Discarding an unfinished build.
+ *
+ * Deliberately not the delete dialog with different words. There is no play
+ * state, no history and no other device involved, so the copy says only what is
+ * true — an unfinished build goes, and nothing else does — and the confirming
+ * control says "Discard build" rather than borrowing "Delete character", which
+ * would describe a larger act than the one being taken.
+ */
+function DiscardDraftDialog({
+  name,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  error: string | null;
+  onCancel(): void;
+  onConfirm(): void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const describedBy = useId();
+  return (
+    <Dialog
+      title={`Discard ${name}?`}
+      role="alertdialog"
+      describedBy={describedBy}
+      // Cancel takes focus, so the safe answer is the one already under the thumb.
+      initialFocusRef={cancelRef}
+      onClose={onCancel}
+      footer={
+        <div className="m2-dialog-actions">
+          <button type="button" className="btn" ref={cancelRef} onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn danger" onClick={onConfirm}>
+            Discard build
+          </button>
+        </div>
+      }
+    >
+      <p id={describedBy}>
+        This throws away the unfinished build <b>{name}</b> and every choice made in it so far. It is stored only on this
+        device, so there is no copy elsewhere to restore from.
+      </p>
+      <p className="m2-muted">Your content packs, rulesets and finished characters are not affected.</p>
+      {error ? (
+        <p className="m2-inline-issue" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </Dialog>
+  );
+}
+
 function DeleteCharacterDialog({
   name,
   error,

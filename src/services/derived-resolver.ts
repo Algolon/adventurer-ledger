@@ -174,6 +174,17 @@ export interface SanitizedIssue {
   fieldPath?: string;
 }
 
+/**
+ * A value creation finished but the installed content or runtime cannot
+ * calculate. Carries the user-facing concept so the sheet can name what is
+ * affected without the UI parsing an ID out of the field path.
+ */
+export interface UnavailableValue {
+  fieldPath: string;
+  /** The concept as the user knows it, never an ID. */
+  label: string;
+}
+
 export interface DerivedCharacterSheet {
   characterId: ID;
   characterRevision: number;
@@ -219,6 +230,11 @@ export interface DerivedCharacterSheet {
   activeRulesetLabel: string | null;
   activeSourceIds: readonly ID[];
   issues: readonly SanitizedIssue[];
+  /**
+   * Values the content or runtime could not calculate. Non-empty does not mean
+   * the build is unfinished: creation may owe nothing and this still be set.
+   */
+  unavailableValues: readonly UnavailableValue[];
   missingDependencyIds: readonly ID[];
   staleOverrideIds: readonly ID[];
   contentFingerprint: string;
@@ -764,10 +780,33 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   actions.sort((left, right) => left.id.localeCompare(right.id));
 
   // ---- resources -----------------------------------------------------------
+  /*
+   * Which entry declares a resource, proven from content rather than assumed.
+   *
+   * `addResource` carries no provenance through the engine, so this block used
+   * to name the class for every resource — both in the contributor and in the
+   * recovery action. That is simply wrong for a species trait, a feat or an
+   * item, and a Goliath's ancestry resource read "Restore the class source".
+   * Attribution is therefore claimed only when exactly one entry in scope
+   * declares the resource; anything else stays source-neutral rather than
+   * inventing a source the resolver cannot prove.
+   */
+  const resourceGrantors = new Map<ID, ContentEntry>();
+  const ambiguousResourceIds = new Set<ID>();
+  for (const item of entries)
+    for (const effect of item.effects)
+      if (effect.type === "addResource") {
+        if (resourceGrantors.has(effect.resource.id)) ambiguousResourceIds.add(effect.resource.id);
+        else resourceGrantors.set(effect.resource.id, item);
+      }
+  const grantorOf = (resourceId: ID): ContentEntry | undefined =>
+    ambiguousResourceIds.has(resourceId) ? undefined : resourceGrantors.get(resourceId);
+
   const resources: DerivedResource[] = [];
   for (const resourceId of state?.ruleResult.resources ?? []) {
     const definition = state?.ruleResult.resourceDefinitions.get(resourceId);
     const contentEntry = byId.get(resourceId);
+    const grantor = grantorOf(resourceId);
     const maximumSource = definition?.maximum;
     const resolvedMaximum =
       maximumSource?.kind === "literal" && typeof maximumSource.value === "number"
@@ -775,17 +814,26 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         : maximumSource?.kind === "path"
           ? contextValues[maximumSource.path]
           : undefined;
+    /*
+     * The recovery names the concept, never a source type. Nothing the user can
+     * do in Edit character resolves a maximum the content never defines, so the
+     * label points at the content that grants it instead of demanding a fix the
+     * user cannot perform.
+     */
+    const recoveryAction = grantor ? `Check ${grantor.name}` : "Check the granting content";
     const maximum =
       typeof resolvedMaximum === "number"
         ? applyOverride(
             known(resolvedMaximum, [
-              { kind: "feature", label: `${classEntry?.name ?? "Class"} level ${character.level}`, amount: resolvedMaximum, entryId: classEntry?.id, sourceId: classEntry?.sourceId },
+              grantor
+                ? { kind: "feature", label: grantor.name, amount: resolvedMaximum, entryId: grantor.id, sourceId: grantor.sourceId }
+                : { kind: "feature", label: definition?.name ?? contentEntry?.name ?? "Granting content", amount: resolvedMaximum },
             ]),
             `resource.${resourceId}.maximum`,
             overrides,
             detectedStaleOverrideIds,
           )
-        : unknown({ code: "RESOURCE_MAXIMUM_UNKNOWN", fieldPath: `resource.${resourceId}.maximum`, action: "Restore the class source" });
+        : unknown({ code: "RESOURCE_MAXIMUM_UNKNOWN", fieldPath: `resource.${resourceId}.maximum`, action: recoveryAction });
     const currentUses = runtime?.resourceUses[resourceId];
     resources.push({
       id: resourceId,
@@ -796,7 +844,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
           ? known(currentUses, [{ kind: "base", label: "Current play state" }])
           : maximum.value !== null
             ? known(maximum.value, [{ kind: "base", label: "Starts full" }])
-            : unknown({ code: "RESOURCE_MAXIMUM_UNKNOWN", fieldPath: `resource.${resourceId}.current`, action: "Restore the class source" }),
+            : unknown({ code: "RESOURCE_MAXIMUM_UNKNOWN", fieldPath: `resource.${resourceId}.current`, action: recoveryAction }),
       recharge: definition?.recharge ?? "manual",
     });
   }
@@ -912,6 +960,28 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   }
 
   // ---- classification ------------------------------------------------------
+  /*
+   * Two different facts used to share one word.
+   *
+   * "Incomplete" means the user still owes a decision, and Edit character is
+   * where they pay it. A resource maximum the installed content never defines
+   * is not a decision: Review is right that nothing is outstanding, and the
+   * sheet was still calling the character unfinished and sending the user to
+   * an editor that cannot resolve it. A value the content cannot calculate is
+   * now reported as its own condition, counted as an issue so the library stops
+   * reading "0 issues", and left non-blocking for commit.
+   */
+  const unavailableValues: UnavailableValue[] = resources
+    .filter(item => item.maximum.value === null)
+    .map(item => ({ fieldPath: `resource.${item.id}.maximum`, label: item.label }));
+  for (const item of unavailableValues)
+    issues.push({
+      code: "DERIVED_VALUE_UNAVAILABLE",
+      severity: "warning",
+      recordId: character.id,
+      fieldPath: item.fieldPath,
+    });
+
   const automaticMinimumMet =
     mode === "automatic" &&
     allAbilitiesKnown &&
@@ -923,8 +993,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     speed.value !== null &&
     saves.every(item => item.total.value !== null) &&
     checks.every(item => item.total.value !== null) &&
-    actions.length > 0 &&
-    resources.every(item => item.maximum.value !== null);
+    actions.length > 0;
 
   const manualMinimumMet =
     mode === "manual" &&
@@ -1018,6 +1087,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     activeRulesetLabel: input.ruleset?.name ?? null,
     activeSourceIds,
     issues: uniqueIssues,
+    unavailableValues,
     missingDependencyIds: [...missingDependencyIds].sort((left, right) => left.localeCompare(right)),
     staleOverrideIds,
     contentFingerprint: computeContentFingerprint(entries, character.rulesetProfileId),
