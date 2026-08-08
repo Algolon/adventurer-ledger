@@ -18,7 +18,7 @@
  * It is also the boundary the import UI talks to, so no React component opens a
  * Dexie table to install content.
  */
-import type { ContentEntry, ContentPack, ID, RulesetProfile } from "@/src/domain/model";
+import type { Category, ContentEntry, ContentPack, ID, RulesetProfile } from "@/src/domain/model";
 import {
   confirmImportSet,
   previewContentPackSet,
@@ -143,6 +143,14 @@ export interface RulesetMembershipRepair {
   entryCount: number;
   addedEntryCount: number;
   removedEntryCount: number;
+  /**
+   * Categories the profile did not reach before and now does.
+   *
+   * Reported separately from the entry counts because a source-scoped profile
+   * gains categories without gaining any explicit membership: its counts stay at
+   * zero while the repair is the only reason its new content is reachable.
+   */
+  addedCategories: readonly Category[];
 }
 
 /**
@@ -442,6 +450,7 @@ export class ContentInstallService {
             entryCount: update.profile.allowedEntryIds?.length ?? 0,
             addedEntryCount: update.addedEntryIds.length,
             removedEntryCount: update.removedEntryIds.length,
+            addedCategories: update.addedCategories,
           });
         }
         return repaired;
