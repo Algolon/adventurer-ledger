@@ -230,7 +230,7 @@ test.describe("updating an installed pack makes its new content reachable", () =
     );
     await page.getByLabel("Character name", { exact: true }).fill("Sedge Marrick");
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
+    await page.getByRole("button", { name: /^Species (Incomplete|Complete)$/ }).click();
     await expect(page.getByRole("button", { name: /^Reedfolk/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toBeVisible();
   });

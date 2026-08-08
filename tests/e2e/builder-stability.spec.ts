@@ -33,6 +33,22 @@ async function settled(page: Page) {
   await expect(page.getByRole("button", { name: /^(Continue|Finish and open sheet)$/ })).toBeEnabled();
 }
 
+/**
+ * Waits until a step's own answer has reached the persisted draft.
+ *
+ * An edit made inside a step is saved on a debounce, so neither the pressed
+ * state of the control nor the enabled footer proves anything: both are local,
+ * and the save may not have been requested yet. The step list is drawn from the
+ * plan, and the plan is only recomputed from what the service actually wrote —
+ * so a step reading Complete is the first observable moment at which reloading
+ * is safe.
+ */
+async function persisted(page: Page, step: string) {
+  await page.getByRole("button", { name: "All steps" }).click();
+  await expect(page.getByRole("button", { name: new RegExp(`^${step} Complete$`) })).toBeVisible();
+  await page.getByRole("button", { name: "All steps" }).click();
+}
+
 async function openSettings(page: Page) {
   const candidates = page.getByRole("button", { name: /^(Open Settings|Settings)$/ });
   const total = await candidates.count();
@@ -57,8 +73,8 @@ async function importAcceptancePack(page: Page) {
   await expect(page.getByText(/Import completed atomically/)).toBeVisible();
 }
 
-/** A build carried as far as Origin, with class and level already settled. */
-async function buildToOrigin(page: Page, name: string) {
+/** A build carried as far as Background, with class, level and species settled. */
+async function buildToBackground(page: Page, name: string) {
   await page.getByRole("button", { name: "Characters", exact: true }).click();
   await page.getByRole("button", { name: "New character" }).last().click();
   await page.getByLabel("Character name", { exact: true }).fill(name);
@@ -66,42 +82,51 @@ async function buildToOrigin(page: Page, name: string) {
   await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
   await page.getByLabel("Create this character at level").selectOption("5");
   await next(page);
-  await expect(stepTitle(page)).toHaveText("Origin");
+  await expect(stepTitle(page)).toHaveText("Species");
   await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-  await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
   await page.getByRole("button", { name: /^Cairnlore/ }).click();
+  await next(page);
+
+  await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
   await settled(page);
+  await persisted(page, "Background");
 }
 
 test.describe("reopening lands where the user left off", () => {
   test("a reload and a resume return to the same step, not a later one", async ({ page }) => {
     await importAcceptancePack(page);
-    await buildToOrigin(page, "Kept Place");
+    await buildToBackground(page, "Kept Place");
 
     /*
-     * Origin is fully answered here, so the plan's next unresolved step is
-     * Abilities. Resuming used to take whichever was further along and would
-     * therefore open on Abilities — a step the user had never visited.
+     * Species and Background are both fully answered here, so the plan's next
+     * unresolved step is Abilities. Resuming used to take whichever was further
+     * along and would therefore open on Abilities — a step the user had never
+     * visited. It opens where the user actually was.
      */
     await page.reload();
     await page.getByRole("button", { name: "Characters", exact: true }).click();
     await page.getByRole("button", { name: /Resume building/ }).click();
 
-    await expect(stepTitle(page)).toHaveText("Origin");
-    await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(stepTitle(page)).toHaveText("Background");
     await expect(page.getByRole("button", { name: /^Ferry Clerk/ })).toHaveAttribute("aria-pressed", "true");
+
+    // The step before it kept its own work too.
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(stepTitle(page)).toHaveText("Species");
+    await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: /^Cairnlore/ })).toHaveAttribute("aria-pressed", "true");
   });
 
   test("stepping back and reloading returns to the step stepped back to", async ({ page }) => {
     await importAcceptancePack(page);
-    await buildToOrigin(page, "Went Back");
+    await buildToBackground(page, "Went Back");
     await next(page);
     await expect(stepTitle(page)).toHaveText("Abilities");
     await settled(page);
 
     // Deliberately go back to re-read something.
     await page.getByRole("button", { name: "Back" }).click();
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Background");
     await settled(page);
 
     await page.reload();
@@ -109,12 +134,12 @@ test.describe("reopening lands where the user left off", () => {
     await page.getByRole("button", { name: /Resume building/ }).click();
 
     // The place the user chose, not the place the plan would prefer.
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Background");
   });
 
   test("class and level survive a reload taken from a later step", async ({ page }) => {
     await importAcceptancePack(page);
-    await buildToOrigin(page, "Deep Reload");
+    await buildToBackground(page, "Deep Reload");
     await next(page);
     await expect(stepTitle(page)).toHaveText("Abilities");
     await settled(page);
@@ -155,7 +180,7 @@ test.describe("an action waiting on persistence cannot be double-submitted", () 
       });
 
     await expect(stepTitle(page)).toHaveText("Class & level");
-    await expect(page.getByText("Step 2 of 8")).toBeVisible();
+    await expect(page.getByText("Step 2 of 9")).toBeVisible();
   });
 
   test("pressing Finish twice creates exactly one character", async ({ page }) => {
@@ -169,8 +194,10 @@ test.describe("an action waiting on persistence cannot be double-submitted", () 
     await next(page);
 
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
 
     for (const [ability, value] of [
@@ -243,7 +270,7 @@ test.describe("the primary nav is not a dead control while building", () => {
 
   test("Characters leaves the builder and lists the draft as resumable", async ({ page }) => {
     await importAcceptancePack(page);
-    await buildToOrigin(page, "Nav Exit");
+    await buildToBackground(page, "Nav Exit");
 
     /*
      * The builder owns the whole surface, so a nav button that only moved the
@@ -258,13 +285,13 @@ test.describe("the primary nav is not a dead control while building", () => {
     // Nothing was lost: the draft is listed and resumes where it was left.
     await expect(page.getByText("Unfinished builds")).toBeVisible();
     await page.getByRole("button", { name: /Resume building/ }).click();
-    await expect(stepTitle(page)).toHaveText("Origin");
-    await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(stepTitle(page)).toHaveText("Background");
+    await expect(page.getByRole("button", { name: /^Ferry Clerk/ })).toHaveAttribute("aria-pressed", "true");
   });
 
   test("Settings leaves the builder too", async ({ page }) => {
     await importAcceptancePack(page);
-    await buildToOrigin(page, "Settings Exit");
+    await buildToBackground(page, "Settings Exit");
 
     await page.getByRole("button", { name: /^(Open Settings|Settings)$/ }).first().click();
     await expect(stepTitle(page)).toHaveCount(0);

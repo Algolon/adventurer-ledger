@@ -108,13 +108,17 @@ test.describe("an imported pack becomes a selectable ruleset", () => {
     // ---- class & level are one step; both are already chosen ---------------
     await next(page);
 
-    // ---- origin, including a choice the species trait declares -------------
+    // ---- species, including a choice the species trait declares ------------
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
+    // The decision lives inside the species that produced it, and its
+    // provenance is on screen: the trait asks, not the species.
     await expect(page.getByRole("group", { name: /Cairn Sense focus/ })).toBeVisible();
-    // Provenance is on screen: the trait asks, not the species.
     await expect(page.getByText("From Cairn Sense")).toBeVisible();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    // ---- background, on its own step ---------------------------------------
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
 
     // ---- abilities: base scores, origin increases, final scores ------------
@@ -262,8 +266,10 @@ test.describe("the standard array is the ruleset's own", () => {
     await startAtLevelFive(page, "Array check");
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
 
     const chips = page.locator(".m2-remaining-chip");

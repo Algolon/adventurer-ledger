@@ -53,6 +53,22 @@ export const ACCEPTANCE_IDS = {
   lineage: "lineage:eb-deepcairn",
   /** The lineage's own trait, which stands in for the one it replaces. */
   lineageTrait: "trait:eb-deep-listening",
+  /**
+   * A species that asks for nothing at all. It is what proves the Species step
+   * shows no empty "Choices to make" section for content that has none.
+   */
+  simpleSpecies: "species:eb-marshlight",
+  simpleSpeciesTrait: "trait:eb-lantern-eye",
+  /**
+   * A species whose nested decision is an ancestry declared inline, rather than
+   * a lineage entry. Two different shapes of nested species decision have to
+   * reach the same step by the same typed route.
+   */
+  ancestrySpecies: "species:eb-emberkin",
+  /** Automatic, so the expanded panel has an automatic benefit to contrast. */
+  ancestryTraitAutomatic: "trait:eb-cinder-step",
+  /** Partially automated: the app cannot settle it, and must say so. */
+  ancestryTraitManual: "trait:eb-ember-memory",
   /** A legacy `race` origin, to prove the older identifier still resolves. */
   legacyRace: "race:eb-hillfolk",
   /** Reached only through a required `ContentLink` on the level 5 feature. */
@@ -89,6 +105,13 @@ export const ACCEPTANCE_CHOICES = {
    * lets the same pack prove both paths.
    */
   lineage: "choice:eb-cairn-lineage",
+  /**
+   * A required (`min: 1`) ancestry declared by a species directly, with inline
+   * option effects rather than a lineage entry. It is the second shape of
+   * species-owned decision, and it must reach the Species step by the same
+   * typed route the lineage does.
+   */
+  ancestry: "choice:eb-emberkin-ancestry",
 } as const;
 
 export const ACCEPTANCE_BUNDLES = {
@@ -564,7 +587,130 @@ const legacyRace = entry({
   },
 });
 
+/**
+ * A species that asks for nothing.
+ *
+ * Two traits, both automatic, no lineages and no choices of its own. Selecting
+ * it must produce an expanded panel with "What you get" and no "Choices to
+ * make" section at all — an empty required-decisions heading reads as a
+ * decision the user has failed to find.
+ */
+const simpleSpecies = entry({
+  id: ACCEPTANCE_IDS.simpleSpecies,
+  slug: "eb-marshlight",
+  name: "Marshlight",
+  category: "species",
+  summary: "Born to the reed flats, where the ground is never quite either thing.",
+  mechanics: {
+    creatureType: "humanoid",
+    sizeChoices: ["small", "medium"],
+    speed: 30,
+    traitIds: [ACCEPTANCE_IDS.simpleSpeciesTrait],
+    lineageIds: [],
+  },
+});
+
+/**
+ * A species whose nested decision is an ancestry, declared inline.
+ *
+ * The lineage species models a decision that activates another *entry*; this
+ * one models a decision whose options carry their own effects. Both are
+ * species-owned, and the planner routes both to the Species step because a
+ * species route reached the entry that declares them — not because of anything
+ * read from the words "lineage" or "ancestry".
+ */
+const ancestrySpecies = entry({
+  id: ACCEPTANCE_IDS.ancestrySpecies,
+  slug: "eb-emberkin",
+  name: "Emberkin",
+  category: "species",
+  summary: "Descended from those who kept the first lamps burning through the long dark.",
+  choices: [
+    {
+      id: ACCEPTANCE_CHOICES.ancestry,
+      label: "Emberkin ancestry",
+      min: 1,
+      max: 1,
+      repeatable: false,
+      options: [
+        {
+          id: `option:${ACCEPTANCE_PROFICIENCIES.skillEmberlore}`,
+          label: "Hearth-kept",
+          effects: [grant(ACCEPTANCE_PROFICIENCIES.skillEmberlore)],
+        },
+        {
+          id: `option:${ACCEPTANCE_PROFICIENCIES.skillNightwatch}`,
+          label: "Ash-walking",
+          effects: [grant(ACCEPTANCE_PROFICIENCIES.skillNightwatch)],
+        },
+      ],
+    },
+  ],
+  mechanics: {
+    creatureType: "humanoid",
+    sizeChoices: ["medium"],
+    speed: 30,
+    traitIds: [ACCEPTANCE_IDS.ancestryTraitAutomatic, ACCEPTANCE_IDS.ancestryTraitManual],
+    lineageIds: [],
+  },
+});
+
 const speciesTraits: ContentEntry[] = [
+  entry({
+    id: ACCEPTANCE_IDS.simpleSpeciesTrait,
+    slug: "eb-lantern-eye",
+    name: "Lantern Eye",
+    category: "feat",
+    summary: "Low light costs you nothing.",
+    effects: [
+      {
+        id: "effect:eb-lantern-eye-initiative",
+        type: "modifyInitiative",
+        operation: "add",
+        value: { kind: "literal", value: 1 },
+      },
+    ],
+    mechanics: { category: "other", repeatable: false },
+  }),
+  entry({
+    id: ACCEPTANCE_IDS.ancestryTraitAutomatic,
+    slug: "eb-cinder-step",
+    name: "Cinder Step",
+    category: "feat",
+    summary: "Hot ground does not slow your crossing.",
+    effects: [
+      {
+        id: "effect:eb-cinder-step-speed",
+        type: "modifySpeed",
+        operation: "add",
+        value: { kind: "literal", value: 5 },
+      },
+    ],
+    mechanics: { category: "other", repeatable: false },
+  }),
+  /*
+   * A trait the engine cannot settle on its own.
+   *
+   * `manualAdjudication` is the typed way content says "this needs a ruling".
+   * The builder has to show it as such rather than list it beside the automatic
+   * traits, because a benefit the sheet is not tracking is exactly the thing a
+   * player must not discover at the table.
+   */
+  entry({
+    id: ACCEPTANCE_IDS.ancestryTraitManual,
+    slug: "eb-ember-memory",
+    name: "Ember Memory",
+    category: "feat",
+    summary: "You recall a place you have never been, once per rest, as your table judges it.",
+    effects: [
+      {
+        id: "effect:eb-ember-memory-ruling",
+        type: "manualAdjudication",
+        reasonCode: "TABLE_RULING_REQUIRED",
+      },
+    ],
+    mechanics: { category: "other", repeatable: false },
+  }),
   entry({
     id: ACCEPTANCE_IDS.traitWithChoice,
     slug: "eb-cairn-sense",
@@ -780,6 +926,8 @@ export const ACCEPTANCE_ENTRIES: readonly ContentEntry[] = [
   species,
   lineage,
   legacyRace,
+  simpleSpecies,
+  ancestrySpecies,
   ...speciesTraits,
   background,
   ...feats,

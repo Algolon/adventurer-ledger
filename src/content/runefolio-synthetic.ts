@@ -43,6 +43,21 @@ export const SYNTHETIC_IDS = {
   class: "class:vanguard",
   species: "species:riverborn",
   background: "background:caravan-warden",
+  /*
+   * Three more origins, so the Species step is a real list rather than a list of
+   * one. Each models a different shape of species-owned decision, which is what
+   * the creation flow has to present correctly without knowing any of their
+   * names:
+   *
+   *   Riverborn   two automatic traits, nothing to decide
+   *   Stonevigil  a lineage choice, where the lineage replaces an inherited trait
+   *   Emberkin    an inline ancestry choice, and a trait needing a table ruling
+   */
+  speciesLineage: "species:stonevigil",
+  speciesAncestry: "species:emberkin",
+  lineageDeepdelve: "lineage:deepdelve",
+  /** A second background, so Background is a choice and not a formality. */
+  backgroundSecond: "background:ferry-hand",
   style: "style:guarded-hand",
   heavyStyle: "style:reavers-grip",
   mastery: "mastery:measured-cut",
@@ -88,6 +103,12 @@ export const SYNTHETIC_CHOICES = {
   weaponMastery: "choice:vanguard-mastery",
   classSkills: "choice:vanguard-skills",
   backgroundLanguage: "choice:warden-languages",
+  /** Species-owned: activates a lineage entry. */
+  speciesLineage: "choice:stonevigil-lineage",
+  /** Species-owned: options carry their own effects, with no entry behind them. */
+  speciesAncestry: "choice:emberkin-ancestry",
+  /** Background-owned, on the second background. */
+  backgroundFerryCraft: "choice:ferry-hand-craft",
 } as const;
 
 export const SYNTHETIC_EQUIPMENT_BUNDLE = "bundle:vanguard-field-kit";
@@ -164,6 +185,12 @@ export const PROFICIENCY_IDS = {
   saveCharisma: "proficiency:save-charisma",
   armorLight: "proficiency:armor-light",
   weaponSimple: "proficiency:weapon-simple",
+  skillStonecraft: "proficiency:skill-stonecraft",
+  skillEmberlore: "proficiency:skill-emberlore",
+  skillFerrylore: "proficiency:skill-ferrylore",
+  /** Tool proficiencies, so a background can grant one and the step can say so. */
+  toolCartwright: "proficiency:tool-cartwright",
+  toolFerrywright: "proficiency:tool-ferrywright",
 } as const;
 
 const proficiencyEntries: ContentEntry[] = [
@@ -186,6 +213,11 @@ const proficiencyEntries: ContentEntry[] = [
   proficiency(PROFICIENCY_IDS.saveCharisma, "save-charisma", "Charisma save", "save", "charisma", "charisma"),
   proficiency(PROFICIENCY_IDS.armorLight, "armor-light", "Light armour", "armor", "light"),
   proficiency(PROFICIENCY_IDS.weaponSimple, "weapon-simple", "Simple weapons", "weapon", "simple"),
+  proficiency(PROFICIENCY_IDS.skillStonecraft, "skill-stonecraft", "Stonecraft", "skill", "stonecraft", "intelligence"),
+  proficiency(PROFICIENCY_IDS.skillEmberlore, "skill-emberlore", "Emberlore", "skill", "emberlore", "intelligence"),
+  proficiency(PROFICIENCY_IDS.skillFerrylore, "skill-ferrylore", "Ferrylore", "skill", "ferrylore", "wisdom"),
+  proficiency(PROFICIENCY_IDS.toolCartwright, "tool-cartwright", "Cartwright's tools", "tool", "cartwright"),
+  proficiency(PROFICIENCY_IDS.toolFerrywright, "tool-ferrywright", "Ferrywright's tools", "tool", "ferrywright"),
 ];
 
 /**
@@ -362,7 +394,149 @@ const speciesEntry = entry({
   },
 });
 
+/**
+ * A species whose nested decision activates another entry.
+ *
+ * The lineage is reached through this species' own choice, so nothing is active
+ * merely because `lineageIds` lists it. Taking Deepdelve swaps out Cavern Sense
+ * through the typed `replacesTraitIds` relationship — not by any comparison of
+ * trait names.
+ */
+const speciesWithLineage = entry({
+  id: SYNTHETIC_IDS.speciesLineage,
+  slug: "stonevigil",
+  name: "Stonevigil",
+  category: "species",
+  summary: "Keepers of the deep waymarks, at home where the daylight stops.",
+  choices: [
+    {
+      id: SYNTHETIC_CHOICES.speciesLineage,
+      label: "Stonevigil lineage",
+      min: 1,
+      max: 1,
+      repeatable: false,
+      options: [{ id: "option:deepdelve", label: "Deepdelve", entryId: SYNTHETIC_IDS.lineageDeepdelve }],
+    },
+  ],
+  mechanics: {
+    creatureType: "humanoid",
+    sizeChoices: ["medium"],
+    speed: 30,
+    traitIds: ["trait:cavern-sense", "trait:patient-hands"],
+    lineageIds: [SYNTHETIC_IDS.lineageDeepdelve],
+  },
+});
+
+const lineageEntry = entry({
+  id: SYNTHETIC_IDS.lineageDeepdelve,
+  slug: "deepdelve",
+  name: "Deepdelve",
+  category: "lineage",
+  summary: "Stonevigil raised below the last stair, who navigate by sound alone.",
+  mechanics: {
+    parentSpeciesIds: [SYNTHETIC_IDS.speciesLineage],
+    traitIds: ["trait:stone-listening"],
+    replacesTraitIds: ["trait:cavern-sense"],
+  },
+});
+
+/**
+ * A species whose nested decision is declared inline.
+ *
+ * Its ancestry options carry their own effects rather than pointing at an
+ * entry, which is the second shape a species-owned decision takes. It also
+ * carries one trait the engine cannot settle, so the builder has something
+ * genuinely manual to distinguish from the automatic traits beside it.
+ */
+const speciesWithAncestry = entry({
+  id: SYNTHETIC_IDS.speciesAncestry,
+  slug: "emberkin",
+  name: "Emberkin",
+  category: "species",
+  summary: "Descended from the lamp-keepers who walked the long dark roads.",
+  choices: [
+    {
+      id: SYNTHETIC_CHOICES.speciesAncestry,
+      label: "Emberkin ancestry",
+      min: 1,
+      max: 1,
+      repeatable: false,
+      options: [
+        {
+          id: "option:hearth-kept",
+          label: "Hearth-kept",
+          effects: [{ id: "effect:grant-emberlore", type: "grantProficiency", proficiencyId: PROFICIENCY_IDS.skillEmberlore }],
+        },
+        {
+          id: "option:ash-walking",
+          label: "Ash-walking",
+          effects: [{ id: "effect:grant-stonecraft", type: "grantProficiency", proficiencyId: PROFICIENCY_IDS.skillStonecraft }],
+        },
+      ],
+    },
+  ],
+  mechanics: {
+    creatureType: "humanoid",
+    sizeChoices: ["medium"],
+    speed: 30,
+    traitIds: ["trait:cinder-step", "trait:ember-memory"],
+    lineageIds: [],
+  },
+});
+
 const speciesTraits: ContentEntry[] = [
+  entry({
+    id: "trait:cavern-sense",
+    slug: "cavern-sense",
+    name: "Cavern Sense",
+    category: "feat",
+    summary: "You judge depth and draught by the air on your face.",
+    mechanics: { category: "other", repeatable: false },
+  }),
+  entry({
+    id: "trait:patient-hands",
+    slug: "patient-hands",
+    name: "Patient Hands",
+    category: "feat",
+    summary: "Careful work does not tire you the way it tires others.",
+    mechanics: { category: "other", repeatable: false },
+  }),
+  entry({
+    id: "trait:stone-listening",
+    slug: "stone-listening",
+    name: "Stone Listening",
+    category: "feat",
+    summary: "You hear water and weight moving through rock long before you see either.",
+    mechanics: { category: "other", repeatable: false },
+  }),
+  entry({
+    id: "trait:cinder-step",
+    slug: "cinder-step",
+    name: "Cinder Step",
+    category: "feat",
+    summary: "Hot ground and loose ash do not slow your crossing.",
+    effects: [
+      { id: "effect:cinder-step-speed", type: "modifySpeed", operation: "add", value: { kind: "literal", value: 5 } },
+    ],
+    mechanics: { category: "other", repeatable: false },
+  }),
+  /*
+   * A trait the engine deliberately does not settle.
+   *
+   * `manualAdjudication` is how content states that something needs a ruling.
+   * The creation flow has to show it as such rather than list it beside the
+   * automatic traits — a benefit the sheet is not tracking is the one thing a
+   * player must not find out about at the table.
+   */
+  entry({
+    id: "trait:ember-memory",
+    slug: "ember-memory",
+    name: "Ember Memory",
+    category: "feat",
+    summary: "Once between rests you recall a place you have never been, as your table judges it.",
+    effects: [{ id: "effect:ember-memory-ruling", type: "manualAdjudication", reasonCode: "TABLE_RULING_REQUIRED" }],
+    mechanics: { category: "other", repeatable: false },
+  }),
   entry({
     id: "trait:river-footing",
     slug: "river-footing",
@@ -403,10 +577,95 @@ const backgroundEntry = entry({
   mechanics: {
     abilityScoreChoices: { abilities: ["strength", "constitution", "dexterity"], increasePattern: [2, 1] },
     featId: "feat:warden-vigil",
-    proficiencyIds: [PROFICIENCY_IDS.skillWatchcraft],
+    proficiencyIds: [PROFICIENCY_IDS.skillWatchcraft, PROFICIENCY_IDS.toolCartwright],
     equipmentChoiceIds: [],
     equipmentBundleIds: [],
   },
+});
+
+/**
+ * A second background, so Background is a genuine decision.
+ *
+ * Between them the two backgrounds exercise every row the step presents:
+ * ability increases, an origin feat, skill and tool proficiencies, a starting
+ * kit that is partly granted and partly chosen, and a background-owned nested
+ * decision. None of it is named anywhere in the UI.
+ */
+const secondBackgroundEntry = entry({
+  id: SYNTHETIC_IDS.backgroundSecond,
+  slug: "ferry-hand",
+  name: "Ferry Hand",
+  category: "background",
+  summary: "You worked the crossings, reading the water and the people waiting on it.",
+  choices: [
+    {
+      id: SYNTHETIC_CHOICES.backgroundFerryCraft,
+      label: "Ferry craft",
+      min: 1,
+      max: 1,
+      repeatable: false,
+      options: [
+        {
+          id: "option:ferry-parley",
+          label: "Reading passengers",
+          effects: [{ id: "effect:grant-parley", type: "grantProficiency", proficiencyId: PROFICIENCY_IDS.skillParley }],
+        },
+        {
+          id: "option:ferry-riverlore",
+          label: "Reading the water",
+          effects: [{ id: "effect:grant-ferry-riverlore", type: "grantProficiency", proficiencyId: PROFICIENCY_IDS.skillRiverlore }],
+        },
+      ],
+    },
+  ],
+  equipmentBundles: [
+    {
+      id: "bundle:ferry-hand-kit",
+      label: "Ferry hand's kit",
+      entries: [
+        { type: "item", itemId: "item:river-kit", quantity: 1, status: "carried" },
+        {
+          type: "choice",
+          id: "equipment-choice:ferry-hand-tools",
+          label: "Working tools",
+          min: 1,
+          max: 1,
+          options: [
+            { id: "equipment-option:ferry-warden-pack", label: "Warden pack", entries: [{ type: "item", itemId: "item:warden-pack", quantity: 1, status: "carried" }] },
+            { id: "equipment-option:ferry-reed-staff", label: "Reed staff", entries: [{ type: "item", itemId: RUNECALLER_IDS.staff, quantity: 1, status: "carried" }] },
+          ],
+        },
+      ],
+    },
+  ],
+  mechanics: {
+    /*
+     * Two legal ways to spend the same allowance across three abilities. The
+     * default stays `[2, 1]` so a reader that predates alternatives finds
+     * exactly what it expects; `increasePatterns` adds the +1/+1/+1 spread.
+     */
+    abilityScoreChoices: {
+      abilities: ["dexterity", "wisdom", "charisma"],
+      increasePattern: [2, 1],
+      increasePatterns: [
+        [2, 1],
+        [1, 1, 1],
+      ],
+    },
+    featId: "feat:ferry-sense",
+    proficiencyIds: [PROFICIENCY_IDS.skillFerrylore, PROFICIENCY_IDS.toolFerrywright],
+    equipmentChoiceIds: [],
+    equipmentBundleIds: ["bundle:ferry-hand-kit"],
+  },
+});
+
+const secondBackgroundFeat = entry({
+  id: "feat:ferry-sense",
+  slug: "ferry-sense",
+  name: "Ferry Sense",
+  category: "feat",
+  summary: "You read a crossing's mood — the water's and the queue's — before you push off.",
+  mechanics: { category: "origin", repeatable: false },
 });
 
 const backgroundFeat = entry({
@@ -919,9 +1178,14 @@ export const SYNTHETIC_ENTRIES: readonly ContentEntry[] = [
   classEntry,
   ...classFeatures,
   speciesEntry,
+  speciesWithLineage,
+  speciesWithAncestry,
+  lineageEntry,
   ...speciesTraits,
   backgroundEntry,
   backgroundFeat,
+  secondBackgroundEntry,
+  secondBackgroundFeat,
   styleEntry,
   heavyStyleEntry,
   masteryEntry,

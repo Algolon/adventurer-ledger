@@ -28,7 +28,7 @@ async function startNewCharacter(page: Page) {
   await page.goto(APP_ROOT);
   await expect(page.getByRole("heading", { name: "No characters on this device yet" })).toBeVisible();
   await page.getByRole("button", { name: "New character" }).last().click();
-  await expect(page.getByText("Step 1 of 8")).toBeVisible();
+  await expect(page.getByText("Step 1 of 9")).toBeVisible();
 }
 
 async function buildBrammel(page: Page) {
@@ -37,6 +37,8 @@ async function buildBrammel(page: Page) {
   await page.getByRole("button", { name: /^Vanguard/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^Trade Cant/ }).click();
   await continueStep(page);
@@ -52,7 +54,7 @@ async function buildBrammel(page: Page) {
   await continueStep(page);
   await page.getByLabel("Nickname").fill("Boss");
   await continueStep(page);
-  await expect(page.getByText("Step 8 of 8")).toBeVisible();
+  await expect(page.getByText("Step 9 of 9")).toBeVisible();
   await page.getByRole("button", { name: "Finish and open sheet" }).click();
   await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
 }
@@ -63,6 +65,8 @@ async function buildSereth(page: Page) {
   await page.getByRole("button", { name: /^Runecaller/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await continueStep(page);
+
   await page.getByRole("button", { name: /^Caravan Warden/ }).click();
   await page.getByRole("button", { name: /^River Signs/ }).click();
   await continueStep(page);
@@ -93,7 +97,7 @@ async function buildSereth(page: Page) {
 async function openEdit(page: Page) {
   await page.getByRole("tab", { name: "Character" }).click();
   await page.getByRole("button", { name: "Edit character", exact: true }).click();
-  await expect(page.getByText(/^Step \d of \d$/)).toBeVisible();
+  await expect(page.getByText(/^Step \d+ of \d+$/)).toBeVisible();
 }
 
 /** Leaves whatever view is showing for the library. */
@@ -147,8 +151,10 @@ test.describe("editing a martial character", () => {
     await expect(page.getByRole("button", { name: /^Vanguard/ })).toHaveAttribute("aria-pressed", "true");
 
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /^Origin/ }).click();
+    await page.getByRole("button", { name: /^Species/ }).click();
     await expect(page.getByRole("button", { name: /^Riverborn/ })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /^Background/ }).click();
     await expect(page.getByRole("button", { name: /^Caravan Warden/ })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("button", { name: /^Trade Cant/ })).toHaveAttribute("aria-pressed", "true");
 
@@ -246,7 +252,7 @@ test.describe("editing a martial character", () => {
     await page.getByRole("tab", { name: "Character" }).click();
     const edit = page.getByRole("button", { name: "Edit character", exact: true });
     await edit.click({ clickCount: 2, delay: 0 });
-    await expect(page.getByText(/^Step \d of \d$/)).toBeVisible();
+    await expect(page.getByText(/^Step \d+ of \d+$/)).toBeVisible();
 
     await page.getByRole("button", { name: "Save & close" }).click();
     await goToCharacters(page);

@@ -65,6 +65,123 @@ These are **open**, not delivered. A pilot will meet them.
   not evidence of handset behaviour: install, relaunch, offline operation and
   storage eviction on a real device are untested.
 
+## Creation information architecture
+
+Creation asks one conceptual question per step, and each selectable option
+explains itself where it is chosen rather than producing unexplained follow-up
+controls on a later screen.
+
+**The sequence.** Basics, Class & level, Species, Background, Abilities, Class
+choices, the conditional Spells & resources, Equipment, Identity, Review.
+Species and Background were one `Origin` step that combined both decisions and
+every choice either of them owned.
+
+**Draft compatibility.** The species step keeps the storage ID `origin`. IDs are
+storage identities and labels are presentation, so relabelling `origin` to
+Species and adding a new `background` ID after it is not a migration: a draft
+written before the split holds `lastStepId: "origin"` and resumes on Species
+untouched. A draft that has never seen `background` has simply not reached it,
+which is how every unvisited step already behaves.
+
+**Ownership is typed, never nominal.** A decision belongs to Species because a
+species, species-trait or lineage-trait activation route reached the entry that
+declares it, and to Background because a background or background-feat route
+did. An entry activated by a selected option inherits its owner's step, which is
+what keeps a lineage's own follow-up decision on Species. Nothing is matched by
+display name, and lineage replacement stays governed by `replacesTraitIds`.
+
+**Progressive disclosure.** Class, Species and Background share one selection
+component. Before selection each option is a compact row — name, its own
+summary, and at most four at-a-glance facts read from typed mechanics. On
+selection it expands in place with What you get, Choices to make, At your
+starting level and a More details disclosure; empty sections are omitted
+entirely, so an option with nothing to decide shows no empty Choices heading.
+Exactly one option is expanded, because exactly one can be selected. The row that
+was pressed is held at its viewport position while the panel grows, including the
+second growth when the plan supplies the nested decisions. Facts are omitted
+rather than invented when mechanics do not parse, and no raw ID, effect
+expression or issue code reaches the screen.
+
+**Automatic and manual benefits are distinguished** from the entry's own typed
+effect dispositions, so a trait carrying `manualAdjudication` is labelled for the
+table rather than listed beside the ones the engine applies.
+
+**Review names the two origins separately** and states each ability as base, the
+increase the background authorised, and the total — the same three concepts the
+Abilities step presents, in the same order, and taken from the planner so they
+are the numbers the commit will actually write. No identifier, issue code or
+effect name reaches the screen: an unmapped diagnostic renders as a plain
+sentence, and a selection whose content is no longer installed says so rather
+than printing its stored ID.
+
+**Species and Background remain in the sequence for a manual sheet**, and raise
+no issue there. They are not empty in manual mode — they offer the same real
+content, and a hand-built character may legitimately record an origin — so
+dropping them would remove a capability and would require deciding that a manual
+sheet has no origin at all. That is a manual-sheet IA decision rather than a
+consequence of splitting the origin step, and it is deferred.
+
+**The chosen increase distribution is derived, not stored.** With nothing placed
+every distribution fits equally and the inference settles on the declared
+default, so choosing a shape and reloading before allocating anything shows the
+default again. No allocation is lost, because none was made; storing the shape
+would create a second source of truth that could disagree with the increases
+beside it.
+
+### Alternative ability-increase distributions (GAP-003)
+
+`abilityScoreChoices` gains an optional `increasePatterns`, a list of legal
+distributions such as `+2/+1` across two abilities or `+1/+1/+1` across three.
+It is additive: `increasePattern` remains required and still means the default,
+consumers read `increasePatterns ?? [increasePattern]`, and every pack and draft
+written before it behaves exactly as it did. Which distribution a draft is in is
+inferred from the allocation itself rather than stored, so no separate field can
+disagree with the increases beside it; ties resolve deterministically by
+declaration order. An unoffered ability, a `+2/+2`, or an amount the chosen
+distribution has no slot for is reported and excluded from the final scores.
+Base scores stay separate from origin increases throughout. Abilities presents
+the alternatives as plain shapes — "+1 to three abilities" — and addresses
+increase slots by position, so a distribution with repeated amounts works.
+
+### Stale background-owned state (GAP-005)
+
+Replacing a background removes what the outgoing one owned instead of leaving it
+unreachable in the draft: its nested answers, the equipment choices inside the
+kits it granted, and any increase the incoming background does not authorise.
+Ownership is computed by walking the same typed structure the activation planner
+walks. An ID both backgrounds own is left alone, because that answer is still
+authorised. Species, class, base ability scores, identity and everything else are
+untouched. The prune is deterministic and idempotent, and it runs at the draft
+service boundary that performs the write, so every route to a background change
+gets it. Grants are not pruned because grants are not stored — they are derived
+on every read.
+
+## Character management
+
+**Deleting a character** is available from the row overflow menu. It removes the
+character and every record whose lifecycle it owns, in one transaction: version
+history, snapshots, the character-bound edit draft, runtime state, the action
+log, typed overrides, derived snapshots, validation issues and override
+decisions. That list is exactly the tables the schema keys by `characterId`,
+plus drafts naming it in `editingCharacterId`. Content packs, sources, entries,
+ruleset profiles, app preferences and other characters are shared and are never
+touched. Deleting an already-deleted character reports `not-found` and writes
+nothing.
+
+The menu item opens a confirmation and never deletes on its own. The dialog is an
+`alertdialog` that names the character, states the deletion is permanent and
+local, separates Cancel from the destructive action, and opens focus on Cancel;
+Cancel or Escape returns focus to the control the menu was opened from, and a
+successful delete returns to the library.
+
+**Menu containment** is handled by a shared `AnchoredMenu` primitive rather than
+by an offset on the Characters screen. The surface is measured after it renders
+and translated the minimum distance that brings it inside the viewport, flipping
+above the trigger when there is not enough room below and the space above is
+better. It never exceeds the viewport width whatever the character is called,
+opening it shifts nothing else on the page, and Escape or a press outside closes
+it.
+
 ## Play-first character sheet, first iteration
 
 The character sheet is now **Play mode**, not a rules console. Its rationale and
@@ -156,7 +273,7 @@ Seven application services own every mutation: draft, build/commit, query, deriv
 
 The synthetic slice supplies Vanguard, Riverborn, Caravan Warden, Guarded Hand, Measured Cut, Longblade, Round Guard, Travel Mail, Longblade Strike and Rallying Breath, level-keyed by stable ID so later levels are a data change. Brammel resolves to 10 maximum hit points and 3 Rallying Breath uses at level 1, and 14 and 4 at level 2, which is the preserve-deficit demonstration the acceptance criteria require. The level 2 maximum is class base 10 plus the Constitution modifier applied to each of the two levels; it read 12 before the per-level hit-point correction below.
 
-The product surfaces are mobile first: a real empty library, a builder over the nine-step catalogue that presents only the steps applicable to the build — a step with nothing to decide is omitted and reported on Review instead — with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
+The product surfaces are mobile first: a real empty library, a builder over the ten-step catalogue that presents only the steps applicable to the build — a step with nothing to decide is omitted and reported on Review instead — with one draft behind both guided and flexible modes, an active play sheet with bounded runtime actions and explanations, a level-up preview with a before/after diff and a pre-level restore point, and standard file transfer with Already current, Keep both, Replace and Cancel. Dice support is expression-only; there is no Roll control.
 
 Unknown required inputs render as `—` with a recovery action rather than zero. Overrides accept only typed `replace` and `add` against a target the resolver genuinely applies; an unsupported target is refused rather than stored inert, and a moved baseline marks the override for review rather than discarding it.
 
@@ -420,6 +537,18 @@ hit-point-finalisation items above, is recorded in
 - Initial installation and application updates require HTTPS, except browser-recognized localhost development.
 - After one successful online load and service-worker installation, the cached application shell can reload and operate offline. Local compendium reads, edits, search, and JSON export require no network.
 - Persistent storage may reduce browser eviction risk, but browsers can refuse it and it never replaces a backup.
+
+### Recorded follow-ups
+
+**The local end-to-end suite can pass against a stale build.** `playwright.config.ts`
+sets `reuseExistingServer: !process.env.CI`, so a local `npm run test:e2e` reuses
+whatever preview server is already listening — which may have been built before
+the changes under test. During the creation IA work this produced a local run
+reporting 407 passing while CI, which builds fresh, failed 64 of the same tests.
+Until it is addressed, a local run is only evidence when the build output is
+wiped and `CI=1` is set. Deliberately not fixed inside the creation IA change:
+it is a change to how every suite in the repository is verified, and it should
+not ride along with a product branch.
 
 ## Next milestone
 

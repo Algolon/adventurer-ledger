@@ -8,7 +8,7 @@
  * every state carries a text or icon indicator so colour is never the only
  * signal. Touch targets are at least 44 CSS px, and play actions are 48.
  */
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react";
 import { TriangleAlert, X } from "lucide-react";
 import type { DerivedValue, Contributor, RecoveryAction } from "@/src/services/derived-resolver";
 import { UNKNOWN_DISPLAY } from "@/src/services/derived-resolver";
@@ -143,6 +143,116 @@ export function Dialog({
         </div>
         {footer ? <footer className="m2-dialog-foot">{footer}</footer> : null}
       </section>
+    </div>
+  );
+}
+
+/**
+ * How much room a floating surface leaves against each edge of the viewport.
+ *
+ * The bottom allowance clears the fixed navigation rail. A menu that is
+ * technically inside the viewport but underneath the bar is not reachable, and
+ * "inside the viewport" is not the property that matters — "visible and
+ * tappable" is.
+ */
+const MENU_EDGE_GAP = 8;
+const MENU_BOTTOM_RESERVE = 72;
+
+/**
+ * A menu anchored to a trigger, kept inside the viewport.
+ *
+ * The row menu used to be a plain absolutely-positioned list pinned to the
+ * trigger's bottom-right corner. That is correct only when the trigger is near
+ * the top-left of a roomy screen: on a phone the last row in a library opened a
+ * menu that ran under the fixed bottom bar, and a long character name made the
+ * items wide enough to reach the edge of the screen.
+ *
+ * Containment is measured, not assumed. The surface renders in its natural
+ * position, is measured once, and is then translated the minimum distance that
+ * brings it fully inside — flipping above the trigger when there is not enough
+ * room below and more room above. Translation is used rather than a change of
+ * layout box so that opening the menu moves nothing else on the page.
+ *
+ * Dismissal and focus are part of the primitive rather than of each caller,
+ * because a menu that closes on Escape in one place and not another is a bug
+ * with extra steps.
+ */
+export function AnchoredMenu({
+  label,
+  onClose,
+  children,
+}: {
+  /** Names the menu for assistive technology, e.g. "Actions for <name>". */
+  label: string;
+  onClose(): void;
+  children: ReactNode;
+}) {
+  const surface = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const element = surface.current;
+    if (!element) return;
+    // Measured from a known-neutral state so a re-run never compounds the
+    // previous correction. This is what makes the placement idempotent.
+    element.style.transform = "";
+    element.dataset.placement = "bottom";
+
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+    const rect = element.getBoundingClientRect();
+
+    // Flip above the trigger only when below genuinely does not fit and above
+    // is better. Flipping into an equally bad position helps nobody.
+    const overflowsBottom = rect.bottom > viewportHeight - MENU_BOTTOM_RESERVE;
+    const trigger = element.parentElement?.getBoundingClientRect();
+    if (overflowsBottom && trigger && trigger.top > viewportHeight - trigger.bottom) {
+      element.dataset.placement = "top";
+    }
+
+    const placed = element.getBoundingClientRect();
+    let dx = 0;
+    if (placed.right > viewportWidth - MENU_EDGE_GAP) dx = viewportWidth - MENU_EDGE_GAP - placed.right;
+    // Left wins if both edges overflow: a surface wider than the viewport must
+    // start on screen, and its own max-width keeps it from being wider at all.
+    if (placed.left + dx < MENU_EDGE_GAP) dx = MENU_EDGE_GAP - placed.left;
+    if (dx) element.style.transform = `translateX(${Math.round(dx)}px)`;
+  });
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    // `pointerdown` rather than `click`, so a press that begins outside the
+    // menu dismisses it without also activating whatever is underneath.
+    const onPointerDown = (event: PointerEvent) => {
+      const element = surface.current;
+      if (!element) return;
+      const target = event.target;
+      if (target instanceof Node && (element.contains(target) || element.parentElement?.contains(target))) return;
+      onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [onClose]);
+
+  /*
+   * Deliberately a labelled group of buttons rather than `role="menu"`.
+   *
+   * The menu role carries a contract this widget does not honour: arrow-key
+   * navigation between items, a roving tabindex, and typeahead. Declaring the
+   * role without implementing the behaviour tells a screen-reader user to press
+   * a key that does nothing, which is worse than the plain list of buttons that
+   * Tab already reaches correctly.
+   */
+  return (
+    <div className="m2-anchored-menu" data-placement="bottom" ref={surface}>
+      <ul className="m2-row-menu" aria-label={label}>
+        {children}
+      </ul>
     </div>
   );
 }

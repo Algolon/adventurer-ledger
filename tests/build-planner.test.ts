@@ -60,13 +60,28 @@ function spellCapableClassEntries(): ContentEntry[] {
 }
 
 describe("step list", () => {
-  it("is exactly the accepted nine steps in order", () => {
+  it("is exactly the accepted ten steps in order", () => {
     expect(BUILDER_STEPS.map(step => step.id)).toEqual([
-      "start", "class", "origin", "abilities", "class-choices", "spells-resources", "equipment", "identity", "review",
+      "start", "class", "origin", "background", "abilities", "class-choices", "spells-resources", "equipment", "identity", "review",
     ]);
     expect(BUILDER_STEPS.map(step => step.label)).toEqual([
-      "Basics", "Class & level", "Origin", "Abilities", "Class choices", "Spells & resources", "Equipment", "Identity", "Review",
+      "Basics", "Class & level", "Species", "Background", "Abilities", "Class choices", "Spells & resources", "Equipment", "Identity", "Review",
     ]);
+  });
+
+  /**
+   * The storage identity of the species step is unchanged.
+   *
+   * Every draft written before Background became its own step holds
+   * `lastStepId: "origin"`. Keeping that ID — and relabelling it rather than
+   * renaming it to `species` — is what lets those drafts resume where they were
+   * left without a migration. The label is presentation; the ID is storage.
+   */
+  it("keeps `origin` as the species step's storage ID and adds `background` after it", () => {
+    const ids = BUILDER_STEPS.map(step => step.id);
+    expect(BUILDER_STEPS.find(step => step.id === "origin")?.label).toBe("Species");
+    expect(ids.indexOf("background")).toBe(ids.indexOf("origin") + 1);
+    expect(ids).not.toContain("species");
   });
 
   /**
@@ -81,9 +96,9 @@ describe("step list", () => {
 
     expect(classHasSpells(complete, SYNTHETIC_ENTRIES)).toBe(false);
     expect(ids).not.toContain("spells-resources");
-    expect(result.steps).toHaveLength(8);
+    expect(result.steps).toHaveLength(9);
     // The remaining steps keep their canonical order.
-    expect(ids).toEqual(["start", "class", "origin", "abilities", "class-choices", "equipment", "identity", "review"]);
+    expect(ids).toEqual(["start", "class", "origin", "background", "abilities", "class-choices", "equipment", "identity", "review"]);
     // The resource itself is unaffected; it is tracked on the sheet.
     expect(resourceIdsFor(complete, SYNTHETIC_ENTRIES)).toEqual([SYNTHETIC_IDS.resource]);
   });

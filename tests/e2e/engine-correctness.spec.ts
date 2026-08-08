@@ -86,8 +86,10 @@ async function fillAbilities(page: Page) {
   await expect(page.getByLabel("Constitution final")).toContainText("14");
 }
 
+/** Species and Background are two steps, so this crosses the boundary. */
 async function chooseOrigin(page: Page) {
   await page.getByRole("button", { name: /^Shoalfolk/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: /^Harbour Hand/ }).click();
 }
 

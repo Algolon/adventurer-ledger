@@ -85,8 +85,10 @@ async function buildLevelFive(page: Page, name: string, { feat = "Attentive Cler
   await next(page);
 
   await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-  await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
   await page.getByRole("button", { name: /^Cairnlore/ }).click();
+  await next(page);
+
+  await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
   await next(page);
 
   for (const [ability, value] of [
@@ -127,8 +129,10 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await levelSelect(page).selectOption("5");
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
 
     await page.getByRole("button", { name: "All steps" }).click();
     await page.getByRole("button", { name: /Basics/ }).click();
@@ -158,8 +162,10 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await page.getByRole("button", { name: /^Class & level (Incomplete|Complete)$/ }).click();
     await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: "All steps" }).click();
-    await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
+    await page.getByRole("button", { name: /^Species (Incomplete|Complete)$/ }).click();
     await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "All steps" }).click();
+    await page.getByRole("button", { name: /^Background (Incomplete|Complete)$/ }).click();
     await expect(page.getByRole("button", { name: /^Ferry Clerk/ })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -171,8 +177,10 @@ test.describe("switching ruleset is previewed before it is written", () => {
     await levelSelect(page).selectOption("5");
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
     for (const [ability, value] of [
       ["Strength", "15"],
@@ -314,8 +322,10 @@ test.describe("a rapidly typed name survives whatever happens next", () => {
     await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
     for (const [ability, value] of [
       ["Strength", "15"],
@@ -352,8 +362,10 @@ test.describe("abilities are base plus origin, and stay that way", () => {
     await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
 
     await page.getByRole("button", { name: /^Enter scores manually/ }).click();
@@ -379,8 +391,11 @@ test.describe("abilities are base plus origin, and stay that way", () => {
     await page.getByRole("button", { name: /^Ink set/ }).click();
     await next(page);
     await next(page);
-    // Review shows the finals the commit will write.
-    await expect(page.getByRole("definition").filter({ hasText: "CON 17" })).toBeVisible();
+    // Review shows the finals the commit will write, and how they were reached:
+    // the hand-entered base and the increase the background authorised.
+    const constitution = page.locator(".m2-ability-review li", { hasText: "Constitution" });
+    await expect(constitution).toContainText("17");
+    await expect(constitution).toContainText("15 base + 2");
     await page.getByRole("button", { name: "Finish and open sheet" }).click();
     await expect(page.getByRole("heading", { name: "Manual Base", level: 2 })).toBeVisible();
 
@@ -429,8 +444,10 @@ test.describe("level 5 is created directly and read back", () => {
     await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
     await expect(page.locator(".m2-remaining-chip")).toHaveText(ACCEPTANCE_ARRAY.map(String));
   });
@@ -447,8 +464,10 @@ test.describe("levelling one step at a time through the UI", () => {
     await page.getByRole("button", { name: /^Beaconkeeper/ }).click();
     await next(page);
     await page.getByRole("button", { name: /^Cairnfolk/ }).click();
-    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await page.getByRole("button", { name: /^Cairnlore/ }).click();
+    await next(page);
+
+    await page.getByRole("button", { name: /^Ferry Clerk/ }).click();
     await next(page);
     for (const [ability, value] of [
       ["Strength", "15"],
@@ -906,8 +925,10 @@ test.describe("switching between rulesets that share content", () => {
       await page.getByRole("button", { name: /^Class & level (Incomplete|Complete)$/ }).click();
       await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveAttribute("aria-pressed", "true");
       await page.getByRole("button", { name: "All steps" }).click();
-      await page.getByRole("button", { name: /^Origin (Incomplete|Complete)$/ }).click();
+      await page.getByRole("button", { name: /^Species (Incomplete|Complete)$/ }).click();
       await expect(page.getByRole("button", { name: /^Cairnfolk/ })).toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "All steps" }).click();
+      await page.getByRole("button", { name: /^Background (Incomplete|Complete)$/ }).click();
       await expect(page.getByRole("button", { name: /^Ferry Clerk/ })).toHaveAttribute("aria-pressed", "true");
       // The parent choice and the nested choice it activates both survive.
       await page.getByRole("button", { name: "All steps" }).click();

@@ -117,7 +117,19 @@ const mechanicsByCategory = {
   species: z.object({ creatureType: z.string().min(1), sizeChoices: z.array(z.string()).min(1), speed: z.number().positive(), traitIds: z.array(id), lineageIds: z.array(id).default([]) }).strict(),
   race: z.object({ creatureType: z.string().min(1), sizeChoices: z.array(z.string()).min(1), speed: z.number().positive(), traitIds: z.array(id), legacyAbilityScores: z.record(z.number().int()).default({}) }).strict(),
   lineage: z.object({ parentSpeciesIds: z.array(id), traitIds: z.array(id), replacesTraitIds: z.array(id).default([]) }).strict(),
-  background: z.object({ abilityScoreChoices: z.object({ abilities: z.array(z.string()).min(2), increasePattern: z.array(z.number().int()).min(1) }).strict(), featId: id, proficiencyIds: z.array(id), equipmentChoiceIds: z.array(id), equipmentBundleIds: z.array(id).default([]) }).strict(),
+  /*
+   * `increasePattern` is the one distribution a background offers; the optional
+   * `increasePatterns` is the full list when it offers a genuine alternative,
+   * such as +2/+1 across two abilities or +1/+1/+1 across three.
+   *
+   * Both fields exist so this is additive. Every pack already written declares
+   * only `increasePattern` and keeps parsing unchanged, and a reader that has
+   * not been taught about alternatives still finds one legal distribution where
+   * it expects one. `increasePattern` therefore stays required and continues to
+   * mean what it always meant: the default. Consumers take
+   * `increasePatterns ?? [increasePattern]` and never read either field alone.
+   */
+  background: z.object({ abilityScoreChoices: z.object({ abilities: z.array(z.string()).min(2), increasePattern: z.array(z.number().int()).min(1), increasePatterns: z.array(z.array(z.number().int()).min(1)).min(1).max(20).optional() }).strict(), featId: id, proficiencyIds: z.array(id), equipmentChoiceIds: z.array(id), equipmentBundleIds: z.array(id).default([]) }).strict(),
   feat: z.object({ category: z.enum(["origin", "general", "epic-boon", "fighting-style", "other"]), repeatable: z.boolean() }).strict(),
   spell: z.object({ level: z.number().int().min(0).max(9), school: z.enum(["abjuration", "conjuration", "divination", "enchantment", "evocation", "illusion", "necromancy", "transmutation"]), components: z.object({ verbal: z.boolean(), somatic: z.boolean(), material: z.string().max(1000).optional(), consumed: z.boolean().default(false), costGp: z.number().nonnegative().optional() }).strict(), castingTime: z.object({ amount: z.number().positive(), unit: z.enum(["action", "bonus-action", "reaction", "minute", "hour"]), trigger: z.string().max(500).optional() }).strict(), duration: z.object({ type: z.enum(["instantaneous", "timed", "until-dispelled", "special"]), amount: z.number().positive().optional(), unit: z.enum(["round", "minute", "hour", "day"]).optional(), concentration: z.boolean() }).strict(), range: z.object({ type: z.enum(["self", "touch", "distance", "sight", "unlimited", "special"]), distance: z.number().nonnegative().optional(), unit: z.enum(["feet", "miles"]).optional() }).strict(), scaling: z.array(z.object({ level: z.number().int().min(1).max(9), effectIds: z.array(id) }).strict()).default([]), spellListIds: z.array(id).min(1) }).strict(),
   item: z.object({ itemType: z.string().min(1), rarity: z.enum(["common", "uncommon", "rare", "very-rare", "legendary", "artifact", "varies", "none"]), attunement: z.object({ required: z.boolean(), prerequisite: z.string().max(500).optional() }).strict(), weight: z.number().nonnegative().optional(), cost: z.object({ amount: z.number().nonnegative(), currency: z.enum(["cp", "sp", "ep", "gp", "pp"]) }).optional(), attackIds: z.array(id).default([]), resourceIds: z.array(id).default([]) }).strict(),

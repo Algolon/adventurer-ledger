@@ -74,7 +74,7 @@ for (const width of PHONE_WIDTHS) {
 
       // ---- 4. the next step ------------------------------------------------
       await page.getByRole("button", { name: "Continue" }).click();
-      await expect(stepTitle(page)).toHaveText("Origin");
+      await expect(stepTitle(page)).toHaveText("Species");
       await page.getByRole("button", { name: /^Riverborn/ }).click();
       expect(await blockedNavControls(page)).toEqual([]);
 
@@ -92,7 +92,7 @@ for (const width of PHONE_WIDTHS) {
       await page.getByRole("button", { name: /Resume building Pocket Pilot/ }).click();
 
       // ---- 8. the same step, with every value intact -----------------------
-      await expect(stepTitle(page)).toHaveText("Origin");
+      await expect(stepTitle(page)).toHaveText("Species");
       await expect(page.getByRole("button", { name: /^Riverborn/ })).toHaveAttribute("aria-pressed", "true");
       await page.getByRole("button", { name: "All steps" }).click();
       await page.getByRole("button", { name: /Class & level/ }).click();

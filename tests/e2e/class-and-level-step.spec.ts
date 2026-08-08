@@ -92,7 +92,7 @@ test.describe("the level is chosen where it can be validated", () => {
 
     // ---- 5. Continue goes forward, never backward -------------------------
     await next(page);
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
 
     // ---- 6. Back and forward again preserve both decisions ----------------
     await page.getByRole("button", { name: "Back" }).click();
@@ -100,7 +100,7 @@ test.describe("the level is chosen where it can be validated", () => {
     await expect(page.getByRole("button", { name: /^Beaconkeeper/ })).toHaveAttribute("aria-pressed", "true");
     await expect(levelSelect(page)).toHaveValue("5");
     await next(page);
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
 
     // ---- 7 & 8. Reload, then resume from the library ----------------------
     await page.reload();
@@ -133,7 +133,7 @@ test.describe("the level is chosen where it can be validated", () => {
 
     // Continue is honest: it moves forward rather than bouncing back.
     await next(page);
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
   });
 
   test("repairs an incompatible class switch on the step that caused it", async ({ page }) => {
@@ -174,7 +174,7 @@ test.describe("the level is chosen where it can be validated", () => {
     await expect(page.getByText(/does not reach the chosen level/)).toHaveCount(0);
     await expect(levelSelect(page)).toHaveValue("3");
     await next(page);
-    await expect(stepTitle(page)).toHaveText("Origin");
+    await expect(stepTitle(page)).toHaveText("Species");
   });
 
   test("keeps a level the incoming class still covers", async ({ page }) => {

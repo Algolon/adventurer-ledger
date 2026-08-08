@@ -49,22 +49,35 @@ export type ActivationRoute =
   | "selection"
   | "link";
 
-const ORIGIN_ROUTES: ReadonlySet<ActivationRoute> = new Set<ActivationRoute>([
+/**
+ * Which step owns what an activation route produces.
+ *
+ * The two origin concepts are now two steps, so the routes that were one set
+ * are two. This is the whole of the ownership rule: a decision is a species
+ * decision because a species route activated the entry that declares it, never
+ * because of anything read from a name. `lineage-trait` sits with species for
+ * the same typed reason — a lineage is reached from its parent species, and the
+ * trait it replaces is governed by `replacesTraitIds`, not by matching labels.
+ */
+const SPECIES_ROUTES: ReadonlySet<ActivationRoute> = new Set<ActivationRoute>([
   "species",
   "species-trait",
   "lineage-trait",
-  "background",
-  "background-feat",
 ]);
 
+const BACKGROUND_ROUTES: ReadonlySet<ActivationRoute> = new Set<ActivationRoute>(["background", "background-feat"]);
+
 /**
- * Origin categories.
+ * The categories the Species step selects from.
  *
  * `race` predates `species` and is still in the public schema, so a character
  * whose origin was recorded under it has to activate its traits by exactly the
  * same rules. Both declare `traitIds`, which is all the traversal reads.
+ *
+ * Exported because the builder and the planner must offer and judge the same
+ * set. Three separate copies of this list previously drifted apart.
  */
-const ORIGIN_CATEGORIES: ReadonlySet<Category> = new Set<Category>(["species", "race"]);
+export const SPECIES_CATEGORIES: ReadonlySet<Category> = new Set<Category>(["species", "race"]);
 
 export interface ActivatedEntry {
   entry: ContentEntry;
@@ -307,9 +320,11 @@ function traverseActivation(
   const stepFor = (route: ActivationRoute, inherited?: BuilderStepId): BuilderStepId =>
     route === "selection" || route === "link"
       ? (inherited ?? "class-choices")
-      : ORIGIN_ROUTES.has(route)
+      : SPECIES_ROUTES.has(route)
         ? "origin"
-        : "class-choices";
+        : BACKGROUND_ROUTES.has(route)
+          ? "background"
+          : "class-choices";
 
   const enqueue = (
     id: ID | undefined,
@@ -438,7 +453,7 @@ function traverseActivation(
   // their traits the same way, so both activate them the same way.
   enqueue(build.speciesId, "species");
   const speciesEntry = build.speciesId ? byId.get(build.speciesId) : undefined;
-  if (speciesEntry && ORIGIN_CATEGORIES.has(speciesEntry.category)) {
+  if (speciesEntry && SPECIES_CATEGORIES.has(speciesEntry.category)) {
     const traitIds = (speciesEntry.mechanics as { traitIds?: unknown }).traitIds;
     if (Array.isArray(traitIds)) for (const id of traitIds) if (typeof id === "string") enqueue(id, "species-trait");
   }
@@ -560,9 +575,11 @@ function traverseActivation(
 /**
  * The step a selection-activated entry belongs to.
  *
- * An entry chosen inside an origin choice stays an origin decision, so its own
+ * An entry chosen inside a species choice stays a species decision, and one
+ * chosen inside a background choice stays a background decision, so its own
  * nested choices are not exiled to a different step from the one that produced
- * them.
+ * them. Inheriting the owner's step is what keeps a lineage's follow-up
+ * decision on Species rather than surfacing it on a later generic screen.
  */
 function stepForSelection(pending: Pending, activated: readonly ActivatedEntry[]): BuilderStepId | undefined {
   if (!pending.viaChoiceId) return undefined;
