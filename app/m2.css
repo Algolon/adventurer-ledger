@@ -154,10 +154,22 @@
 
 /*
  * Four destinations rather than three, so each label has about a quarter of the
- * width instead of a third. "Compendium" is the widest of them and at 320 px it
- * has roughly 80 px to sit in, which is why the label is allowed to shrink here
- * and is clipped with an ellipsis rather than being permitted to set the width
- * of the bar and push the document sideways.
+ * width instead of a third. "Compendium" is the widest of them, and it is
+ * widest of all on the Compendium screen itself, because the active item is
+ * also the bold one.
+ *
+ * That label has to *fit*. It must not be clipped to fit: `overflow: hidden`
+ * with an ellipsis is the "fix the overflow by hiding it" move the phone
+ * contract exists to forbid, and `mobile-visual-contract.spec.ts` fails on any
+ * element concealing content on the x-axis. It caught exactly that here — five
+ * pixels of "Compendium" hidden on Linux, where the fallback font is wider than
+ * the one macOS resolves, and nowhere on the machine the CSS was written on.
+ *
+ * So the size is chosen against the widest realistic fallback rather than
+ * against whatever the author's system happens to render. Bold "Compendium" at
+ * 11px measures about 81px in a Verdana-width face against 76px of room at
+ * 320px; at 10px with the horizontal padding removed it measures about 74px
+ * against 80px. The narrow-width rule below is that headroom, not a guess.
  */
 .m2-nav-button {
   width: 100%;
@@ -173,11 +185,27 @@
   font-size: 11px;
 }
 
+/*
+ * The label never breaks across lines and never breaks inside a word: a
+ * two-line "Compendium" or a hyphenated one is not an improvement on a small
+ * one. If it ever stops fitting, it overhangs — which is loud, and which the
+ * contract test catches — rather than being silently trimmed.
+ */
 .m2-nav-button span {
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * Below 380px the four labels no longer have room at 11px in a wide fallback
+ * face, so they take a smaller size and the button's own side padding rather
+ * than losing their ends.
+ */
+@media (max-width: 379px) {
+  .m2-nav-button {
+    padding: 6px 0;
+    font-size: 10px;
+  }
 }
 
 .m2-nav-button svg {
