@@ -252,6 +252,11 @@ describe("repairing a device that already imported the newer pack", () => {
         entryCount: 5,
         addedEntryCount: 2,
         removedEntryCount: 0,
+        // Version 2's new feat is the first entry of its category the profile
+        // reaches, so the repair widens the category filter as well as the
+        // membership. Reported, because it is the half a source-scoped profile
+        // gets on its own.
+        addedCategories: ["feat"],
       },
     ]);
     expect(await membershipOf()).toEqual(V2_MEMBERS);
@@ -480,10 +485,23 @@ describe("membership reconciliation as a value", () => {
     expect(update?.removedEntryIds).toEqual([]);
   });
 
-  it("declines a source-scoped profile rather than narrowing it to an explicit set", () => {
+  /**
+   * A source-scoped profile is never narrowed to an explicit set.
+   *
+   * It used to be declined outright. It is now advanced in the one respect that
+   * a source scope does not already cover — the category filter layered on top
+   * of it — and `tests/spell-category-reachability` states that half. What has
+   * not changed, and is the point here, is that no `allowedEntryIds` is written:
+   * replacing "everything from these sources" with a snapshot of one pack's
+   * entries would silently drop everything else the profile reaches.
+   */
+  it("never narrows a source-scoped profile to an explicit set", () => {
     const sourceScoped = profile();
     delete sourceScoped.allowedEntryIds;
-    expect(reconcileRulesetMembership(sourceScoped, proposal(["feat:a"]), "2026-09-01T00:00:00.000Z")).toBeUndefined();
+    const update = reconcileRulesetMembership(sourceScoped, proposal(["feat:a"]), "2026-09-01T00:00:00.000Z");
+    expect(update?.profile.allowedEntryIds).toBeUndefined();
+    expect(update?.addedEntryIds).toEqual([]);
+    expect(update?.removedEntryIds).toEqual([]);
   });
 
   it("attributes a profile ID to a pack only when no other pack could claim it", () => {

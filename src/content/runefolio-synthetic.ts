@@ -1210,9 +1210,17 @@ export const SYNTHETIC_RULESET: RulesetProfile = {
   name: "Runefolio 2024 synthetic",
   activeSourceIds: [SYNTHETIC_SOURCE_ID],
   editionPriority: ["homebrew"],
+  /*
+   * Every category this pack ships. A hand-written list is exactly the thing
+   * that goes stale — `lineage` was missing here while the pack shipped one, so
+   * the seeded ruleset activated a lineage entry it could never show. The
+   * category-advancement contract in `tests/spell-category-reachability` is what
+   * stops that being permanent; keeping this list honest is what stops it
+   * happening in the first place.
+   */
   allowedCategories: [
-    "class", "class-feature", "subclass", "species", "background", "feat", "item", "weapon", "armor", "tool",
-    "fighting-style", "weapon-mastery", "condition", "resource", "rule", "proficiency", "spell", "spell-list",
+    "class", "class-feature", "subclass", "species", "lineage", "background", "feat", "item", "weapon", "armor",
+    "tool", "fighting-style", "weapon-mastery", "condition", "resource", "rule", "proficiency", "spell", "spell-list",
   ],
   allowLegacy: false,
   allowDuplicateVersions: false,

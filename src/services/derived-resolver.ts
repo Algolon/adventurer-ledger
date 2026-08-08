@@ -28,6 +28,7 @@ import { deriveCharacterState, type DerivedCharacterState } from "@/src/rules/de
 import { NO_ARMOR_RESOLUTION } from "@/src/rules/armor-context";
 import { abilityModifier, proficiencyBonus } from "@/src/rules/engine";
 import { maximumHitPointsFor } from "@/src/rules/hit-points";
+import { spellIsRitual } from "@/src/services/spell-list-index";
 import {
   hitDieForClass,
   masteryWeaponRelations,
@@ -150,6 +151,11 @@ export interface DerivedSpell {
   range?: string;
   duration?: string;
   concentration: boolean;
+  /**
+   * Castable as a ritual. Metadata the content declares, not a rule this sheet
+   * enforces; a spell written before the field existed reads as `false`.
+   */
+  ritual: boolean;
 }
 
 /**
@@ -947,6 +953,7 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ...(rangeText ? { range: rangeText } : {}),
         ...(durationText ? { duration: durationText } : {}),
         concentration: meta.duration?.concentration ?? false,
+        ritual: spellIsRitual(definition.mechanics),
       });
     }
     spells.sort((left, right) => left.level - right.level || left.label.localeCompare(right.label));
