@@ -117,6 +117,20 @@ export function useSettingsHistory(
    */
   useEffect(() => {
     if (readState(window.history.state)) window.history.replaceState(null, "");
+    /*
+     * The browser does not get to restore scroll offsets for this document.
+     *
+     * With the default `auto`, the user agent remembers an offset per history
+     * entry and reapplies it after a `popstate` — asynchronously, and after the
+     * shell has already put the destination workspace at its top. The result is
+     * the two of them disagreeing about where a screen starts, decided by a
+     * race. It is also restoring the wrong thing in principle: none of this
+     * app's state is in the URL, so a reload always lands on Characters no
+     * matter which entry it resumes, and an offset saved against a screen the
+     * user is not on describes nothing. Runefolio decides where a workspace
+     * starts, in one place, and that place is the layout effect in the shell.
+     */
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
   }, []);
 
   useEffect(() => {

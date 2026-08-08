@@ -285,3 +285,150 @@ test.describe("step navigation resets scroll and focus", () => {
     expect(outline).toBe("none");
   });
 });
+
+/**
+ * Builds the martial fixture and stops on Review, without committing.
+ *
+ * The same walk the rest of the suite uses; it lives here rather than being
+ * imported so this file stays runnable on its own.
+ */
+async function reachReview(page: Page) {
+  await openBuilder(page);
+  await page.getByLabel("Character name", { exact: true }).fill("Brammel Voss");
+  await next(page);
+  await page.getByRole("button", { name: /^Vanguard/ }).click();
+  await next(page);
+  await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await next(page);
+  await page.getByRole("button", { name: /^Caravan Warden/ }).click();
+  await page.getByRole("button", { name: /^Trade Cant/ }).click();
+  await next(page);
+  for (const [ability, value] of [
+    ["Strength", "14"],
+    ["Dexterity", "15"],
+    ["Constitution", "13"],
+    ["Intelligence", "12"],
+    ["Wisdom", "10"],
+    ["Charisma", "8"],
+  ] as const)
+    await page.getByLabel(ability, { exact: true }).selectOption(value);
+  await page.getByLabel("+2 to").selectOption("strength");
+  await page.getByLabel("+1 to").selectOption("constitution");
+  await next(page);
+  await page.getByRole("button", { name: /^Guarded Hand/ }).click();
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
+  await page.getByRole("button", { name: /^Haulage/ }).click();
+  await next(page);
+  await page.getByRole("button", { name: /^Warden pack/ }).click();
+  await next(page);
+  await next(page); // Identity
+  await expect(page.getByRole("heading", { level: 2 })).toHaveText("Review");
+}
+
+/**
+ * Leaving creation for the sheet is navigation to a different workspace.
+ *
+ * The pilot's report: scroll part-way down Review, commit, and the character
+ * opens half way down its own sheet. It is the step-transition defect one level
+ * up — the builder reset the viewport between its own steps and then handed the
+ * user to an entirely different screen without doing it again — so the fix and
+ * these tests are deliberately the same shape as the ones above.
+ */
+test.describe("committing a character opens the sheet at its top", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    test.slow();
+  });
+
+  /**
+   * A floor under the document height, for the whole session.
+   *
+   * Without it these tests cannot fail, and would therefore prove nothing. The
+   * sheet paints a short "Opening the sheet…" frame while its record loads, and
+   * a document that suddenly becomes shorter than the current offset has that
+   * offset *clamped* by the browser — so on this engine the viewport happened to
+   * land at zero whether or not the app asked for it, which is exactly why the
+   * defect survived to a physical device. Pinning the document tall removes the
+   * accident from the measurement: whatever the offset ends up being after the
+   * commit, the app is the only thing that can have chosen it.
+   */
+  const pinDocumentHeight = (page: Page) =>
+    page.addInitScript(() => {
+      const style = document.createElement("style");
+      style.textContent = "body { min-height: 4000px; }";
+      document.addEventListener("DOMContentLoaded", () => document.head.append(style));
+    });
+
+  test("a scrolled Review cannot transfer its scroll position to the sheet", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await reachReview(page);
+
+    // Part-way down, which is how the defect was reported: not at an end, where
+    // a clamp or a coincidence could produce the right answer for free.
+    await page.evaluate(() => window.scrollTo(0, 320));
+    expect(await scrollY(page), "the precondition — Review really is scrolled").toBeGreaterThan(300);
+
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+
+    // The first thing true of the sheet is where it starts.
+    expect(await scrollY(page), "the sheet opened at Review's offset").toBeLessThanOrEqual(4);
+    await settledAtTop(page);
+  });
+
+  test("the sheet arrives without any visible scroll travel", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await instrumentScrolling(page);
+    await reachReview(page);
+
+    await page.evaluate(() => window.scrollTo(0, 320));
+    const from = await scrollY(page);
+
+    await startWatching(page);
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+    await settledAtTop(page);
+
+    expectNoVisibleTravel(await visitedOffsets(page), from, "Opening the sheet");
+  });
+
+  test("the app never animates its way from Review to the sheet", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await instrumentScrolling(page);
+    await reachReview(page);
+    await page.evaluate(() => window.scrollTo(0, 320));
+
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+
+    const behaviours = await requestedBehaviours(page);
+    expect(behaviours.length, "no programmatic scroll was recorded at all").toBeGreaterThan(0);
+    expect(behaviours.filter(value => value === "smooth")).toEqual([]);
+  });
+
+  /**
+   * The workspace is still a workspace: nothing about starting at the top may
+   * cost the user the navigation or the heading they arrived at.
+   */
+  test("the sheet is navigable and announced after the commit", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await reachReview(page);
+    await page.evaluate(() => window.scrollTo(0, 320));
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sheet" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+
+    // Every root destination is reachable, and each one also starts at its top.
+    await page.evaluate(() => window.scrollTo(0, 320));
+    await page.getByRole("button", { name: "Compendium" }).click();
+    await expect(page.getByRole("heading", { name: "Compendium", level: 2 })).toBeVisible();
+    await settledAtTop(page);
+
+    await page.evaluate(() => window.scrollTo(0, 320));
+    await page.getByRole("button", { name: "Characters" }).click();
+    await expect(page.getByRole("heading", { name: "Characters", level: 2 })).toBeVisible();
+    await settledAtTop(page);
+  });
+});

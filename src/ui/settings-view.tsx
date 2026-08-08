@@ -12,6 +12,7 @@ import { useState } from "react";
 import { Archive, Download, FolderLock, HardDrive, Import, RefreshCw, ScrollText, ShieldCheck, WifiOff } from "lucide-react";
 import { RULESET_PRIVACY_LABELS } from "@/src/services/content-scope";
 import { ContentWorkspace } from "@/src/ui/content-workspace";
+import { PwaStatus } from "@/src/ui/pwa-status";
 import { StorageSettings } from "@/src/ui/storage-settings";
 import { TransferPanel } from "@/src/ui/transfer-panel";
 import { useAsync, useServices } from "@/src/ui/services-context";
@@ -232,6 +233,13 @@ function SettingsPageBody({ page, onOpenCharacter }: { page: SettingsPage; onOpe
       return (
         <div className="m2-step">
           <h2 className="m2-page-title">Offline</h2>
+          {/*
+           * Where this device actually is, above the description of what
+           * offline means. It came out of the app bar, where it was a dot with
+           * its label suppressed for want of room; here it has a full sentence
+           * and something to be read against.
+           */}
+          <PwaStatus />
           <p className="m2-muted">
             After one successful online load, the app shell is cached. The library, active sheet, explanations backed by
             local content, play actions and local history all work with no network.

@@ -57,10 +57,43 @@ test.describe("Settings is one of the global destinations", () => {
     await expect(navButton(page, "Compendium")).toBeVisible();
     await expect(navButton(page, "Settings")).toBeVisible();
 
-    // The header carries the wordmark and the offline indicator, and no
-    // application-configuration control at all.
+    // The header carries the wordmark and nothing else: no
+    // application-configuration control, and no status mark either.
     await expect(page.locator(".m2-appbar").getByRole("button")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Open Settings" })).toHaveCount(0);
+    await expect(page.locator(".m2-appbar .offline")).toHaveCount(0);
+    await expect(page.locator(".m2-appbar .offline-dot")).toHaveCount(0);
+  });
+
+  /**
+   * The dot the second pilot reported, and where the fact behind it went.
+   *
+   * Below 600 px the app bar hid the indicator's label for want of room, so
+   * every handset showed an unlabelled mark alone in the top-right — status
+   * with nothing to read it against, which is indistinguishable from a stray
+   * decoration. It is not hidden here and it is not deleted: offline readiness
+   * is stated in full on the settings page that explains what offline means.
+   */
+  test("offline readiness is stated under Settings, not as a bare mark in the header", async ({ page }) => {
+    await openApp(page);
+
+    // Nothing decorative survives anywhere in the bar.
+    const headerMarks = await page.evaluate(() => {
+      const bar = document.querySelector(".m2-appbar");
+      if (!bar) return ["the app bar did not render"];
+      return Array.from(bar.querySelectorAll("*"))
+        .filter(node => node.children.length === 0)
+        .map(node => (node.textContent ?? "").trim())
+        .filter(text => text.length > 0 && text !== "Runefolio");
+    });
+    expect(headerMarks, "the app bar states the wordmark and nothing else").toEqual([]);
+
+    await navButton(page, "Settings").click();
+    await page.getByRole("button", { name: "Offline", exact: true }).click();
+    const status = page.locator(".offline");
+    await expect(status).toBeVisible();
+    // Visible text, not a visually-hidden duplicate: the sentence is the label.
+    await expect(status).toContainText(/Offline ready|Preparing offline access|Offline cache unavailable/);
   });
 
   /**

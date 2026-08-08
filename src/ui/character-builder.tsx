@@ -2579,8 +2579,14 @@ function EquipmentStep({
 
   return (
     <div className="m2-step">
+      {/*
+       * A starting equipment package is an ordinary selection, not a hero
+       * panel. The grant is one card; the decisions inside it are grouped by a
+       * hairline rather than by a second full-strength card edge, so a step
+       * with two grants reads as two things rather than as six.
+       */}
       {grants.map(grant => (
-        <section key={grant.bundleId} className="m2-fieldset">
+        <section key={grant.bundleId} className="m2-fieldset m2-grant-card">
           <h3>{grant.bundleLabel}</h3>
           {/*
            * One bundle, every source that grants it. Two entries granting the
@@ -2605,7 +2611,7 @@ function EquipmentStep({
           {grant.choices.map(choice => {
             const selected = build.equipmentSelections[choice.choiceId] ?? [];
             return (
-              <fieldset className="m2-fieldset" key={choice.choiceId}>
+              <fieldset className="m2-fieldset m2-grant-choice" key={choice.choiceId}>
                 <legend>
                   {choice.label}
                   <small className="m2-muted">

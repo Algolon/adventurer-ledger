@@ -41,9 +41,15 @@
  * type in the header. It wraps rather than truncating: a long name is a real
  * name, and an ellipsis at 360 px hid whole words.
  */
+/*
+ * Bookmania Semibold: a character's name is the one piece of type on this
+ * screen that is genuinely the user's own, and it is the title of the workspace
+ * they are in. It is the same face and weight as a page title for that reason,
+ * and it stays larger than the wordmark in the bar above it.
+ */
 .sheet-identity h2 {
   margin: 0;
-  font: 600 26px/1.2 var(--display);
+  font: 600 26px/1.2 var(--title);
   overflow-wrap: anywhere;
 }
 

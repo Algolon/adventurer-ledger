@@ -88,9 +88,16 @@
  * the sheet the character's name is the title of the screen; a 19 px wordmark
  * above a 26 px character name read as two competing headings on a 360 px
  * phone, and cost a line of vertical space on every scroll.
+ *
+ * It is also the one place Bookmania Bold appears, and it appears nowhere
+ * else. A wordmark is an identity, not a heading: giving ordinary UI headings
+ * the same face and weight would spend the distinction on flavour and leave the
+ * mark with nothing of its own. The size is unchanged at 17 px, so this stays
+ * subordinate to a character's name on the sheet — a rule the phone contract
+ * asserts rather than trusts.
  */
 .m2-appbar-brand strong {
-  font: 600 17px/1.1 var(--display);
+  font: 700 17px/1.1 var(--wordmark);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -236,14 +243,31 @@
   gap: 10px;
 }
 
+/*
+ * A page's own title: Bookmania Semibold, and one of only a few places it
+ * appears. The rule is that this face marks the thing that owns the screen —
+ * a page, a creation step, a character — and never a heading inside one.
+ */
 .m2-page-title {
   margin: 0;
-  font: 600 24px/1.15 var(--display);
+  font: 600 24px/1.15 var(--title);
 }
 
+/*
+ * A section heading inside a page: the condensed display face, a step down in
+ * authority from the title above it and unmistakably above the body below it.
+ *
+ * 18 px rather than 17. Modesto Light Condensed is both narrower and lighter
+ * than the serif it replaces, so matching the old size would have made the
+ * heading read as *less* prominent than the text it heads — the inversion this
+ * pass exists to remove, introduced by the change meant to fix it. The extra
+ * pixel and the tracking below buy the weight back without reaching for a
+ * heavier cut, and the fallback serif is comfortable at the same size.
+ */
 .m2-section-title {
   margin: 6px 0 0;
-  font: 600 17px/1.2 var(--display);
+  font: 300 20px/1.2 var(--accent);
+  letter-spacing: 0.015em;
 }
 
 /*
@@ -547,11 +571,23 @@
   font-weight: 700;
 }
 
+/*
+ * The app's ordinary bulleted list — equipment contents, the decisions Review
+ * reads back, outstanding issues.
+ *
+ * 15 px rather than the document's 16. This is enumerated detail underneath a
+ * heading that names it, and at body size it was competing with that heading
+ * rather than sitting under it: "Longblade (equipped)" was set larger than
+ * "Included automatically". The line height stays generous, because these lines
+ * wrap and none of them may be shortened to fit.
+ */
 .m2-plain-list {
   display: grid;
   gap: 6px;
   margin: 0;
   padding-left: 18px;
+  font-size: 15px;
+  line-height: 1.4;
 }
 
 /*
@@ -605,9 +641,19 @@
   color: var(--brass);
 }
 
+/*
+ * The one place Modesto Light Text is used in this pass.
+ *
+ * An empty state is a larger secondary heading that nobody is going to
+ * interact with — "No character is open", "No ruleset is installed" — which is
+ * exactly the brief for this face: prominent, non-interactive, and better for
+ * the product's voice than a fourth weight of the body serif. It is not the new
+ * default for anything, and `--display-text` exists mainly so the character
+ * surfaces have a token to reach for when they are worked on next.
+ */
 .m2-empty h3 {
   margin: 0;
-  font: 600 22px/1.2 var(--display);
+  font: 300 22px/1.25 var(--display-text);
 }
 
 .m2-empty-actions {
@@ -1050,11 +1096,16 @@
  * A step title, not a masthead. 26 px competed with the app bar and cost a line
  * of vertical space on a surface that is already carrying a counter, a progress
  * track and a utility row above the actual question.
+ *
+ * It is set in Bookmania Semibold, the same face as a page title, because a
+ * creation step is a page in every sense the user experiences: it owns the
+ * screen, it is what Continue navigates between, and it is what focus lands on
+ * when it changes.
  */
 .m2-builder-head h2 {
   margin: 0;
   min-width: 0;
-  font: 600 21px/1.2 var(--display);
+  font: 600 21px/1.2 var(--title);
 }
 
 /*
@@ -1075,13 +1126,65 @@
 
 .m2-step {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
+/*
+ * A heading inside a step — an equipment grant, "Review", a grouped section.
+ * The condensed display face, at the same size and for the same reason as
+ * `.m2-section-title`, so a category heading reads identically wherever it is.
+ */
 .m2-step h3 {
   margin: 0;
-  font: 600 18px/1.25 var(--display);
+  font: 300 21px/1.2 var(--accent);
+  letter-spacing: 0.015em;
+}
+
+/*
+ * The compact category headings inside a step: "Included automatically", "Your
+ * choices", "Proficiencies", "Still to resolve".
+ *
+ * These had no rule at all, so they took the user agent's `h4` — 16 px bold in
+ * the body face with 1.33 em of margin above and below. That is the same size
+ * and weight as the option titles underneath them, separated by two blank lines
+ * each, which is both an inversion and most of Review's height. They are now
+ * unmistakably headings and cost a fraction of the space.
+ */
+.m2-step h4 {
+  margin: 6px 0 0;
+  font: 300 18px/1.2 var(--accent);
+  letter-spacing: 0.02em;
+}
+
+/*
+ * Starting equipment.
+ *
+ * The grant is a card and its decisions sit inside it, so the second border is
+ * a divider rather than another boundary: `--border-soft` is the token for
+ * exactly that — a line *inside* an already-bounded container, where the
+ * adjacent text carries the meaning. The result is one card per package instead
+ * of a card inside a card inside a step, which is where most of this step's
+ * bulk was.
+ *
+ * Nothing here truncates. The option titles wrap, the contents line under them
+ * wraps, and both keep a comfortable line height at their smaller size: a
+ * package the reader cannot fully read is not a denser package, it is a worse
+ * one.
+ */
+.m2-grant-card {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.m2-grant-choice {
+  padding: 6px 8px 8px;
+  border-color: var(--border-soft);
+}
+
+.m2-grant-choice legend {
+  font-size: 15px;
 }
 
 .m2-not-needed {
@@ -1096,16 +1199,29 @@
 .m2-fieldset {
   min-width: 0;
   margin: 0;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
 }
 
+/*
+ * The name of the decision, stated as the control label it is: above every
+ * option in the list by both size and weight, and below the step heading that
+ * groups it. The size is stated rather than inherited so it cannot drift with
+ * the document default and quietly become the same size as a row again.
+ */
 .m2-fieldset legend {
   padding: 0 6px;
+  font-size: 16px;
   font-weight: 700;
 }
 
+/*
+ * The gap stays at 6 px while the rows themselves get shorter. Focus is a 3 px
+ * ring at a 3 px offset, so anything tighter would have adjacent rings meeting
+ * across the join — density is not worth a keyboard user losing track of where
+ * they are.
+ */
 .m2-options {
   display: grid;
   gap: 6px;
@@ -1127,13 +1243,14 @@
   gap: 6px;
   min-width: 0;
   margin: 0;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
 }
 
 .m2-task legend {
   padding: 0 6px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -1174,30 +1291,63 @@
   color: var(--sage);
 }
 
+/*
+ * One option of one decision — the single most repeated element in creation,
+ * and the one the second pilot found still too large.
+ *
+ * The complaint was proportion, not size in isolation. `Club (Slow)` is a row
+ * in a list of twelve; it was arriving as a 56 px card with a 30 px target ring
+ * and a title set at the same 16 px as the legend that owns it, so a dozen of
+ * them dominated every heading and control above them and a decision that
+ * should be one glance became a scroll.
+ *
+ * The affordance shrinks; the target does not. `min-height` is 44 px, which is
+ * the floor the whole product is specified against and which
+ * `mobile-density.spec.ts` measures on every control on the screen — so this
+ * row is visually about a fifth shorter and is exactly as easy to hit. The mark
+ * is 22 px of ink inside that 44 px of button rather than 30 px, for the same
+ * reason: the circle is a symbol, not the tap area.
+ */
 .m2-option {
   width: 100%;
-  min-height: 56px;
+  min-height: 44px;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 5px 8px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 8px;
   color: inherit;
   background: var(--surface);
   text-align: left;
+}
+
+/*
+ * An option's title is a row label, one step under the legend that owns it.
+ *
+ * It inherited the document's 16 px and `b`'s bold, which made it exactly as
+ * loud as the legend above it and louder than the summary line beside it. The
+ * line height is deliberately generous for the size: a long equipment package
+ * name wraps to two or three lines here and must stay comfortable, because
+ * nothing on this surface is allowed to be truncated to fit.
+ */
+.m2-option b {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
 .m2-option small {
   display: block;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.35;
 }
 
 .m2-option-mark {
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
@@ -1205,7 +1355,7 @@
 }
 
 .m2-option-mark svg {
-  width: 16px;
+  width: 14px;
 }
 
 /* Selected: a filled mark, a green edge and a tinted field. Never colour alone. */
@@ -1277,7 +1427,22 @@
  * what broke "Saves" and "Primary" across lines on the Fighter card.
  */
 .m2-select-card > .m2-option {
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+/*
+ * A content-selection row keeps a title, not a row label.
+ *
+ * This is the exception to the compaction above, and it is a deliberate one.
+ * `.m2-option` covers two different jobs: a row in a list of a dozen answers to
+ * one question, and the whole card for a class, species or background — where
+ * the name *is* the card, the facts underneath it belong to it, and the reader
+ * is choosing between a handful of them. Shrinking that name with the rest
+ * would flatten the card's own hierarchy to fix a problem it does not have.
+ */
+.m2-select-card > .m2-option b {
+  font-size: 16px;
+  font-weight: 700;
 }
 
 /*

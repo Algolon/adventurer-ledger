@@ -20,10 +20,9 @@
  * so it has moved to where it belongs: labelled, global, and beside its peers.
  * The history model is in `settings-history.ts`.
  */
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import { BookOpen, Settings, Swords, UserRound } from "lucide-react";
 import { BrandMark } from "@/src/ui/brand-mark";
-import { PwaIndicator } from "@/src/ui/pwa-status";
 import { ContentWorkspace } from "@/src/ui/content-workspace";
 import { ServicesProvider, useServices } from "@/src/ui/services-context";
 import { CharacterLibrary, type LibraryDestination } from "@/src/ui/character-library";
@@ -220,6 +219,50 @@ function Shell() {
   // A modal task owns the whole surface and supplies its own task footer.
   const modalTask = builderDraftId !== null;
 
+  /**
+   * Which workspace is on screen.
+   *
+   * Not the same thing as `view`: a modal task and the sheet of one particular
+   * character are workspaces of their own, and moving between two characters'
+   * sheets is a navigation even though `view` never changes. This string is the
+   * identity of the surface, and a change in it is what the effect below treats
+   * as arriving somewhere new.
+   */
+  const workspace = modalTask
+    ? `task:${builderDraftId}`
+    : view === "sheet"
+      ? `sheet:${activeCharacterId ?? "none"}`
+      : view;
+
+  /**
+   * A workspace change is a page change: the new surface is already at its top
+   * the first time it is painted.
+   *
+   * The document scrolls, not an inner pane, so nothing about swapping `view`
+   * moves the viewport — React replaced the content underneath a scrolled window
+   * and left the offset exactly where it was. On the pilot's handset that made
+   * committing a character from a part-scrolled Review open the sheet half way
+   * down itself. It is the same defect PR #19 fixed *between creation steps*,
+   * one level up: the builder reset the scroll on every step change, and then
+   * handed the user to a different screen entirely without doing it again.
+   *
+   * The fix is deliberately the same shape as that one, for the same reasons.
+   * `useLayoutEffect` runs after React has swapped the workspace into the DOM
+   * and before the browser paints, so the offset is established in the frame
+   * that first shows the new surface — a passive effect guarantees one painted
+   * frame of the new screen at the old offset. And the scroll is instant, not
+   * smooth: animating back to zero and then revealing the destination is travel
+   * the user watches through content they have already left, which is exactly
+   * what the second pilot reported about the first attempt at the step fix.
+   *
+   * Focus is untouched here. Each workspace already moves focus where it
+   * belongs — the builder to its step heading, a dialog to its safe control —
+   * and a second opinion from the shell would fight them.
+   */
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [workspace]);
+
   /** Closes whatever modal task is open, leaving `view` to the caller. */
   const closeTask = useCallback(() => {
     setBuilderDraftId(null);
@@ -317,12 +360,23 @@ function Shell() {
        * behind the cover.
        */}
       <div className={modalTask ? "m2-shell m2-shell-task" : "m2-shell"} inert={sideways}>
+        {/*
+         * The wordmark, and nothing else.
+         *
+         * The header used to carry an offline-readiness dot on its trailing
+         * edge. Below 600 px its label did not fit and was hidden, so on every
+         * phone it was an unlabelled mark alone in the top-right — and once
+         * Settings moved into the bottom navigation it was the only thing left
+         * up there, which is why the pilot read it as an artefact rather than
+         * as status. The fact still matters and still has a home: it is stated
+         * in full under Settings · Offline, beside the paragraph that explains
+         * what offline means for a local-first app.
+         */}
         <header className="m2-appbar">
           <div className="m2-appbar-brand">
             <BrandMark decorative variant="inverse" />
             <strong>Runefolio</strong>
           </div>
-          <PwaIndicator />
         </header>
 
         <nav className="m2-rail" aria-label="Primary">

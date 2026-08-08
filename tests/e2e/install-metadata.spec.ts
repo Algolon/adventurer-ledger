@@ -8,7 +8,7 @@ test("Chrome resolves only the fresh Runefolio install metadata", async ({
   context,
 }) => {
   await page.goto(APP_ROOT);
-  await expect(page.locator(".offline")).toContainText("Offline ready");
+  await expect(page.locator("html")).toHaveAttribute("data-offline-state", "ready");
 
   const session = await context.newCDPSession(page),
     appManifest = await session.send("Page.getAppManifest"),

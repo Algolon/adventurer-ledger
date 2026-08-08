@@ -96,6 +96,16 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("online", checkForUpdate);
     };
   }, [verifyActiveShell]);
+  /*
+   * The same fact as a document attribute, for anything that has to wait for
+   * the shell to be cached rather than show it to a person. It used to be read
+   * off the app-bar indicator's text, which made a visual element load-bearing
+   * for readiness and is why removing that element would otherwise have been a
+   * breaking change.
+   */
+  useEffect(() => {
+    document.documentElement.dataset["offlineState"] = state;
+  }, [state]);
   const applyUpdate = () => {
     if (!waiting) return;
     navigator.serviceWorker.addEventListener(
@@ -132,24 +142,43 @@ const labels: Record<OfflineState, string> = {
   update: "Update ready",
   unavailable: "Offline cache unavailable",
 };
+
 /**
- * Offline readiness, sized for the space it is actually in.
+ * Offline readiness, stated where it is explained.
  *
- * In the app bar of a 360 px phone the full sentence wrapped onto a second
- * line, which pushed the bar past its own height and squeezed the wordmark down
- * to "Runef…". The dot is always shown and always labelled; the sentence is
- * revealed only where there is room for it, so the accessible name is identical
- * at every width and only the visible text changes.
+ * This used to live in the app bar, and on a phone it was a bare coloured dot:
+ * the sentence beside it was hidden below 600 px because it would not fit, so
+ * every handset showed a small isolated mark in the top-right with no label,
+ * no affordance and nothing it could be read against. Once Settings moved to
+ * the bottom navigation and took the gear out of the header, that dot was the
+ * only thing left up there beside the wordmark, and the pilot read it as a
+ * visual artefact — which, with its own label removed, is what it had become.
+ *
+ * It is not deleted, because offline readiness is a real fact about a
+ * local-first app; it is moved to Settings · Offline, next to the paragraph
+ * that says what offline means here. There it has room to be a sentence, so
+ * the visible text and the accessible name are the same string at every width.
+ *
+ * Nothing consumes this as an ambient signal any more. Anything that needs to
+ * know the shell is cached — including the tests — reads
+ * `document.documentElement.dataset.offlineState`, which `PwaProvider` keeps
+ * current and which cannot be confused with a piece of interface.
  */
-export function PwaIndicator() {
+export function PwaStatus() {
   const { state } = useContext(PwaContext);
   return (
-    <span className={`offline ${state}`} role="status">
+    /*
+     * The state travels as a data attribute rather than as a second class
+     * name. A class assembled from a variable is invisible to the stylesheet
+     * reachability check in `tests/theme.test.ts`, so `.ready` would have read
+     * as a dead rule while being very much alive — which is the failure mode
+     * that check exists to catch, arriving as a false positive.
+     */
+    <p className="offline" data-state={state} role="status">
       <span aria-hidden="true" className="offline-dot">
         ●
       </span>
       <span className="offline-label">{labels[state]}</span>
-      <span className="m2-visually-hidden">{labels[state]}</span>
-    </span>
+    </p>
   );
 }

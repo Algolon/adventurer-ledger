@@ -20,7 +20,7 @@ test("keeps the old shell active until explicit update consent", async ({
 }) => {
   await page.goto("/adventurer-ledger/");
   await expect(page.locator("body")).toHaveAttribute("data-app-build", "old");
-  await expect(page.locator(".offline")).toContainText("Offline ready");
+  await expect(page.locator("html")).toHaveAttribute("data-offline-state", "ready");
 
   // Imports and exports moved under Settings in the M2.1 information architecture.
   await openSettings(page);
@@ -48,7 +48,7 @@ test("keeps the old shell active until explicit update consent", async ({
 
   await page.getByRole("button", { name: "Update now" }).click();
   await expect(page.locator("body")).toHaveAttribute("data-app-build", "new");
-  await expect(page.locator(".offline")).toContainText("Offline ready");
+  await expect(page.locator("html")).toHaveAttribute("data-offline-state", "ready");
   await page.getByRole("button", { name: "Compendium", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Controlled Update Rule" })).toBeVisible();
 });
