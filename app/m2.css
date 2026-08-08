@@ -23,6 +23,15 @@
   --appbar-height: calc(var(--appbar-content) + env(safe-area-inset-top, 0px));
   /* 56 px of button plus the 1 px top border. */
   --rail-height: 57px;
+  /*
+   * The main region's inline padding, named because something else depends on
+   * it. The sticky sheet-section strip is deliberately full-bleed and cancels
+   * this padding with a negative margin; when the two were separate literals,
+   * tightening the padding here left the strip bleeding two pixels past both
+   * edges and pushed the document sideways — the one thing the phone contract
+   * does not permit. There is now one value and the strip reads it.
+   */
+  --main-pad-x: 12px;
 
   min-height: 100vh;
   min-height: 100dvh;
@@ -93,60 +102,10 @@
   height: 28px;
 }
 
-/*
- * Settings is reachable from every screen without competing with the wordmark
- * for the header. Below 400 px the label is carried by `aria-label` alone and
- * the control is a 44 px icon; the visible word returns as soon as there is
- * room for it.
- */
-.m2-appbar-settings {
-  flex: 0 0 auto;
-  min-height: 44px;
-  min-width: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  font-size: 14px;
-}
-
-.m2-appbar-settings svg {
-  flex: 0 0 auto;
-  width: 20px;
-}
-
-.m2-appbar-settings.m2-active {
-  background: var(--surface);
-  border-color: var(--brass);
-  color: var(--brass);
-}
-
-@media (max-width: 399px) {
-  .m2-appbar-settings span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
-  .m2-appbar-settings {
-    padding: 0;
-  }
-}
-
 .m2-main {
-  padding: 16px 14px;
-  padding-left: calc(14px + env(safe-area-inset-left, 0px));
-  padding-right: calc(14px + env(safe-area-inset-right, 0px));
+  padding: 12px var(--main-pad-x);
+  padding-left: calc(var(--main-pad-x) + env(safe-area-inset-left, 0px));
+  padding-right: calc(var(--main-pad-x) + env(safe-area-inset-right, 0px));
   /*
    * The bottom bar is fixed, so it is out of flow and would otherwise sit on
    * top of the last card. This clears its full height plus the inset it adds
@@ -178,10 +137,6 @@
   min-width: 0;
 }
 
-.m2-rail-only {
-  display: none;
-}
-
 /*
  * A modal task owns the bottom edge on mobile.
  *
@@ -197,6 +152,13 @@
   display: none;
 }
 
+/*
+ * Four destinations rather than three, so each label has about a quarter of the
+ * width instead of a third. "Compendium" is the widest of them and at 320 px it
+ * has roughly 80 px to sit in, which is why the label is allowed to shrink here
+ * and is clipped with an ellipsis rather than being permitted to set the width
+ * of the bar and push the document sideways.
+ */
 .m2-nav-button {
   width: 100%;
   min-height: 56px;
@@ -204,11 +166,18 @@
   justify-items: center;
   align-content: center;
   gap: 2px;
-  padding: 6px 4px;
+  padding: 6px 2px;
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.m2-nav-button span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .m2-nav-button svg {
@@ -225,7 +194,7 @@
 
 .m2-page {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   align-content: start;
   max-width: 900px;
   margin: 0 auto;
@@ -241,17 +210,29 @@
 
 .m2-page-title {
   margin: 0;
-  font: 600 28px/1.15 var(--display);
+  font: 600 24px/1.15 var(--display);
 }
 
 .m2-section-title {
-  margin: 8px 0 0;
-  font: 600 19px/1.2 var(--display);
+  margin: 6px 0 0;
+  font: 600 17px/1.2 var(--display);
 }
 
+/*
+ * Secondary text, one step below body.
+ *
+ * The pilot named the explanatory copy — "What this adventurer is,
+ * mechanically…" — as oversized, and it was: `.m2-muted` inherited the
+ * document's 16 px default, which is a reading size for an article and a
+ * shouting one for a hint under a legend. This is the single change that
+ * reaches every helper and explanatory paragraph in the app without touching
+ * the size of any heading, value or control.
+ */
 .m2-muted {
   color: var(--muted);
   margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .m2-eyebrow {
@@ -543,6 +524,41 @@
   gap: 6px;
   margin: 0;
   padding-left: 18px;
+}
+
+/*
+ * A flat set of short names — Review's proficiencies — laid out as chips that
+ * flow rather than as a bulleted column. Fifteen skills is fifteen lines in a
+ * list and about four here, which is the difference between a section a reader
+ * scans and one they scroll past.
+ */
+.m2-inline-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  list-style: none;
+}
+
+.m2-inline-list li {
+  padding: 3px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--inset);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * An unmade decision, on the screen whose job is to surface exactly that.
+ * Colour is paired with the word "Not chosen", so the word is doing the work
+ * and the colour is only helping it be found.
+ */
+.m2-review-open {
+  color: var(--warn);
+  font-weight: 700;
 }
 
 .m2-empty {
@@ -878,7 +894,7 @@
 /* Builder. */
 .m2-builder {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
   max-width: 900px;
   margin: 0 auto;
@@ -902,12 +918,10 @@
    */
   top: var(--appbar-height);
   z-index: 19;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 0;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 0 8px;
   /*
    * An opaque background, because a sticky element paints over the content
    * scrolling beneath it. This named `var(--bg)`, which no stylesheet ever
@@ -917,31 +931,102 @@
   background: var(--paper);
 }
 
-.m2-builder-actions {
+/*
+ * The builder's utility row.
+ *
+ * One row on an ordinary phone: `Guided|Flexible`, `Discard`, `Save & close`.
+ * `flex-wrap: wrap` is the 320 px fallback — at that width an *editing* session
+ * carries three controls and they wrap onto a second line rather than pushing
+ * the document sideways. `margin-left: auto` on the first action pins the exit
+ * to the trailing edge, so the mode and the way out never trade places when the
+ * Discard control appears or disappears.
+ */
+.m2-builder-utility {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
-.m2-save-close {
+.m2-builder-utility > .m2-utility-action:first-of-type {
+  margin-left: auto;
+}
+
+/*
+ * Chrome-sized, not content-sized: 13 px type and 10 px of horizontal padding
+ * against the old 16 px and 14 px. The 44 px minimum target is untouched — the
+ * control is visually lighter, not smaller to the thumb.
+ */
+.m2-utility-action {
   min-height: 44px;
-  padding: 0 14px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 8px;
   color: var(--ink);
   background: var(--inset);
+  font-size: 13px;
   font-weight: 650;
+  white-space: nowrap;
 }
 
-.m2-save-close[disabled] {
+.m2-utility-action[disabled] {
   opacity: 0.6;
 }
 
+/*
+ * The segmented mode control. Both labels are always rendered, so the control's
+ * width is a constant and changing mode moves nothing around it.
+ */
+.m2-mode-switch {
+  display: flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--inset);
+  overflow: hidden;
+}
+
+/*
+ * Both segments are set at one weight, deliberately.
+ *
+ * Bolding the selected segment made it measurably wider than the unselected
+ * one, so choosing a mode resized the two halves against each other — a smaller
+ * version of exactly the layout jump this control was introduced to remove.
+ * Weight is therefore constant and the selection is carried by a filled
+ * surface, a brass rule and a colour change instead: three signals, so none of
+ * them is load-bearing on its own.
+ */
+.m2-mode-switch button {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.m2-mode-switch button[aria-pressed="true"] {
+  color: var(--cream);
+  background: var(--navy);
+  box-shadow: inset 0 -2px var(--brass);
+}
+
+.m2-builder-title {
+  min-width: 0;
+}
+
+/*
+ * A step title, not a masthead. 26 px competed with the app bar and cost a line
+ * of vertical space on a surface that is already carrying a counter, a progress
+ * track and a utility row above the actual question.
+ */
 .m2-builder-head h2 {
   margin: 0;
   min-width: 0;
-  font: 600 26px/1.15 var(--display);
+  font: 600 21px/1.2 var(--display);
 }
 
 /*
@@ -960,31 +1045,15 @@
   outline-offset: 3px;
 }
 
-.m2-mode-toggle {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--ink);
-  background: var(--inset);
-  font-weight: 650;
-}
-
-.m2-mode-toggle[aria-pressed="true"] {
-  color: var(--cream);
-  background: var(--navy);
-  border-color: var(--brass);
-}
-
 .m2-step {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 .m2-step h3 {
   margin: 0;
-  font: 600 21px/1.2 var(--display);
+  font: 600 18px/1.25 var(--display);
 }
 
 .m2-not-needed {
@@ -999,7 +1068,7 @@
 .m2-fieldset {
   min-width: 0;
   margin: 0;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
 }
@@ -1011,10 +1080,70 @@
 
 .m2-options {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/*
+ * A large decision, presented as a task.
+ *
+ * Same box as `.m2-fieldset`, so a step that mixes small decisions with large
+ * ones does not look like two different screens stitched together. What differs
+ * is what is inside it: a summary line and one control, rather than every
+ * option the decision has.
+ */
+.m2-task {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.m2-task legend {
+  padding: 0 6px;
+  font-weight: 700;
+}
+
+/* A finished task is visibly finished, by edge and by tick, not by colour. */
+.m2-task-done {
+  border-color: var(--good-border);
+}
+
+.m2-task-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+/*
+ * What has been chosen. It takes the row's spare width and the control keeps
+ * its own, so a long list of selections wraps rather than squeezing the way
+ * back into the picker down to an unreadable stub.
+ */
+.m2-task-state {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1 1 12ch;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.m2-task-tick {
+  flex: 0 0 auto;
+  width: 16px;
+  align-self: center;
+  color: var(--sage);
 }
 
 .m2-option {
@@ -1108,6 +1237,44 @@
   min-width: 0;
 }
 
+/*
+ * A content-selection row has no trailing badge column, in either mode.
+ *
+ * `.m2-option` keeps its optional third track for the rows that genuinely carry
+ * a trailing badge — an incompatible or already-granted choice option, where the
+ * badge *is* the row's status and belongs in its layout. A recommendation is
+ * not that: it is guidance about an option whose facts must read identically
+ * whether or not guidance is switched on. Giving it a track made guided mode
+ * roughly 110 px narrower through the middle column than flexible mode, which is
+ * what broke "Saves" and "Primary" across lines on the Fighter card.
+ */
+.m2-select-card > .m2-option {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+/*
+ * The recommendation's scannable half: a brass edge on the row, painted with an
+ * inset shadow so it occupies no space and shifts nothing. The word
+ * "Recommended" is always present in the meta row below, so this is a second
+ * signal rather than colour carrying the meaning on its own.
+ */
+.m2-select-card-recommended > .m2-option {
+  box-shadow: inset 3px 0 var(--brass);
+}
+
+/*
+ * Where the recommendation actually says its name. Guided mode was already
+ * adding this row for "Why this?", so the badge joins a row that exists rather
+ * than claiming a new one: guided and flexible differ by this row alone.
+ */
+.m2-option-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
 /* The row's facts sit under the name, stacked, never in a sideways strip. */
 .m2-facts {
   display: flex;
@@ -1125,8 +1292,16 @@
   font-size: 12px;
 }
 
+/*
+ * A fact's label is one short word — "Saves", "Primary", "Hit die" — and is
+ * never the thing that should give way. The chips wrap as whole units inside
+ * `.m2-facts`; the label does not break inside itself. The value keeps
+ * `overflow-wrap: anywhere` below as the last-resort valve the phone contract
+ * requires for a pathological identifier.
+ */
 .m2-fact-label {
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .m2-fact-value {
@@ -1141,10 +1316,10 @@
  */
 .m2-select-panel {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
   margin: 2px 0 4px;
-  padding: 12px 10px;
+  padding: 10px;
   border: 1px solid var(--good-border);
   border-radius: 9px;
   background: var(--inset);
@@ -1152,7 +1327,7 @@
 
 .m2-select-section {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1166,7 +1341,7 @@
 
 .m2-grant-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   margin: 0;
   padding: 0;
   min-width: 0;
@@ -1497,9 +1672,15 @@
 }
 
 /* Builder progress sits with the content, above the step body. */
+/*
+ * The progress block, at chrome weight.
+ *
+ * It sits between the step title and the step's first question on every screen,
+ * so its own spacing is paid for on every screen too.
+ */
 .m2-builder-progress {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .m2-progress-track {
@@ -1523,15 +1704,15 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px;
 }
 
 .m2-progress-steps {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 6px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--ink);
@@ -1799,9 +1980,6 @@
     padding: 8px;
     gap: 4px;
   }
-  .m2-rail-only {
-    display: block;
-  }
   .m2-nav-button {
     grid-template-columns: 24px minmax(0, 1fr);
     justify-items: start;
@@ -1814,9 +1992,6 @@
   }
   .m2-nav-button.m2-active {
     box-shadow: inset 3px 0 var(--brass);
-  }
-  .m2-appbar-settings {
-    display: none;
   }
   .m2-main {
     padding: 24px 28px 40px;
@@ -1853,6 +2028,7 @@
   }
   .m2-option-selected,
   .m2-nav-button.m2-active,
+  .m2-mode-switch button[aria-pressed="true"],
   .m2-step-list button[aria-current="step"],
   .sheet-tab-active {
     outline: 2px solid Highlight;

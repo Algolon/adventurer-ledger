@@ -278,7 +278,14 @@
   display: grid;
   grid-template-columns: repeat(var(--sheet-tab-count, 4), minmax(0, 1fr));
   gap: 4px;
-  margin: 0 -14px;
+  /*
+   * Full-bleed: exactly cancels the main region's inline padding, safe-area
+   * insets included, so the strip reaches both viewport edges and not a pixel
+   * further. Hard-coding the number here is what let it drift out of step with
+   * the padding it is cancelling.
+   */
+  margin-left: calc(-1 * (var(--main-pad-x) + env(safe-area-inset-left, 0px)));
+  margin-right: calc(-1 * (var(--main-pad-x) + env(safe-area-inset-right, 0px)));
   padding: 6px 10px;
   background: var(--paper);
   border-bottom: 1px solid var(--border-soft);
@@ -756,7 +763,8 @@
 @media (min-width: 960px) {
   .sheet-tabs {
     position: static;
-    margin: 0;
+    margin-left: 0;
+    margin-right: 0;
     padding: 0 0 6px;
     background: transparent;
     border-bottom: 1px solid var(--border-soft);

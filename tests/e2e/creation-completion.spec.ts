@@ -243,7 +243,12 @@ test.describe("Review describes the character that gets committed", () => {
     // Equipment and the absent system are stated rather than left blank.
     await expect(page.getByRole("heading", { name: "Equipment" })).toBeVisible();
     await expect(page.getByText("None at this level")).toBeVisible();
-    await expect(page.getByText("No blocking issues")).toBeVisible();
+    // Review says whether anything still needs the player, in those words. The
+    // section used to be headed "Issues by severity" and to answer "No blocking
+    // issues" — the engine's classification and the engine's vocabulary, on the
+    // screen whose only question is whether this is the intended character.
+    await expect(page.getByRole("heading", { name: "Still to resolve" })).toBeVisible();
+    await expect(page.getByText("Nothing is blocking this character")).toBeVisible();
   });
 
   /**

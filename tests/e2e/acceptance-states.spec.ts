@@ -142,8 +142,8 @@ test.describe("AC-04 incompatible option", () => {
     await expect(page.getByText("Step 6 of 9")).toBeVisible();
 
     // Flexible mode keeps the choice with its issue visible.
-    await page.getByRole("button", { name: "Guided mode" }).click();
-    await expect(page.getByRole("button", { name: "Flexible mode" })).toBeVisible();
+    await page.getByRole("button", { name: "Flexible", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Flexible", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(reaver).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByText(/does not meet Strength 18 or higher/)).toBeVisible();
   });
@@ -360,9 +360,15 @@ test.describe("AC-17 zoom, forced colours and focus order", () => {
       return {
         position: style?.position,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        /*
+         * Settings is one of the bottom bar's four destinations now, rather
+         * than a gear in the app bar, so what has to survive the fallback is
+         * that it is still reachable — in the same place as its peers, under
+         * zoom as at any other width.
+         */
         settingsVisible: Boolean(
-          [...document.querySelectorAll<HTMLElement>("button")].find(
-            button => button.getAttribute("aria-label") === "Open Settings" && button.offsetParent !== null,
+          [...document.querySelectorAll<HTMLElement>(".m2-rail button")].find(
+            button => button.textContent?.trim() === "Settings" && button.offsetParent !== null,
           ),
         ),
       };

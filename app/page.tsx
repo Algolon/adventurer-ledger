@@ -3,13 +3,22 @@
 /**
  * The Runefolio application shell.
  *
- * Mobile primary navigation is Characters, Sheet and Compendium in a persistent
- * bottom bar, with Settings always reachable from the top app bar. A modal task —
- * creation, level up or a transfer confirmation — replaces the bottom bar with a
- * task footer so the primary next action stays visible at 360 px. At an effective
- * 960 CSS px and above the same destinations become a compact persistent rail,
- * which falls back to the bottom bar under zoom or width pressure because the
- * query is expressed in CSS pixels.
+ * Mobile primary navigation is Characters, Sheet, Compendium and Settings in a
+ * persistent bottom bar. A modal task — creation, level up or a transfer
+ * confirmation — replaces the bottom bar with a task footer so the primary next
+ * action stays visible at 360 px. At an effective 960 CSS px and above the same
+ * destinations become a compact persistent rail, which falls back to the bottom
+ * bar under zoom or width pressure because the query is expressed in CSS pixels.
+ *
+ * Settings is one of those four destinations, and used to be a large gear in the
+ * top-right of the app bar instead. Two things were wrong with that. Sitting in
+ * the header — beside the wordmark, above the character's own screen — it read
+ * as settings *for what is on screen*, when it configures the application. And
+ * it had no history behind it, so on an installed phone with no browser chrome
+ * the system Back gesture from Settings left Runefolio altogether rather than
+ * returning to the screen the user came from. Both follow from where it lived,
+ * so it has moved to where it belongs: labelled, global, and beside its peers.
+ * The history model is in `settings-history.ts`.
  */
 import { useCallback, useId, useRef, useState } from "react";
 import { BookOpen, Settings, Swords, UserRound } from "lucide-react";
@@ -24,6 +33,7 @@ import { PlaySheet } from "@/src/ui/play-sheet";
 import { LevelUpDialog } from "@/src/ui/level-up-dialog";
 import { Dialog } from "@/src/ui/primitives";
 import { SettingsView } from "@/src/ui/settings-view";
+import { useSettingsHistory, type RootDestination } from "@/src/ui/settings-history";
 import { TransferPanel } from "@/src/ui/transfer-panel";
 import type { RulesetSelection } from "@/src/services/content-install-service";
 import type { EditDraftRepairNote } from "@/src/services/edit-draft";
@@ -32,11 +42,23 @@ import "./sheet.css";
 
 type View = "characters" | "sheet" | "compendium" | "settings" | "transfer";
 
+/**
+ * The four global destinations, in the bottom bar and in the wide rail alike.
+ *
+ * Settings is last and carries an ordinary cog. A cog is only ambiguous when it
+ * is unlabelled and parked in a header next to the thing it is not configuring;
+ * labelled and sitting beside Characters, Sheet and Compendium, it reads as
+ * what it is.
+ */
 const PRIMARY_NAV: readonly { id: View; label: string; icon: React.ReactNode }[] = [
   { id: "characters", label: "Characters", icon: <UserRound aria-hidden="true" /> },
   { id: "sheet", label: "Sheet", icon: <Swords aria-hidden="true" /> },
   { id: "compendium", label: "Compendium", icon: <BookOpen aria-hidden="true" /> },
+  { id: "settings", label: "Settings", icon: <Settings aria-hidden="true" /> },
 ];
+
+/** The destinations Settings can be entered from, and returned to. */
+const ROOT_DESTINATIONS = new Set<View>(["characters", "sheet", "compendium"]);
 
 export default function Home() {
   return (
@@ -198,6 +220,34 @@ function Shell() {
   // A modal task owns the whole surface and supplies its own task footer.
   const modalTask = builderDraftId !== null;
 
+  /** Closes whatever modal task is open, leaving `view` to the caller. */
+  const closeTask = useCallback(() => {
+    setBuilderDraftId(null);
+    setEditRepairs([]);
+    setEditError(null);
+  }, []);
+
+  /**
+   * Settings' history entry, and the way back out of it.
+   *
+   * The hook is told whether Settings is open rather than deciding it: `view`
+   * is already the record of what is on screen, and a second copy of that fact
+   * is a second thing that can be wrong.
+   */
+  const settingsHistory = useSettingsHistory(view === "settings", destination => {
+    closeTask();
+    setView(destination);
+  });
+
+  /**
+   * Anything the app closes on its own has to leave Settings the same way a tap
+   * would, or the pushed entry outlives the screen it belongs to.
+   */
+  const leaveSettingsFor = (destination: RootDestination) => {
+    if (view === "settings") settingsHistory.leaveSettings(destination);
+    else setView(destination);
+  };
+
   /**
    * Leaves for another top-level view, closing any modal task first.
    *
@@ -208,12 +258,44 @@ function Shell() {
    * already autosaved, and the draft reappears under "Unfinished builds" with a
    * Resume control — so the honest response to "take me to Characters" is to go
    * there.
+   *
+   * Settings is the one destination with history behind it, so both directions
+   * across that boundary are routed through the hook rather than by assigning
+   * `view` directly: entering pushes one entry, leaving unwinds exactly that
+   * entry, and doing neither is what keeps ordinary tab switching out of the
+   * back stack entirely.
    */
   const leaveTo = (destination: View) => {
+    /*
+     * Tapping the destination already showing is a no-op — but only when it is
+     * genuinely already showing. With a build open the task owns the surface,
+     * so "Characters" while `view` is already `characters` is a real request to
+     * leave the task and see the library, and the wide layout is where a user
+     * can make it: the rail stays beside the task rather than under it.
+     */
+    if (destination === view && !modalTask) return;
+
+    if (destination === "settings") {
+      closeTask();
+      const from = ROOT_DESTINATIONS.has(view) ? (view as RootDestination) : "characters";
+      settingsHistory.openSettings(from);
+      setView("settings");
+      return;
+    }
+
+    if (view === "settings" && ROOT_DESTINATIONS.has(destination)) {
+      /*
+       * `leaveSettings` unwinds the pushed entry and the resulting popstate
+       * lands the view, so nothing is assigned here — assigning as well would
+       * paint the destination once now and once again a task later.
+       */
+      closeTask();
+      settingsHistory.leaveSettings(destination as RootDestination);
+      return;
+    }
+
+    closeTask();
     setView(destination);
-    setBuilderDraftId(null);
-    setEditRepairs([]);
-    setEditError(null);
   };
 
   return (
@@ -241,16 +323,6 @@ function Shell() {
             <strong>Runefolio</strong>
           </div>
           <PwaIndicator />
-          <button
-            type="button"
-            className={view === "settings" ? "m2-appbar-settings m2-active" : "m2-appbar-settings"}
-            onClick={() => leaveTo("settings")}
-            aria-label="Open Settings"
-            aria-current={view === "settings" ? "page" : undefined}
-          >
-            <Settings aria-hidden="true" />
-            <span>Settings</span>
-          </button>
         </header>
 
         <nav className="m2-rail" aria-label="Primary">
@@ -268,17 +340,6 @@ function Shell() {
                 </button>
               </li>
             ))}
-            <li className="m2-rail-only">
-              <button
-                type="button"
-                className={view === "settings" ? "m2-nav-button m2-active" : "m2-nav-button"}
-                aria-current={view === "settings" ? "page" : undefined}
-                onClick={() => leaveTo("settings")}
-              >
-                <Settings aria-hidden="true" />
-                <span>Settings</span>
-              </button>
-            </li>
           </ul>
         </nav>
 
@@ -353,7 +414,14 @@ function Shell() {
             <SettingsView
               onOpenCharacter={id => {
                 setActiveCharacterId(id);
-                setView("sheet");
+                /*
+                 * Opening a character *from* Settings is leaving Settings, so
+                 * it unwinds the entry rather than abandoning it. Setting the
+                 * view directly here would leave a Settings entry behind the
+                 * sheet, and the next Back would return to a Settings screen
+                 * the user had already left.
+                 */
+                leaveSettingsFor("sheet");
               }}
             />
           )}
