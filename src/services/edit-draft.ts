@@ -183,6 +183,20 @@ export function draftBuildFromCharacter(
     equipmentSelections: Object.fromEntries(
       Object.entries(character.equipmentSelections).map(([choiceId, optionIds]) => [choiceId, [...optionIds]]),
     ),
+    /*
+     * Copied verbatim, like every other stored answer. A character committed
+     * before this field existed carries none, which reads as an empty selection
+     * and is exactly right: they were never offered one.
+     *
+     * No repair note is raised here. A spell whose list the installed content
+     * stopped reaching is not a broken reference the way a missing option ID is —
+     * the planner re-derives eligibility from live content on the very next pass
+     * and reports it against the step that can repair it, with the counts that
+     * explain it. Noting it twice would send the user to the same screen twice.
+     */
+    spellSelections: Object.fromEntries(
+      Object.entries(character.spellSelections ?? {}).map(([selectionId, spellIds]) => [selectionId, [...spellIds]]),
+    ),
     manualValues: { ...character.manualValues },
     manualActions: character.manualActions.map(action => ({ ...action })),
     acknowledgedIssueCodes: [...character.acknowledgedIssueCodes],

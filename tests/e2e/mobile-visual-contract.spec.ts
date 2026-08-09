@@ -244,7 +244,11 @@ async function buildCaster(page: Page, name: string) {
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverlore/ }).click();
   await continueStep(page);
-  await expect(page.getByText("Known spells")).toBeVisible();
+  // The step owes two real decisions, so it is answered rather than read.
+  await page.getByRole("button", { name: /^Silt Whisper/ }).click();
+  await page.getByRole("button", { name: /^Tally Mark/ }).click();
+  await page.getByRole("button", { name: /^Stone Reading/ }).click();
+  await page.getByRole("button", { name: /^Quiet the Wake/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^River kit/ }).click();
   await continueStep(page);
@@ -322,7 +326,11 @@ test.describe("no Runefolio surface scrolls horizontally on a phone", () => {
       await continueStep(page);
       await page.getByRole("button", { name: /^Riverlore/ }).click();
       await continueStep(page);
-      await expect(page.getByText("Known spells")).toBeVisible();
+      // The step owes two real decisions, so it is answered rather than read.
+      await page.getByRole("button", { name: /^Silt Whisper/ }).click();
+      await page.getByRole("button", { name: /^Tally Mark/ }).click();
+      await page.getByRole("button", { name: /^Stone Reading/ }).click();
+      await page.getByRole("button", { name: /^Quiet the Wake/ }).click();
       await continueStep(page);
       await page.getByRole("button", { name: /^River kit/ }).click();
       await continueStep(page);

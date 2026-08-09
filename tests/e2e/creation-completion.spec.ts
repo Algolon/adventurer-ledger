@@ -176,7 +176,11 @@ test.describe("the conditional Spells & resources step", () => {
 
     // The step exists and has real content, rather than being an empty task.
     await expect(stepTitle(page)).toHaveText("Spells & resources");
-    await expect(page.getByText("Known spells")).toBeVisible();
+    // The step owes two real decisions, so it is answered rather than read.
+    await page.getByRole("button", { name: /^Silt Whisper/ }).click();
+    await page.getByRole("button", { name: /^Tally Mark/ }).click();
+    await page.getByRole("button", { name: /^Stone Reading/ }).click();
+    await page.getByRole("button", { name: /^Quiet the Wake/ }).click();
     await next(page);
 
     await expect(stepTitle(page)).toHaveText("Equipment");

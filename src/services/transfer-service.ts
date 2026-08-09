@@ -72,6 +72,13 @@ const characterSchema = z.object({
   abilityScores,
   choiceSelections: z.record(z.array(z.string().max(160)).max(50)),
   equipmentSelections: z.record(z.array(z.string().max(160)).max(50)),
+  /*
+   * Optional, because a record written before spell selection existed does not
+   * carry the field and must still import. A caster's chosen spells are as
+   * durable as any other answer, so the bound is generous: one selection can
+   * legitimately hold a large prepared list.
+   */
+  spellSelections: z.record(z.array(z.string().max(160)).max(200)).optional(),
   manualValues: z.record(z.number()),
   manualActions: z.array(z.object({ id: z.string().max(160), label: z.string().max(240), expression: z.string().max(120).optional() }).strict()).max(50),
   acknowledgedIssueCodes: z.array(z.string().max(80)).max(100),
@@ -157,6 +164,10 @@ const FINGERPRINTED_FIELDS = [
   "abilityScores",
   "choiceSelections",
   "equipmentSelections",
+  // Durable mechanical state: two characters alike but for their chosen spells
+  // are genuinely different, and omitting this would make a transfer report
+  // "Already current" and decline to import the difference.
+  "spellSelections",
   "manualValues",
   "manualActions",
   "acknowledgedIssueCodes",
@@ -169,7 +180,14 @@ const FINGERPRINTED_FIELDS = [
  * Lists the domain treats as sets. `classLevels` and `manualActions` keep their
  * order because position is meaningful in both.
  */
-const CHARACTER_SET_PATHS = ["tags", "acknowledgedIssueCodes", "choiceSelections.*", "equipmentSelections.*"] as const;
+const CHARACTER_SET_PATHS = [
+  "tags",
+  "acknowledgedIssueCodes",
+  "choiceSelections.*",
+  "equipmentSelections.*",
+  // Which spells were chosen is the fact; the order they were pressed in is not.
+  "spellSelections.*",
+] as const;
 
 /**
  * Stable fingerprint over the durable character aggregate.
@@ -270,6 +288,10 @@ export class CharacterTransferService {
       ...(character.speciesId ? [character.speciesId] : []),
       ...(character.backgroundId ? [character.backgroundId] : []),
       ...Object.values(character.choiceSelections).flat(),
+      // Chosen spells are content the receiving device has to have, so a
+      // transfer that lands without them reports the gap rather than importing
+      // a caster whose repertoire silently shrank.
+      ...Object.values(character.spellSelections ?? {}).flat(),
       ...sheet.equipment.map(item => item.itemId),
     ]);
     const dependencies = entries

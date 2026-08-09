@@ -27,6 +27,8 @@ import {
   type PlannedStep,
   type RequiredChoice,
 } from "@/src/services/build-planner";
+import type { RequiredSpellSelection } from "@/src/services/spell-selection";
+import { changeClass } from "@/src/services/class-change";
 import { SPECIES_CATEGORIES } from "@/src/services/choice-planner";
 import { originIncreasePatternFor } from "@/src/services/ability-allocation";
 import { changeBackground } from "@/src/services/background-change";
@@ -1190,8 +1192,20 @@ function StepContent({
              * to keep; one it does not cover becomes the inline repair below,
              * on this same step. Silently lowering it here would discard a
              * choice without saying so.
+             *
+             * Spell selections the outgoing class owned are removed, not merely
+             * hidden. The planner stops offering them the moment the class
+             * changes, but the stored answers would survive in the draft, be
+             * committed, and reappear if the user changed back through a third
+             * class that reused an ID. `changeClass` is the same ownership walk
+             * `changeBackground` performs for the background's own decisions.
              */
-            onSelect={id => onChange({ classId: id, subclassId: undefined, manualSheet: false })}
+            onSelect={id =>
+              onChange(current => ({
+                ...changeClass(current, id, entries).build,
+                manualSheet: false,
+              }))
+            }
           />
           {/*
            * The level appears once something can validate it. Before a class
@@ -2487,14 +2501,210 @@ function ManualSheetStep({
  * chosen. A package presented only by its name asks the user to choose between
  * two labels they cannot read the contents of.
  */
+/** Toggles one spell within a selection, honouring the count the content owes. */
+const toggleSpell =
+  (onChange: (patch: DraftPatch) => void) => (selectionId: string, spellId: string, required: number) =>
+    onChange(current => {
+      const stored = current.spellSelections ?? {};
+      const existing = stored[selectionId] ?? [];
+      /*
+       * Choosing past the limit drops the oldest answer rather than refusing the
+       * press. The alternative — disabling every unselected row once the count is
+       * met — makes swapping one spell for another a two-step operation whose
+       * first step looks like the screen has broken. `slice(-required)` is the
+       * same rule `toggleChoice` already applies to a generic decision, so the
+       * two surfaces behave alike.
+       */
+      const next = existing.includes(spellId)
+        ? existing.filter(item => item !== spellId)
+        : required === 1
+          ? [spellId]
+          : [...existing, spellId].slice(-required);
+      return { spellSelections: { ...stored, [selectionId]: next } };
+    });
+
 /**
- * Spells & resources: what the class grants at this level.
+ * How many spells a selection may offer before it earns a search field.
  *
- * The first fixture caster knows a fixed repertoire, so this step is a
- * read-only statement of what the build grants — spells by level and the
- * limited-use resources that power them. When content later models spell
- * selection as choices, its choice groups render here through the same
- * ChoiceGroups path every other step uses.
+ * The same line a generic decision uses to stop being one glance, and for the
+ * same reason — so a caster does not meet a different idea of "long" from the one
+ * the rest of the builder applies. Below it a search box is one more control on a
+ * list the eye already covers; above it, and certainly at the few hundred spells
+ * a real catalogue carries, it is the only way to reach a known name quickly.
+ */
+const SPELL_SEARCH_THRESHOLD = LARGE_CHOICE_OPTION_THRESHOLD;
+
+/** The user-facing name for a spell level. Cantrips are not "level 0". */
+const spellLevelLabel = (level: number) => (level === 0 ? "Cantrips" : `Level ${level}`);
+
+/**
+ * What a selection still asks for, as a sentence.
+ *
+ * The count is the whole message. A code such as `CHOICE_MIN_NOT_MET` names the
+ * rule that failed rather than the action that would fix it, and the user is not
+ * repairing a rule — they are choosing two more cantrips.
+ */
+function spellSelectionStatus(selection: RequiredSpellSelection): string {
+  const noun = selection.label.toLowerCase();
+  const remaining = selection.required - selection.selected.length;
+  if (selection.ineligibleSelected.length)
+    return `${selection.ineligibleSelected.length} chosen ${noun} ${
+      selection.ineligibleSelected.length === 1 ? "is" : "are"
+    } no longer available at this level. Choose again.`;
+  /*
+   * The label is content, so it cannot be singularised: "Cantrips" and "Runes
+   * known" have no reliable singular an engine may invent. At one remaining the
+   * noun is therefore dropped rather than mismatched — the heading directly above
+   * already says which decision this is, so "Choose 1 more" is unambiguous, and
+   * "Choose 1 more cantrips" is simply wrong.
+   */
+  if (remaining === 1) return "Choose 1 more";
+  if (remaining > 1) return `Choose ${remaining} more ${noun}`;
+  if (remaining < 0) return `Remove ${-remaining} ${noun}`;
+  return `${selection.selected.length} of ${selection.required} ${noun} chosen`;
+}
+
+/**
+ * One spell obligation, as a searchable list grouped by spell level.
+ *
+ * Rows, not cards. A real repertoire is hundreds of spells, and a tile per spell
+ * turns choosing two cantrips into a scroll through a wall — so each spell is one
+ * compact line carrying only what distinguishes it from its neighbours, and the
+ * level headings are what make the list navigable rather than long.
+ *
+ * Granted and always-prepared spells appear in the same list, in their own level
+ * group, marked and inert. Hiding them would leave the user counting a repertoire
+ * that does not match their sheet; making them pressable would sell them
+ * something they already own.
+ */
+function SpellSelectionGroup({
+  selection,
+  onToggle,
+}: {
+  selection: RequiredSpellSelection;
+  onToggle(selectionId: string, spellId: string, required: number): void;
+}) {
+  const [search, setSearch] = useState("");
+  const searchId = `spell-search-${selection.selectionId}`;
+  const statusId = `spell-status-${selection.selectionId}`;
+  const showSearch = selection.options.length > SPELL_SEARCH_THRESHOLD;
+
+  /*
+   * Filtering is a pass over an already-planned projection. The planner resolved
+   * eligibility once for this render; typing must never send the rules engine
+   * round again, which is the difference between a responsive list and one that
+   * stutters on a phone at four hundred spells.
+   */
+  const needle = search.trim().toLowerCase();
+  const visible = needle
+    ? selection.options.filter(
+        option =>
+          option.label.toLowerCase().includes(needle) || (option.school ?? "").toLowerCase().includes(needle),
+      )
+    : selection.options;
+
+  const levels = [...new Set(visible.map(option => option.level))].sort((left, right) => left - right);
+
+  return (
+    <section className="m2-fieldset" aria-labelledby={`${selection.selectionId}-heading`}>
+      <h3 id={`${selection.selectionId}-heading`}>{selection.label}</h3>
+      <p className="m2-muted">
+        From {selection.sourceLabel}.{" "}
+        {selection.model === "prepared"
+          ? "These are the spells you have prepared."
+          : "These become spells you know."}
+      </p>
+      <p
+        className={selection.resolved ? "m2-muted" : "m2-inline-issue"}
+        role="status"
+        id={statusId}
+      >
+        {selection.resolved ? null : <TriangleAlert aria-hidden="true" />} {spellSelectionStatus(selection)}
+      </p>
+      {showSearch ? (
+        <div className="m2-field">
+          <label htmlFor={searchId}>
+            <span>Search {selection.label.toLowerCase()}</span>
+          </label>
+          <input
+            id={searchId}
+            type="search"
+            value={search}
+            placeholder="Name or school"
+            onChange={event => setSearch(event.target.value)}
+          />
+        </div>
+      ) : null}
+      {levels.length ? (
+        levels.map(level => (
+          <div key={level} className="m2-spell-group">
+            {/*
+             * A heading per level, but only when there is more than one level to
+             * move between. A single group needs no marker to navigate to — it
+             * would just repeat the section heading directly above it, which is
+             * noise on screen and a duplicated landmark in the accessibility tree.
+             */}
+            {levels.length > 1 ? <h4>{spellLevelLabel(level)}</h4> : null}
+            <ul className="m2-options">
+              {visible
+                .filter(option => option.level === level)
+                .map(option => {
+                  const meta = [option.school, option.ritual ? "ritual" : null].filter(Boolean).join(" · ");
+                  if (!option.selectable)
+                    return (
+                      <li key={option.id}>
+                        <div className="m2-option m2-option-granted">
+                          <span className="m2-option-mark" aria-hidden="true">
+                            <Check />
+                          </span>
+                          <span>
+                            <b>{option.label}</b>
+                            <small>
+                              {option.alwaysPrepared ? "Always prepared" : "Granted"}
+                              {meta ? ` · ${meta}` : ""}
+                            </small>
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  return (
+                    <li key={option.id}>
+                      <button
+                        type="button"
+                        className={option.selected ? "m2-option m2-option-selected" : "m2-option"}
+                        aria-pressed={option.selected}
+                        aria-describedby={statusId}
+                        onClick={() => onToggle(selection.selectionId, option.id, selection.required)}
+                      >
+                        <span className="m2-option-mark" aria-hidden="true">
+                          {option.selected ? <Check /> : "○"}
+                        </span>
+                        <span>
+                          <b>{option.label}</b>
+                          {meta ? <small>{meta}</small> : null}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+            </ul>
+          </div>
+        ))
+      ) : (
+        <p className="m2-muted">No spell here matches that search.</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Spells & resources: the decisions this build owes, and what powers them.
+ *
+ * The step used to be a read-only statement, because no content could express a
+ * spell obligation. Now the planner reports them, and this renders one picker per
+ * obligation above the resources they draw on. A caster who owes nothing still
+ * sees what they were granted, so the screen never reads as empty when the
+ * character genuinely has spells.
  */
 function SpellsResourcesStep({
   build,
@@ -2508,34 +2718,41 @@ function SpellsResourcesStep({
   onChange(patch: DraftPatch): void;
 }) {
   const byId = new Map(entries.map(entry => [entry.id, entry]));
-  const classEntry = build.classId ? byId.get(build.classId) : undefined;
-  const spellIds = (classEntry?.effects ?? [])
-    .filter(effect => effect.type === "addSpell")
-    .map(effect => (effect as { spellId: string }).spellId);
-  const spells = spellIds
-    .map(id => byId.get(id))
-    .filter((entry): entry is ContentEntry => entry !== undefined)
-    .map(entry => {
-      const level = (entry.mechanics as { level?: unknown }).level;
-      return { entry, level: typeof level === "number" ? level : null };
-    })
-    .sort((left, right) => (left.level ?? 0) - (right.level ?? 0) || left.entry.name.localeCompare(right.entry.name));
+  const selections = plan.spellSelections;
+  const toggle = toggleSpell(onChange);
   const resources = resourceIdsFor(build, entries)
     .map(id => byId.get(id))
     .filter((entry): entry is ContentEntry => entry !== undefined);
 
+  /*
+   * Spells the build holds outright and no selection presents. A granted spell
+   * inside a selection's own level band is already shown there, marked; listing
+   * it again here would be the same spell twice on one screen.
+   */
+  const presented = new Set(selections.flatMap(selection => selection.options.map(option => option.id)));
+  const granted = plan.spellAvailability.spells.filter(
+    spell => (spell.known || spell.alwaysPrepared) && !presented.has(spell.id),
+  );
+
   return (
     <div className="m2-step">
-      {spells.length ? (
+      {selections.map(selection => (
+        <SpellSelectionGroup key={selection.selectionId} selection={selection} onToggle={toggle} />
+      ))}
+      {granted.length ? (
         <section className="m2-fieldset">
-          <h3>Known spells</h3>
-          <p className="m2-muted">Granted by {classEntry?.name ?? "the class"}. Nothing here needs choosing at this level.</p>
+          <h3>Granted spells</h3>
+          <p className="m2-muted">These come with the build. Nothing here needs choosing.</p>
           <ul className="m2-plain-list">
-            {spells.map(({ entry, level }) => (
-              <li key={entry.id}>
-                <b>{entry.name}</b>
-                {level !== null ? <small className="m2-muted"> · {level === 0 ? "cantrip" : `level ${level}`}</small> : null}
-                {entry.summary ? <small className="m2-muted"> — {entry.summary}</small> : null}
+            {granted.map(spell => (
+              <li key={spell.id}>
+                <b>{spell.label}</b>
+                <small className="m2-muted">
+                  {" "}
+                  · {spellLevelLabel(spell.level).toLowerCase()}
+                  {spell.alwaysPrepared ? " · always prepared" : ""}
+                </small>
+                {spell.summary ? <small className="m2-muted"> — {spell.summary}</small> : null}
               </li>
             ))}
           </ul>
@@ -2554,7 +2771,7 @@ function SpellsResourcesStep({
           </ul>
         </section>
       ) : null}
-      {!spells.length && !resources.length ? (
+      {!selections.length && !granted.length && !resources.length ? (
         <p className="m2-muted">This class grants no spells or resources at the chosen level.</p>
       ) : null}
       <ChoiceGroups build={build} plan={plan} stepId="spells-resources" onChange={onChange} />

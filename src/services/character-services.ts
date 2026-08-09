@@ -742,6 +742,21 @@ function characterFromDraft(
     abilityScores: { ...plan.abilities.final },
     choiceSelections: { ...build.choiceSelections },
     equipmentSelections: { ...build.equipmentSelections },
+    /*
+     * The planner's surviving selections, not the draft's raw store.
+     *
+     * A spell the build can no longer justify — its list unreached, or its level
+     * beyond what the progression now allows — is reported during creation and
+     * must not be written into a durable record as though it were legal. This is
+     * the same discipline `abilityScores` follows two fields up: the commit
+     * writes what the plan says the character has, not what the draft happens to
+     * still be holding.
+     */
+    spellSelections: Object.fromEntries(
+      plan.spellSelections
+        .filter(selection => selection.selected.length > 0)
+        .map(selection => [selection.selectionId, [...selection.selected]]),
+    ),
     manualValues: { ...build.manualValues },
     manualActions: [...build.manualActions],
     acknowledgedIssueCodes: [...command.acknowledgedIssueCodes],

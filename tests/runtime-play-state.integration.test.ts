@@ -16,6 +16,7 @@ import { closeHarnesses, createHarness, expectOk, type Harness } from "@/tests/f
 import {
   RUNECALLER_CHOICES,
   RUNECALLER_IDS,
+  RUNECALLER_SPELL_SELECTIONS,
   SYNTHETIC_CHOICES,
   SYNTHETIC_EQUIPMENT_CHOICE,
   SYNTHETIC_IDS,
@@ -437,6 +438,17 @@ describe("resources and spell slots", () => {
           [SYNTHETIC_CHOICES.backgroundLanguage]: ["option:proficiency:language-trade-cant"],
         },
         equipmentSelections: { "equipment-choice:runecaller-kit": ["equipment-option:runecaller-warden-pack"] },
+        // Answered so the guided commit is valid; this test is about slots.
+        spellSelections: {
+          [RUNECALLER_SPELL_SELECTIONS.cantrips]: [
+            RUNECALLER_IDS.spells.siltWhisper,
+            RUNECALLER_IDS.spells.tallyMark,
+          ],
+          [RUNECALLER_SPELL_SELECTIONS.runesKnown]: [
+            RUNECALLER_IDS.spells.stoneReading,
+            RUNECALLER_IDS.spells.quietTheWake,
+          ],
+        },
       },
       "character:sereth",
       "draft:sereth",

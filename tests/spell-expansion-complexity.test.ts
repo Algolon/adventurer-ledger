@@ -52,6 +52,8 @@ const { SPELL_LIST_IDS, SPELL_V1_ENTRIES, spellPackV2StoredEntries } = await imp
   "@/tests/fixtures/spell-foundation-pack"
 );
 const { tidecallerDraft } = await import("@/tests/fixtures/spell-foundation-character");
+const { CASTER_IDS, CASTER_LIST_IDS, casterStoredEntries } = await import("@/tests/fixtures/caster-selection-pack");
+const { EMPTY_DRAFT_BUILD } = await import("@/src/domain/character-record");
 
 const ENTRIES = spellPackV2StoredEntries();
 
@@ -106,6 +108,74 @@ describe("one planning pass expands spell lists once", () => {
 
     // Four hundred spells cost exactly what four cost.
     expect({ ...counters }).toEqual(small);
+  });
+});
+
+/**
+ * Selection planning rides the expansion the pass already paid for.
+ *
+ * Owing a decision must not cost a second index or a second evaluation. The risk
+ * is specific and easy to introduce: a selection needs to know which spells are
+ * eligible, and the obvious way to answer that is to expand the lists again per
+ * selection — which is invisible on a fixture with two selections and four spells
+ * and is `selections × catalogue` on a real one.
+ */
+describe("owing spell selections costs no extra expansion", () => {
+  /** The caster pack's list, inflated so the contract has something to measure. */
+  function inflatedCaster(count: number): ContentEntry[] {
+    const entries = casterStoredEntries();
+    const template = entries.find(entry => entry.category === "spell");
+    if (!template) throw new Error("The caster fixture ships no spell to clone");
+    const clones = Array.from({ length: count }, (_unused, position) => ({
+      ...template,
+      id: `spell:cs-bulk-${position}`,
+      slug: `cs-bulk-${position}`,
+      name: `Bulk glyph ${position}`,
+      // Level 1 and on the Runescribe's list, so they land inside the declared
+      // band of a selection rather than being filtered out before it counts.
+      mechanics: { ...(template.mechanics as object), level: 1, spellListIds: [CASTER_LIST_IDS.glyphs] },
+    })) as ContentEntry[];
+    return [...entries, ...clones];
+  }
+
+  const casterDraft = () => ({
+    ...EMPTY_DRAFT_BUILD,
+    name: "Complexity caster",
+    level: 5,
+    classId: CASTER_IDS.runescribe,
+    speciesId: CASTER_IDS.species,
+    backgroundId: CASTER_IDS.background,
+    abilityScores: { strength: 8, dexterity: 13, constitution: 12, intelligence: 15, wisdom: 14, charisma: 10 },
+  });
+
+  it("has enough content for the contract to mean something", () => {
+    const plan = planBuild(casterDraft(), inflatedCaster(400), "guided");
+    const known = plan.spellSelections.find(selection => selection.model === "known" && selection.minSpellLevel > 0);
+    // The offered set really does grow with the catalogue.
+    expect(known?.options.length ?? 0).toBeGreaterThan(400);
+  });
+
+  it("still builds the membership index exactly once", () => {
+    planBuild(casterDraft(), inflatedCaster(400), "guided");
+    expect(counters.index).toBe(1);
+  });
+
+  it("still evaluates the activated effects exactly once", () => {
+    planBuild(casterDraft(), inflatedCaster(400), "guided");
+    expect(counters.evaluate).toBe(1);
+  });
+
+  it("does not scale either count with the catalogue or the number of selections", () => {
+    const small = casterStoredEntries();
+    planBuild(casterDraft(), small, "guided");
+    const baseline = { ...counters };
+
+    counters.index = 0;
+    counters.evaluate = 0;
+    const large = inflatedCaster(400);
+    planBuild(casterDraft(), large, "guided");
+
+    expect({ ...counters }).toEqual(baseline);
   });
 });
 

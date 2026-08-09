@@ -84,7 +84,11 @@ async function buildSereth(page: Page) {
   await continueStep(page);
   await page.getByRole("button", { name: /^Riverlore/ }).click();
   await continueStep(page);
-  await expect(page.getByText("Known spells")).toBeVisible();
+  // The step owes two real decisions, so it is answered rather than read.
+  await page.getByRole("button", { name: /^Silt Whisper/ }).click();
+  await page.getByRole("button", { name: /^Tally Mark/ }).click();
+  await page.getByRole("button", { name: /^Stone Reading/ }).click();
+  await page.getByRole("button", { name: /^Quiet the Wake/ }).click();
   await continueStep(page);
   await page.getByRole("button", { name: /^River kit/ }).click();
   await continueStep(page);
@@ -330,7 +334,12 @@ test.describe("editing a caster", () => {
     // The conditional Spells step is in the sequence for a caster's edit too.
     await page.getByRole("button", { name: "All steps" }).click();
     await page.getByRole("button", { name: /^Spells & resources/ }).click();
-    await expect(page.getByText("Known spells")).toBeVisible();
+    // Reopened with the creation-time answers still pressed, which is the whole
+    // claim: Edit reads the same source of truth creation wrote.
+    await expect(page.getByRole("button", { name: /^Silt Whisper/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: /^Stone Reading/ })).toHaveAttribute("aria-pressed", "true");
+    // Granted and always prepared, so it is stated rather than offered.
+    await expect(page.getByText("Always prepared")).toBeVisible();
 
     // Change one equipment choice.
     await page.getByRole("button", { name: "All steps" }).click();
