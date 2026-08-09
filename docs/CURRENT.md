@@ -88,9 +88,10 @@ These are **open**, not delivered. A pilot will meet them.
 - **Item state is read-only on the sheet** (`SHEET-GAP-ITEM-STATE`). Equip,
   unequip, attune, consume and charges have no runtime operation and no durable
   store.
-- **Spell preparation does not exist** (`SHEET-GAP-SPELL-PREPARATION`). Only a
-  grant's own `alwaysPrepared` is shown; nothing prepares or unprepares a spell,
-  and creation has no spell-selection step.
+- **Preparation cannot be changed during play**
+  (`SHEET-GAP-SPELL-PREPARATION-MANAGEMENT`). A character carries truthful
+  prepared state from the builder and the sheet shows it, but there is no runtime
+  operation for preparing or unpreparing, so re-preparing means Edit character.
 - **Play-sheet rapid-tap handling remains open.** Fast repeated taps on runtime
   actions are not yet debounced or coalesced.
 - **Physical Android install, offline and storage behaviour remain unverified.**
@@ -722,18 +723,42 @@ composes it over the derived bundle. Charges additionally need an item-owned
 resource, which the item schema already declares (`resourceIds`) and nothing
 reads. Character currency has no model at all and is part of the same change.
 
-### Spell preparation is a property of a grant (SHEET-GAP-SPELL-PREPARATION)
+### Preparation cannot be changed during play (SHEET-GAP-SPELL-PREPARATION-MANAGEMENT)
 
-The generic model can state exactly one preparation fact truthfully: an
-`addSpell` effect may mark a spell `alwaysPrepared`, and the sheet now shows
-that. There is no preparation mechanic behind it — nothing prepares or unprepares
-a spell, and creation has no spell *selection* step, so a character knows exactly
-what its content granted. `addSpellList` deliberately does not make a spell
-known.
+Preparation exists. The caster spell-selection slice
+([`CASTER_SPELL_SELECTION.md`](CASTER_SPELL_SELECTION.md)) added a declarative
+`prepared` selection model, and a committed character carries truthful prepared
+state that the sheet reads: `DerivedSpell` distinguishes `granted`,
+`alwaysPrepared`, `known` and `prepared`, and the Spells workspace shows the
+strongest of those on each row with the whole picture in the spell's drawer.
 
-The sheet therefore marks the always-prepared spells and does not imply the rest
-are unprepared. A real prepared/known distinction needs a durable per-character
-spell-state record and a preparation-capacity rule, neither of which exists.
+What is missing is narrower, and it is a Sheet gap rather than an engine one.
+Four things have to be told apart:
+
+1. **Build-time `prepared-from-list` selection.** Implemented. A pack declares a
+   `prepared` selection with a cumulative progression and the builder collects it.
+2. **Prepared state on a committed character.** Implemented, and projected.
+3. **Changing what is prepared during play.** *Absent.* There is no runtime
+   operation for preparation — `RuntimeOperation` has no member for it and
+   `CharacterRuntimeStateRecord` has no field for it — so the only way to change
+   a prepared spell is Edit character, which reopens the builder and rewrites the
+   durable `spellSelections`.
+4. **Learned collection feeding a prepared subset.** Deferred by the slice that
+   added the other three, and documented there: it needs a durable learned layer
+   distinct from both availability and preparation.
+
+Point 3 is the one that matters here, because preparation is exactly the kind of
+reversible day-to-day state the [Sheet-versus-Edit boundary](#the-management-boundary)
+says belongs on the sheet. A player re-preparing after a long rest currently goes
+back through the build. Closing it is a runtime change: a typed
+`spell-prepare` / `spell-unprepare` pair on `CharacterRuntimeService`, a durable
+per-character prepared set in runtime state, a capacity rule read from the same
+declaration the builder already reads, and a resolver that composes the runtime
+set over the committed selections. The sheet's IA has the row state to carry it.
+
+Nothing is faked in the meantime. The sheet never implies an unbadged spell is
+unprepared — under a `known` model no spell is prepared at all — and list
+membership still never makes a spell known or prepared.
 
 ### Senses and movement modes are not modelled (SHEET-GAP-SENSES-MOVEMENT)
 
@@ -759,7 +784,7 @@ Two naming schemes appear above, and the difference between them matters.
 keep their numbers; nothing renumbers them.
 
 The four gaps this pass recorded — `SHEET-GAP-ITEM-STATE`,
-`SHEET-GAP-SPELL-PREPARATION`, `SHEET-GAP-SENSES-MOVEMENT` and
+`SHEET-GAP-SPELL-PREPARATION-MANAGEMENT`, `SHEET-GAP-SENSES-MOVEMENT` and
 `SHEET-GAP-NOTES-COMPANIONS` — use a descriptive, Sheet-scoped namespace instead
 of the next free numbers. **`GAP-###` numbers are allocated across the wider
 Runefolio programme, not within this repository**, and several of them are

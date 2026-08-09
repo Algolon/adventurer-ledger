@@ -178,6 +178,20 @@ export interface CharacterRecord extends Audit {
   abilityScores: Readonly<Partial<Record<Ability, number>>>;
   choiceSelections: Readonly<Record<ID, readonly ID[]>>;
   equipmentSelections: Readonly<Record<ID, readonly ID[]>>;
+  /**
+   * Spell IDs the player chose, keyed by the selection that owns them.
+   *
+   * Its own field rather than a second meaning for `choiceSelections`, because
+   * every existing consumer of that map validates stored values against a
+   * `ChoiceDefinition`'s enumerated options — spell IDs kept there would be
+   * reported as no longer offered on every reopen. Keying by selection ID also
+   * keeps the model that governs each answer (known or prepared) travelling with
+   * it instead of being re-derived from the spell.
+   *
+   * Optional because it is additive and non-indexed: a record written before this
+   * field existed simply does not carry it, and reads as none.
+   */
+  spellSelections?: Readonly<Record<ID, readonly ID[]>>;
   /** Explicit user-entered values keyed by allow-listed target path. */
   manualValues: Readonly<Record<string, number>>;
   /** Manual-sheet action labels for a classless flexible character. */
@@ -419,6 +433,8 @@ export interface CharacterDraftBuild {
   abilityIncreases: Readonly<Partial<Record<Ability, number>>>;
   choiceSelections: Readonly<Record<ID, readonly ID[]>>;
   equipmentSelections: Readonly<Record<ID, readonly ID[]>>;
+  /** Spell IDs the player chose, keyed by the selection that owns them. */
+  spellSelections?: Readonly<Record<ID, readonly ID[]>>;
   manualValues: Readonly<Record<string, number>>;
   manualActions: readonly { readonly id: ID; readonly label: string; readonly expression?: string }[];
   acknowledgedIssueCodes: readonly string[];
@@ -434,6 +450,7 @@ export const EMPTY_DRAFT_BUILD: CharacterDraftBuild = {
   abilityIncreases: {},
   choiceSelections: {},
   equipmentSelections: {},
+  spellSelections: {},
   manualValues: {},
   manualActions: [],
   acknowledgedIssueCodes: [],

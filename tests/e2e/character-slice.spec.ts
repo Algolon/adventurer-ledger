@@ -139,7 +139,11 @@ async function buildSereth(page: Page, { name = "Sereth Marsh" }: { name?: strin
   await continueStep(page);
 
   // The Spells & resources step joins the sequence for a casting class.
-  await expect(page.getByText("Known spells")).toBeVisible();
+  // The step owes two real decisions, so it is answered rather than read.
+  await page.getByRole("button", { name: /^Silt Whisper/ }).click();
+  await page.getByRole("button", { name: /^Tally Mark/ }).click();
+  await page.getByRole("button", { name: /^Stone Reading/ }).click();
+  await page.getByRole("button", { name: /^Quiet the Wake/ }).click();
   await continueStep(page);
 
   await page.getByRole("button", { name: /^River kit/ }).click();

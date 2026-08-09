@@ -30,6 +30,11 @@ import { abilityModifier, proficiencyBonus } from "@/src/rules/engine";
 import { maximumHitPointsFor } from "@/src/rules/hit-points";
 import { spellIsRitual } from "@/src/services/spell-list-index";
 import {
+  answeredSelectionsFor,
+  characterSpellStates,
+  spellcastingDeclarationsIn,
+} from "@/src/services/spell-selection";
+import {
   hitDieForClass,
   masteryWeaponRelations,
   proficiencyCatalog,
@@ -177,14 +182,25 @@ export interface DerivedSpell {
    */
   ritual: boolean;
   /**
-   * True only when the grant that gave this spell marked it always prepared.
+   * How this character came to have the spell, and what state it is in.
    *
-   * This is the one preparation fact the generic model can state truthfully.
-   * There is no preparation mechanic behind it: nothing prepares or unprepares
-   * a spell, and list membership never sets this. A sheet may therefore mark
-   * the always-prepared spells and must not imply the rest are unprepared.
+   * Four independent facts, kept apart because collapsing them loses information
+   * the sheet needs: a granted spell is not a spent choice, an always-prepared
+   * spell is not one the player may drop, and a known spell is not necessarily a
+   * prepared one. A spell that is merely *available* is not here at all —
+   * reaching a list is permission, not possession.
+   *
+   * The sheet reads all four and claims no more than they say. `prepared: false`
+   * means only "not currently prepared", which under a `known` selection model is
+   * every spell the character has — so the Spells workspace marks what is true
+   * and never labels the remainder unprepared.
    */
+  granted: boolean;
   alwaysPrepared: boolean;
+  known: boolean;
+  prepared: boolean;
+  /** The selection the player chose it through, when they chose it. */
+  viaSelectionId?: ID;
 }
 
 /**
@@ -290,16 +306,12 @@ const actionDefinitionSchema = z
   })
   .passthrough();
 
-/** Boundary schema for a declarative spellcasting rule. Nothing is evaluated. */
-const spellcastingDeclarationSchema = z
-  .object({
-    classId: z.string().max(160),
-    ability: z.enum(["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"]),
-    attackProficient: z.boolean().default(false),
-    saveDcBase: z.number().int().min(0).max(30).optional(),
-    slotResourceIds: z.array(z.string().max(160)).default([]),
-  })
-  .passthrough();
+/*
+ * The spellcasting declaration is parsed through the shared schema in
+ * `spell-selection`, not a second copy here. Two readings of the same content
+ * would let a selection mean one thing while the builder is open and another
+ * once it is committed, which is precisely the drift the sheet exists to rule out.
+ */
 
 /** Loose boundary read of stored spell mechanics; absent fields stay absent. */
 const spellMechanicsDisplaySchema = z
@@ -944,12 +956,11 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
   // ---- spellcasting ----------------------------------------------------------
   let spellcasting: DerivedSpellcasting | undefined;
   const classIds = new Set(character.classLevels.map(item => item.classId));
-  const spellcastingDeclaration = entries
-    .filter(item => item.category === "rule" && (item.mechanics as { kind?: unknown }).kind === "spellcasting")
-    .map(item => spellcastingDeclarationSchema.safeParse((item.mechanics as { data?: unknown }).data))
-    .find(parsed => parsed.success && classIds.has(parsed.data.classId));
-  if (state && spellcastingDeclaration?.success) {
-    const declaration = spellcastingDeclaration.data;
+  const spellcastingDeclaration = spellcastingDeclarationsIn(entries).find(source =>
+    classIds.has(source.declaration.classId),
+  );
+  if (state && spellcastingDeclaration) {
+    const declaration = spellcastingDeclaration.declaration;
     const castingModifier = modifierOf(declaration.ability);
     const abilityLabel = capitalize(declaration.ability);
     const castingContributors = (base?: Contributor): Contributor[] => [
@@ -971,8 +982,27 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
               declaration.saveDcBase + castingModifier + bonus,
               castingContributors({ kind: "base", label: "Base", amount: declaration.saveDcBase }),
             );
+    /*
+     * What this character actually has, granted and chosen together.
+     *
+     * `ruleResult` supplies the grants; the committed record supplies the
+     * player's answers, and the declaration supplies the model each answer was
+     * given under. Merging them on spell ID is what keeps one canonical identity
+     * for a spell reached by more than one route — a Warden's granted spell that
+     * also sits on the Warden's list is one row carrying both facts, not two.
+     *
+     * Eligibility is deliberately not re-judged here. The commit already wrote
+     * only what the plan could justify, and a character whose content later
+     * changes keeps what they were legitimately given until they edit — the same
+     * "nothing is dropped" rule the edit hydration follows.
+     */
+    const spellStates = characterSpellStates(
+      answeredSelectionsFor(character.spellSelections, declaration),
+      { spells: state.ruleResult.spells, alwaysPrepared: state.ruleResult.alwaysPreparedSpells },
+    );
     const spells: DerivedSpell[] = [];
-    for (const spellId of state.ruleResult.spells) {
+    for (const spellState of spellStates) {
+      const spellId = spellState.spellId;
       const definition = byId.get(spellId);
       if (!definition) {
         missingDependencyIds.add(spellId);
@@ -1004,9 +1034,13 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ...(durationText ? { duration: durationText } : {}),
         concentration: meta.duration?.concentration ?? false,
         ritual: spellIsRitual(definition.mechanics),
-        // Read from the grant the engine actually applied, never from the fact
-        // that a reachable list happens to contain this spell.
-        alwaysPrepared: state.ruleResult.alwaysPreparedSpells.has(spellId),
+        // Every state fact comes from the merged grant-and-selection projection,
+        // never from the fact that a reachable list happens to contain this spell.
+        granted: spellState.granted,
+        alwaysPrepared: spellState.alwaysPrepared,
+        known: spellState.known,
+        prepared: spellState.prepared,
+        ...(spellState.viaSelectionId ? { viaSelectionId: spellState.viaSelectionId } : {}),
       });
     }
     spells.sort((left, right) => left.level - right.level || left.label.localeCompare(right.label));

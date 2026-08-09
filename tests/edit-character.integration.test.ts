@@ -12,6 +12,7 @@ import {
   RUNECALLER_CHOICES,
 
   RUNECALLER_IDS,
+  RUNECALLER_SPELL_SELECTIONS,
   SYNTHETIC_CHOICES,
   SYNTHETIC_EQUIPMENT_CHOICE,
   STANDARD_ARRAY,
@@ -71,6 +72,15 @@ const RUNECALLER_BUILD: Partial<CharacterDraftBuild> = {
     [SYNTHETIC_CHOICES.backgroundLanguage]: ["option:proficiency:language-trade-cant"],
   },
   equipmentSelections: { "equipment-choice:runecaller-kit": ["equipment-option:runecaller-warden-pack"] },
+  // The Runecaller owes two spell decisions, so a guided commit is only valid
+  // once they are answered.
+  spellSelections: {
+    [RUNECALLER_SPELL_SELECTIONS.cantrips]: [RUNECALLER_IDS.spells.siltWhisper, RUNECALLER_IDS.spells.tallyMark],
+    [RUNECALLER_SPELL_SELECTIONS.runesKnown]: [
+      RUNECALLER_IDS.spells.stoneReading,
+      RUNECALLER_IDS.spells.quietTheWake,
+    ],
+  },
 };
 
 async function commitCharacter(

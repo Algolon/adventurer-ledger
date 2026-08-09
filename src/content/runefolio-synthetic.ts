@@ -82,7 +82,28 @@ export const RUNECALLER_IDS = {
     wardOfReeds: "spell:ward-of-reeds",
     mendTheHour: "spell:mend-the-hour",
     riversGrasp: "spell:rivers-grasp",
+    // Reachable through the repertoire and granted by nothing, so the class has
+    // a genuine decision to make rather than a list it already owns.
+    siltWhisper: "spell:silt-whisper",
+    tallyMark: "spell:tally-mark",
+    lanternRune: "spell:lantern-rune",
+    stoneReading: "spell:stone-reading",
+    quietTheWake: "spell:quiet-the-wake",
+    borrowedFooting: "spell:borrowed-footing",
+    ledgerOfDepths: "spell:ledger-of-depths",
   },
+} as const;
+
+/**
+ * The spell decisions the Runecaller owes.
+ *
+ * Stable IDs, because a draft stores the player's answers under them. They live
+ * beside the choice IDs for the same reason those do: a storage identity is not
+ * a label and must not move when the wording does.
+ */
+export const RUNECALLER_SPELL_SELECTIONS = {
+  cantrips: "spell-selection:runecaller-cantrips",
+  runesKnown: "spell-selection:runecaller-runes-known",
 } as const;
 
 export const RUNECALLER_CHOICES = {
@@ -868,9 +889,14 @@ const equipmentEntries: ContentEntry[] = [
  *
  * Its rune slots ride the existing resource machinery — the class progression
  * writes a level-keyed maximum and the feature adds a long-rest resource — so
- * slot tracking needs no new runtime concepts. Spells are granted as fixed
- * `addSpell` effects on the class entry (no selection choice yet), which is
- * also what makes the builder's Spells & resources step applicable.
+ * slot tracking needs no new runtime concepts.
+ *
+ * Its spells arrive by both routes on purpose. Four runes are granted outright
+ * by `addSpell` effects on the class entry — one of them always prepared — and
+ * the rest of the repertoire is reachable but unowned, so the casting rule's
+ * declared selections have genuine alternatives. That pairing is what makes the
+ * Spells & resources step a decision rather than a list, and what demonstrates
+ * in the app's own content that a granted spell does not spend a chosen one.
  */
 const runecallerHitPointBaseEffect: Effect = {
   id: "effect:runecaller-hit-point-base",
@@ -1047,6 +1073,36 @@ const runecallerSpellcastingRule = entry({
       attackProficient: true,
       saveDcBase: 8,
       slotResourceIds: [RUNECALLER_IDS.slots],
+      /*
+       * What the player chooses, stated as data.
+       *
+       * The counts are cumulative totals at a level, not deltas, so a character
+       * created at level 2 owes what a level 2 Runecaller owes without the
+       * builder replaying level 1. Neither selection says
+       * `grantedConsumesAllowance`, so the runes the class grants outright sit
+       * beside these decisions rather than inside them — which is the whole
+       * point of the distinction, and is visible on the step as granted rows in
+       * the same list.
+       */
+      selections: [
+        {
+          id: RUNECALLER_SPELL_SELECTIONS.cantrips,
+          model: "known",
+          label: "Cantrips",
+          spellLevels: { min: 0, max: 0 },
+          progression: [{ level: 1, count: 2 }],
+        },
+        {
+          id: RUNECALLER_SPELL_SELECTIONS.runesKnown,
+          model: "known",
+          label: "Runes known",
+          spellLevels: { min: 1 },
+          progression: [
+            { level: 1, count: 2, maxSpellLevel: 1 },
+            { level: 2, count: 3, maxSpellLevel: 1 },
+          ],
+        },
+      ],
     },
   },
 });
@@ -1120,6 +1176,131 @@ const runecallerSpells: ContentEntry[] = [
       components: { verbal: true, somatic: true, consumed: false },
       castingTime: { amount: 1, unit: "action" },
       duration: { type: "timed", amount: 1, unit: "minute", concentration: true },
+      range: { type: "distance", distance: 30, unit: "feet" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  /*
+   * The repertoire the player actually chooses from.
+   *
+   * The four runes above are granted outright, and a class whose every reachable
+   * spell is already granted has no decision to make — which left the Spells &
+   * resources step with nothing to present but a list. These six are on the same
+   * repertoire and granted by nothing, so the two selections declared on the
+   * casting rule have real alternatives: two cantrips from three, and two runes
+   * from three.
+   */
+  spell({
+    id: RUNECALLER_IDS.spells.siltWhisper,
+    slug: "silt-whisper",
+    name: "Silt Whisper",
+    summary: "A word carried in the river silt reaches one ear you choose nearby.",
+    mechanics: {
+      level: 0,
+      school: "transmutation",
+      components: { verbal: true, somatic: false, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "instantaneous", concentration: false },
+      range: { type: "distance", distance: 30, unit: "feet" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.tallyMark,
+    slug: "tally-mark",
+    name: "Tally Mark",
+    summary: "A counting rune settles on a surface and keeps its number until you clear it.",
+    mechanics: {
+      level: 0,
+      school: "divination",
+      components: { verbal: false, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "until-dispelled", concentration: false },
+      range: { type: "touch" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+      ritual: true,
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.lanternRune,
+    slug: "lantern-rune",
+    name: "Lantern Rune",
+    summary: "A drawn rune holds a steady light for as long as the ink lasts.",
+    mechanics: {
+      level: 0,
+      school: "evocation",
+      components: { verbal: true, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "timed", amount: 1, unit: "hour", concentration: false },
+      range: { type: "touch" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.stoneReading,
+    slug: "stone-reading",
+    name: "Stone Reading",
+    summary: "The last thing to cross a stretch of stone leaves its shape for you to read.",
+    mechanics: {
+      level: 1,
+      school: "divination",
+      components: { verbal: true, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "minute" },
+      duration: { type: "instantaneous", concentration: false },
+      range: { type: "touch" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+      ritual: true,
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.quietTheWake,
+    slug: "quiet-the-wake",
+    name: "Quiet the Wake",
+    summary: "The water closes behind your party without a sound or a trace.",
+    mechanics: {
+      level: 1,
+      school: "illusion",
+      components: { verbal: false, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "action" },
+      duration: { type: "timed", amount: 10, unit: "minute", concentration: true },
+      range: { type: "self" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.ledgerOfDepths,
+    slug: "ledger-of-depths",
+    name: "Ledger of Depths",
+    summary: "The water gives up what it is carrying, one line at a time.",
+    mechanics: {
+      level: 1,
+      school: "divination",
+      components: { verbal: true, somatic: false, consumed: false },
+      castingTime: { amount: 10, unit: "minute" },
+      duration: { type: "instantaneous", concentration: false },
+      range: { type: "self" },
+      scaling: [],
+      spellListIds: [RUNECALLER_IDS.spellList],
+      ritual: true,
+    },
+  }),
+  spell({
+    id: RUNECALLER_IDS.spells.borrowedFooting,
+    slug: "borrowed-footing",
+    name: "Borrowed Footing",
+    summary: "For a moment the current holds one creature up as though it were ground.",
+    mechanics: {
+      level: 1,
+      school: "conjuration",
+      components: { verbal: true, somatic: true, consumed: false },
+      castingTime: { amount: 1, unit: "reaction", trigger: "A creature you can see begins to fall" },
+      duration: { type: "instantaneous", concentration: false },
       range: { type: "distance", distance: 30, unit: "feet" },
       scaling: [],
       spellListIds: [RUNECALLER_IDS.spellList],

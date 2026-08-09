@@ -36,9 +36,15 @@ mutable inventory. A control on the sheet would therefore either write nothing o
 create a second, private store of item state that no other surface reads. The
 Inventory information architecture is built for those controls; the missing
 capability is registered as `SHEET-GAP-ITEM-STATE` in
-[`CURRENT.md`](../CURRENT.md) rather than faked. The same applies to
-preparation: `alwaysPrepared` is a property of a grant and is shown as one, and
-nothing prepares or unprepares a spell (`SHEET-GAP-SPELL-PREPARATION`).
+[`CURRENT.md`](../CURRENT.md) rather than faked.
+
+**Spell preparation is the same shape of omission, one step further along.** A
+character now carries real prepared state — the caster spell-selection slice
+added a declarative `prepared` selection model, and the sheet reads and shows it.
+What the sheet cannot do is *change* it during play: there is no runtime
+operation for preparing or unpreparing, so re-preparing after a long rest goes
+through Edit character. By the boundary above that is the wrong home for it, and
+the gap is registered as `SHEET-GAP-SPELL-PREPARATION-MANAGEMENT`.
 
 The boundary is stated as data, not only as prose, in
 [`src/ui/sheet-scope.ts`](../../src/ui/sheet-scope.ts):
@@ -190,9 +196,28 @@ Two rules keep that readable at thirty spells across six levels:
   spell's name. Below the threshold a filter would be a control with nothing to
   do.
 
-Ritual, concentration and always-prepared are markers on the row when the content
-declares them. Always prepared is read from the grant that gave the spell; being
-on a reachable list is never a way to acquire it.
+Ritual and concentration are markers on the row when the content declares them.
+
+**State is one badge, not four.** The projection distinguishes `granted`,
+`alwaysPrepared`, `known` and `prepared`; printing all four would be four badges
+wide on a phone for a distinction the player is usually not making. The row shows
+the strongest single fact and the spell's drawer shows the whole picture — how
+the character came to have it, and what state it is in.
+
+The rules are in [`sheet-scope.ts`](../../src/ui/sheet-scope.ts) and read nothing
+but the projection:
+
+- **Always prepared** absorbs the rest, because it implies both granted and
+  prepared.
+- **Prepared** appears only where the content declares a `prepared` selection
+  model, which is exactly where the distinction is real.
+- **Granted** is suppressed unless this character also *chose* spells. A class
+  that grants its whole repertoire would otherwise carry the same badge on every
+  row, which distinguishes nothing.
+
+An unbadged row is never a claim that a spell is unprepared: under a `known`
+model no spell is prepared at all. And being on a reachable list remains no way
+to acquire any of these — reaching a list is permission, not possession.
 
 ### The Character workspace
 

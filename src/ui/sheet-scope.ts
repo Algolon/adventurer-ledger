@@ -25,6 +25,7 @@
  * this is the UI's copy of the same boundary, so what the screen says and what
  * the services do cannot drift apart unnoticed.
  */
+import type { DerivedSpell } from "@/src/services/derived-resolver";
 import type { RuntimeOperation } from "@/src/services/runtime-service";
 
 export type SheetManagedConcept =
@@ -111,3 +112,31 @@ export function listPhrase(items: readonly string[]): string {
  */
 export const BUILD_BOUNDARY_SENTENCE =
   "Edit character changes the build itself. What you spend and recover during play stays on this sheet.";
+
+/**
+ * The one state fact worth putting on a spell row.
+ *
+ * The caster spell-selection slice projects four — granted, always prepared,
+ * known, prepared — and a row that printed all of them would be four badges wide
+ * on a phone for a distinction the player usually is not making. So the row
+ * states the strongest one and the drawer states all of them.
+ *
+ * `alwaysPrepared` implies both `granted` and `prepared`, so it absorbs them.
+ * Below that, "Prepared" only ever appears when the content declares a
+ * prepared-model selection, which is exactly when the distinction is real.
+ *
+ * "Granted" is suppressed unless this character also chose spells. A class that
+ * grants its whole repertoire would otherwise badge every row identically, which
+ * distinguishes nothing; the rule is the presence of a player selection and
+ * nothing else, so no class, list or spell is named by it.
+ *
+ * Nothing here implies the absence of a badge means "unprepared". Under a known
+ * model no spell is prepared at all, and saying so on every row would be a claim
+ * the projection does not make.
+ */
+export function spellStateBadge(spell: DerivedSpell, distinguishGranted: boolean): string | null {
+  if (spell.alwaysPrepared) return "Always prepared";
+  if (spell.prepared) return "Prepared";
+  if (spell.granted && distinguishGranted) return "Granted";
+  return null;
+}

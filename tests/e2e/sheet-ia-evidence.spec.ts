@@ -108,6 +108,10 @@ async function buildCaster(page: Page, name = "Sereth Marsh") {
   await next(page);
   await page.getByRole("button", { name: /^Riverlore/ }).click();
   await next(page);
+  // Spells & resources owes two cantrips and two runes since the caster
+  // spell-selection slice landed, so the step is answered rather than skipped.
+  for (const spell of ["Silt Whisper", "Tally Mark", "Stone Reading", "Quiet the Wake"])
+    await page.getByRole("button", { name: new RegExp(`^${spell}`) }).click();
   await next(page);
   await page.getByRole("button", { name: /^River kit/ }).click();
   await next(page);

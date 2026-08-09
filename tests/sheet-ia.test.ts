@@ -15,7 +15,15 @@ import {
   BUILD_MANAGED_DECISIONS,
   SHEET_MANAGED_OPERATIONS,
   listPhrase,
+  spellStateBadge,
 } from "@/src/ui/sheet-scope";
+import {
+  CASTER_IDS,
+  CASTER_RULESET_ID,
+  CASTER_SELECTION_IDS,
+  CASTER_SPELL_IDS,
+  casterStoredEntries,
+} from "@/tests/fixtures/caster-selection-pack";
 import type { CharacterRecord } from "@/src/domain/character-record";
 
 /**
@@ -136,6 +144,157 @@ describe("Spell projection", () => {
     expect(always).toEqual(["Emberline"]);
     // And being on the reachable list is not a way to acquire the flag.
     expect(spells.filter(spell => !spell.alwaysPrepared).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The projection the two merged branches produce together.
+ *
+ * Neither branch could test this in isolation. The caster spell-selection slice
+ * owns what a player may choose and proves it at the planner; the Sheet IA pass
+ * owns what the workspace renders and proved it against a grant-only caster. The
+ * fact that only exists after the merge is the *committed* projection where both
+ * routes meet: a spell that was granted and separately chosen has to arrive as
+ * one row carrying both facts, and a spell that is merely reachable has to
+ * arrive as nothing at all.
+ *
+ * The Warden fixture is built for exactly this shape — one outright grant that
+ * also sits on its own list, one always-prepared grant, one prepared-model
+ * allowance, and a list neither class reaches.
+ */
+describe("the merged spell projection", () => {
+  const entries = casterStoredEntries();
+
+  const warden = (spellSelections: Record<string, readonly string[]>, level = 1): CharacterRecord => ({
+    ...brammel(level),
+    id: "character:warden",
+    name: "Vigil Warden",
+    level,
+    classLevels: [{ classId: CASTER_IDS.warden, level }],
+    rulesetProfileId: CASTER_RULESET_ID,
+    speciesId: CASTER_IDS.species,
+    backgroundId: CASTER_IDS.background,
+    abilityScores: { strength: 10, dexterity: 14, constitution: 14, intelligence: 12, wisdom: 15, charisma: 8 },
+    choiceSelections: {},
+    equipmentSelections: {},
+    spellSelections,
+  });
+
+  const project = (character: CharacterRecord) =>
+    resolveDerivedCharacter({
+      character,
+      runtime: { ...brammelRuntime(1), characterId: character.id, resourceUses: {}, resourceMaximaAtLastSync: {} },
+      entries,
+    });
+
+  const spellsOf = (character: CharacterRecord) => project(character).spellcasting?.spells ?? [];
+  const find = (character: CharacterRecord, id: string) => spellsOf(character).find(spell => spell.id === id);
+
+  it("keeps a granted spell distinct, and an always-prepared one distinct again", () => {
+    const sheet = warden({});
+    const granted = find(sheet, CASTER_SPELL_IDS.holdTheLine);
+    expect(granted, "the outright grant is missing").toBeDefined();
+    expect(granted).toMatchObject({ granted: true, known: true, prepared: false, alwaysPrepared: false });
+    expect(granted?.viaSelectionId, "a grant is not a spent choice").toBeUndefined();
+
+    const always = find(sheet, CASTER_SPELL_IDS.wardensEye);
+    expect(always).toMatchObject({ granted: true, known: true, prepared: true, alwaysPrepared: true });
+    expect(always?.viaSelectionId).toBeUndefined();
+  });
+
+  it("keeps a selected prepared spell prepared", () => {
+    const sheet = warden({ [CASTER_SELECTION_IDS.wardenPrepared]: [CASTER_SPELL_IDS.whisperOfSalt] });
+    const chosen = find(sheet, CASTER_SPELL_IDS.whisperOfSalt);
+    expect(chosen, "the chosen spell did not reach the sheet").toBeDefined();
+    expect(chosen).toMatchObject({ prepared: true, granted: false, alwaysPrepared: false });
+    expect(chosen?.viaSelectionId).toBe(CASTER_SELECTION_IDS.wardenPrepared);
+    // A prepared-model choice is not a claim that the spell is also "known".
+    expect(chosen?.known).toBe(false);
+  });
+
+  it("keeps a selected known spell known", () => {
+    const scribe: CharacterRecord = {
+      ...warden({}),
+      id: "character:scribe",
+      classLevels: [{ classId: CASTER_IDS.runescribe, level: 1 }],
+      spellSelections: {
+        [CASTER_SELECTION_IDS.runescribeCantrips]: [CASTER_SPELL_IDS.emberSpark],
+        [CASTER_SELECTION_IDS.runescribeKnown]: [CASTER_SPELL_IDS.bindingScript],
+      },
+    };
+    const cantrip = find(scribe, CASTER_SPELL_IDS.emberSpark);
+    const spell = find(scribe, CASTER_SPELL_IDS.bindingScript);
+    expect(cantrip).toMatchObject({ known: true, prepared: false, granted: false });
+    expect(spell).toMatchObject({ known: true, prepared: false, granted: false });
+    expect(spell?.viaSelectionId).toBe(CASTER_SELECTION_IDS.runescribeKnown);
+  });
+
+  /**
+   * The identity property the merge could most easily have broken: `hold-the-line`
+   * is granted by the Warden *and* sits on the Warden's own list, so it can be
+   * reached twice. It must still be one row carrying both facts.
+   */
+  it("produces one row for a spell reached by more than one route", () => {
+    const sheet = warden({ [CASTER_SELECTION_IDS.wardenPrepared]: [CASTER_SPELL_IDS.holdTheLine] });
+    const spells = spellsOf(sheet);
+    const matches = spells.filter(spell => spell.id === CASTER_SPELL_IDS.holdTheLine);
+    expect(matches, "a spell reachable twice produced two rows").toHaveLength(1);
+    // And it carries both truths rather than the last one written.
+    expect(matches[0]).toMatchObject({ granted: true, known: true, prepared: true });
+    expect(matches[0]?.viaSelectionId).toBe(CASTER_SELECTION_IDS.wardenPrepared);
+
+    // No spell identity is duplicated anywhere in the projection.
+    const ids = spells.map(spell => spell.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("still refuses to turn mere availability into possession", () => {
+    const sheet = warden({});
+    const ids = spellsOf(sheet).map(spell => spell.id);
+    // On the Warden's own list, neither granted nor chosen.
+    expect(ids, "list membership made a spell known").not.toContain(CASTER_SPELL_IDS.unbrokenVigil);
+    // On a list this character's classes never reach.
+    expect(ids).not.toContain(CASTER_SPELL_IDS.sealedVerse);
+    // Exactly the two grants, and nothing else.
+    expect(ids.sort()).toEqual([CASTER_SPELL_IDS.holdTheLine, CASTER_SPELL_IDS.wardensEye].sort());
+  });
+
+  /**
+   * What the Spells workspace consumes. The badge is the sheet's one-line
+   * summary of the state, so it is asserted against the projection rather than
+   * left to a screenshot.
+   */
+  it("gives the Spells workspace a truthful single-state badge for each row", () => {
+    const sheet = warden({ [CASTER_SELECTION_IDS.wardenPrepared]: [CASTER_SPELL_IDS.whisperOfSalt] });
+    const spells = spellsOf(sheet);
+    const distinguishGranted = spells.some(spell => spell.viaSelectionId !== undefined);
+    expect(distinguishGranted, "this character both chose and was granted spells").toBe(true);
+
+    const badgeFor = (id: string) => {
+      const spell = spells.find(item => item.id === id);
+      expect(spell, `${id} is not on the sheet`).toBeDefined();
+      return spellStateBadge(spell!, distinguishGranted);
+    };
+    expect(badgeFor(CASTER_SPELL_IDS.wardensEye)).toBe("Always prepared");
+    expect(badgeFor(CASTER_SPELL_IDS.whisperOfSalt)).toBe("Prepared");
+    expect(badgeFor(CASTER_SPELL_IDS.holdTheLine)).toBe("Granted");
+  });
+
+  /**
+   * A class that grants its whole repertoire and offers no choice: "granted" is
+   * then true of every row and distinguishes nothing, so the sheet says nothing.
+   */
+  it("suppresses the granted marker when it would be on every row", () => {
+    const sheet = warden({});
+    const spells = spellsOf(sheet);
+    const distinguishGranted = spells.some(spell => spell.viaSelectionId !== undefined);
+    expect(distinguishGranted).toBe(false);
+    expect(spellStateBadge(spells.find(item => item.id === CASTER_SPELL_IDS.holdTheLine)!, distinguishGranted)).toBeNull();
+    // The always-prepared one still says what it is, because that is not a
+    // property every row shares.
+    expect(spellStateBadge(spells.find(item => item.id === CASTER_SPELL_IDS.wardensEye)!, distinguishGranted)).toBe(
+      "Always prepared",
+    );
   });
 });
 

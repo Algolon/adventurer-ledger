@@ -15,12 +15,24 @@
  */
 import type { ContentEntry, ID } from "@/src/domain/model";
 
-/** The display facts a reachable spell carries. Read once, at index time. */
+/**
+ * The display facts a reachable spell carries. Read once, at index time.
+ *
+ * `school` and `summary` are here rather than looked up per row because a picker
+ * offering hundreds of spells would otherwise resolve the same entry again for
+ * every render. The index already visits each spell entry exactly once, so
+ * carrying two more fields costs nothing and keeps "read once" a property of the
+ * index rather than a discipline every caller has to remember.
+ */
 export interface SpellRecord {
   id: ID;
   label: string;
   level: number;
   ritual: boolean;
+  /** Declared school, when the record carries a usable one. */
+  school?: string;
+  /** The entry's own short summary. Never full rules text. */
+  summary?: string;
 }
 
 export interface SpellListIndex {
@@ -50,6 +62,12 @@ export function spellIsRitual(mechanics: unknown): boolean {
 function spellLevel(mechanics: unknown): number | undefined {
   const level = (mechanics as { level?: unknown } | undefined)?.level;
   return typeof level === "number" && Number.isInteger(level) && level >= 0 ? level : undefined;
+}
+
+/** The school a spell declares, when it declares a usable one. */
+function spellSchool(mechanics: unknown): string | undefined {
+  const school = (mechanics as { school?: unknown } | undefined)?.school;
+  return typeof school === "string" && school.length > 0 ? school : undefined;
 }
 
 /** List IDs a spell claims membership of. */
@@ -98,6 +116,8 @@ export function buildSpellListIndex(entries: readonly ContentEntry[]): SpellList
           label: entry.name,
           level,
           ritual: spellIsRitual(entry.mechanics),
+          ...(spellSchool(entry.mechanics) ? { school: spellSchool(entry.mechanics) as string } : {}),
+          ...(entry.summary ? { summary: entry.summary } : {}),
         });
       for (const listId of declaredListIds(entry.mechanics)) relate(listId, entry.id);
       continue;

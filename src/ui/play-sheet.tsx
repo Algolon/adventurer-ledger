@@ -67,7 +67,7 @@ import {
 } from "lucide-react";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import { Breakdown, Dialog, DerivedNumber, formatDerived, signed } from "@/src/ui/primitives";
-import { BUILD_BOUNDARY_SENTENCE } from "@/src/ui/sheet-scope";
+import { BUILD_BOUNDARY_SENTENCE, spellStateBadge } from "@/src/ui/sheet-scope";
 import type {
   DerivedAction,
   DerivedCharacterSheet,
@@ -943,6 +943,12 @@ function SpellsPanel({
   const needle = filter.trim().toLowerCase();
   const visible = needle ? all.filter(spell => spell.label.toLowerCase().includes(needle)) : all;
   const levels = [...new Set(visible.map(spell => spell.level))].sort((left, right) => left - right);
+  /*
+   * Whether "granted" is a distinction on this sheet at all. It is only one when
+   * the player also chose something; a class that grants its whole repertoire
+   * would otherwise carry the same badge on every row.
+   */
+  const distinguishGranted = all.some(spell => spell.viaSelectionId !== undefined);
 
   if (!casting) return null;
 
@@ -1011,7 +1017,7 @@ function SpellsPanel({
                 const badges = [
                   spell.concentration ? "Concentration" : null,
                   spell.ritual ? "Ritual" : null,
-                  spell.alwaysPrepared ? "Always prepared" : null,
+                  spellStateBadge(spell, distinguishGranted),
                 ].filter(Boolean) as string[];
                 const spoken = [spell.castingTime, spell.range, ...badges.map(badge => badge.toLowerCase())].filter(
                   Boolean,
@@ -1460,7 +1466,22 @@ function SheetDrawer({
             </IdentityFact>
           ) : null}
           {spell.ritual ? <IdentityFact label="Ritual">Can be cast as a ritual</IdentityFact> : null}
-          {spell.alwaysPrepared ? <IdentityFact label="Prepared">Always prepared</IdentityFact> : null}
+          {/*
+           * The whole state, where there is room for it. The row shows the
+           * strongest single fact; this says how the character came to have the
+           * spell and what state it is in, in the projection's own terms and
+           * without implying anything it does not say.
+           */}
+          <IdentityFact label="How you have it">{spell.granted ? "Granted by your build" : "Chosen by you"}</IdentityFact>
+          <IdentityFact label="State">
+            {spell.alwaysPrepared
+              ? "Always prepared"
+              : spell.prepared
+                ? "Prepared"
+                : spell.known
+                  ? "Known"
+                  : "Available"}
+          </IdentityFact>
         </dl>
         {spell.summary ? <p>{spell.summary}</p> : null}
       </Dialog>
