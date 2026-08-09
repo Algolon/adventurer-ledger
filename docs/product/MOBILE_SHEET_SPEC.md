@@ -25,8 +25,24 @@ The sheet is **Play mode**. It may directly change only transient session state:
 - conditions and exhaustion;
 - inspiration;
 - spell slots;
-- limited-use resources;
-- item quantities, where the runtime service supports them.
+- limited-use resources.
+
+**Item state is not in that list, and the omission is deliberate.** Equipping,
+unequipping, attuning, consuming a charge and changing a quantity are all things
+a player does during play and should be able to do here — but
+`CharacterRuntimeService` has no operation for any of them, and the durable
+record stores equipment as the bundle choices that produced it rather than as a
+mutable inventory. A control on the sheet would therefore either write nothing or
+create a second, private store of item state that no other surface reads. The
+Inventory information architecture is built for those controls; the missing
+capability is registered as GAP-006 in [`CURRENT.md`](../CURRENT.md) rather than
+faked. The same applies to preparation: `alwaysPrepared` is a property of a
+grant and is shown as one, and nothing prepares or unprepares a spell (GAP-007).
+
+The boundary is stated as data, not only as prose, in
+[`src/ui/sheet-scope.ts`](../../src/ui/sheet-scope.ts):
+`SHEET_MANAGED_OPERATIONS` is keyed by `RuntimeOperation["kind"]`, so a new
+runtime operation does not compile until somebody has decided where it belongs.
 
 Permanent character data changes through exactly one **Edit character** action,
 which opens the builder. The sheet carries no Override control, no Copy
@@ -81,47 +97,132 @@ unlabelled.
 
 ### Glance header
 
-Always visible without scrolling: name; class, subclass and level; hit points
-and temporary hit points; armour class; initiative; speed; proficiency bonus;
-conditions and exhaustion; inspiration.
+Always visible without scrolling: name and nickname; class, subclass and level;
+species; hit points and temporary hit points; armour class; initiative; speed;
+proficiency bonus; conditions and exhaustion; inspiration; and death saves when
+they apply.
 
 ```text
 ┌──────────────────────────────────┐
-│ Brammel Voss              [Edit] │
-│ Vanguard 1 · Riverborn           │
-│ ♡ HIT POINTS   7 / 10            │
-│ [AC 18][INIT +2][SPEED 30][+2]   │
+│ Brammel Voss “Boss”         [✎]  │
+│ Vanguard 1 (Stonevigil) · River… │
+│ [♡HP 7/10][AC 18][INIT +2][SPD  │
+│  30][PROF +2]                    │
 │ (✦ Inspiration)(Winded)(＋Cond.) │
-│ Inspiration gained.       [Undo]  │
 ├──────────────────────────────────┤
 │ Overview Actions Inventory Char.  │
 └──────────────────────────────────┘
 ```
 
-Hit points take a full-width tile and the largest numeral on the sheet. The
-other four values sit in one row of equal tiles. Transient state is a chip row
-below them, so a condition is read in the same glance as the hit points it
-affects.
+All five vitals are one row. Hit points keep the widest column, because they are
+the number that changes most and the control that is pressed most; the other four
+are equal. At 320 px that is a 78 px hit-point tile and four 49 px tiles, every
+one of them still a 44 px target.
+
+Three things were removed from this block rather than restyled, and they are
+worth naming because each was costing a phone screen:
+
+- the second row of vitals, replaced by the single row above;
+- the receipt line's reserved height. It is still a live region and still in the
+  document — one that is removed and re-added may not announce — but an empty one
+  now occupies no height and no gap;
+- the word beside the Edit pencil, which said nothing the icon and its accessible
+  name did not.
+
+At 360 × 780 the block went from **265 px to 164 px**, and from 283 px to 164 px
+for a level 12 character. `tests/e2e/sheet-ia-evidence.spec.ts` holds the ceiling.
+
+### Density model
+
+A section is **a heading over one bordered group**, not a card carrying its own
+heading. The heading sits on the page canvas, the border wraps only the rows, and
+the rows own their spacing. The previous model paid for a boundary, a heading row
+and padding above and below it — around 60 px of chrome — for each of the five
+groups a section routinely has.
+
+Rows lead with a name and the number that name is for. An attack states what it
+hits on beside its label rather than only inside its drawer, because that is the
+question an attack row exists to answer.
 
 ### Primary sections
 
-The section count stays small. There is no long section menu.
+The section count stays small. There is no long section menu, and no section is
+behind a swipe: the strip is a fixed grid of exactly as many equal columns as
+there are sections.
 
-1. **Overview** — abilities, saving throws, skills, and (when content models
-   them) senses and defences.
+1. **Overview** — abilities, saving throws and skills, each group stating how
+   many of it the character is proficient in. Senses and movement modes join it
+   when the generic model represents them; today it represents one Speed, which
+   is already in the glance (GAP-008).
 2. **Actions** — attacks, actions, bonus actions, reactions, and limited-use
-   resources.
+   resources. Every group is present only if it has something in it.
 3. **Spells** — present only when installed content declares spellcasting for one
    of the character's classes. When absent, the strip is four sections wide; no
    empty slot is left.
-4. **Inventory** — equipped gear first, then carried, and (when stored) currency
-   and attunement.
-5. **Character** — identity, features, traits, proficiencies, restore points,
-   and the Edit character and Level up actions. Notes and creatures join this
-   section when durable fields exist for them.
+4. **Inventory** — equipped gear first, then carried. A row carries the facts
+   that change how an item is used — armour contribution, attunement, rarity,
+   quantity — and its description is one tap away in the item's own drawer rather
+   than three lines deep on the row.
+5. **Character** — progressive disclosure, described below.
 
-The strip is a tab list: arrow keys, Home and End move between sections, and
-each panel is labelled by its tab.
+The strip is a tab list: arrow keys, Home and End move between sections, and each
+panel is labelled by its tab. Changing section is a page change: if the new
+panel's first row would sit behind the app bar and the sticky strip, the page
+scrolls up by exactly the amount that puts it below them, instantly and in a
+layout effect. Somebody already at the top of a section is not moved, because for
+them nothing is wrong.
+
+### Spells at scale
+
+A caster's repertoire is the part of a sheet that grows without limit. The
+workspace is: casting ability, spell attack and save DC as three compact facts;
+then the slot pools, one row each with a stepper; then the known spells grouped
+by level.
+
+Two rules keep that readable at thirty spells across six levels:
+
+- **A shared recharge is said once.** When every resource in a group recharges
+  the same way — which is exactly what a set of spell slots is — the cadence sits
+  above the group instead of on all five rows.
+- **A filter appears above a size, and on nothing else.** The rule is the spell
+  count and nothing more: no public behaviour reads a class, a school or a
+  spell's name. Below the threshold a filter would be a control with nothing to
+  do.
+
+Ritual, concentration and always-prepared are markers on the row when the content
+declares them. Always prepared is read from the grant that gave the spell; being
+on a reachable list is never a way to acquire it.
+
+### The Character workspace
+
+Everything durable about the build lives here, grouped by the thing that owns it
+and **closed until asked for**. A level 12 character has fifteen features, and a
+flat list of them is what a player has to scroll past to reach Level up.
+
+Groups, each rendered only when it has content:
+
+| Group | Contains | Collapsed summary |
+| --- | --- | --- |
+| Class & subclass | Class, subclass, level, hit dice, class features | `Bastionward 12 · Shieldwall · 15 entries` |
+| Species | The origin and its traits | The species name |
+| Background | The background and the feat it declares | The background name |
+| Feats | Feats no background declared | A count |
+| Features & traits | Anything granted that fits no clearer owner | A count |
+| Proficiencies & training | Armour, weapons, tools and languages | A count |
+
+A feat belongs to Background only when the background entry's own `featId` names
+it. Every other active feat — a class boon, a level selection — is its own thing
+and says so; filing them all under Background put class-owned choices under an
+origin that did not grant them.
+
+Each group header is a heading *and* a button, so it is both a landmark to
+navigate by and a control to operate, and `aria-controls` names its panel only
+while that panel exists. One group is open at a time. Below the groups sit
+**Manage** — Edit character and Level up, with the one sentence that states the
+boundary — and Restore points when the character has any.
+
+At 360 px a closed Character workspace is **794 px of document for a level 12
+character, down from 2314 px**.
 
 ## High-frequency interactions
 

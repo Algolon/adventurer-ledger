@@ -57,6 +57,17 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * The brand sits in the middle of the bar, as one unit.
+ *
+ * It used to be pinned to the leading edge by `margin-right: auto` on the
+ * brand, which was the right answer while the bar also carried a trailing status
+ * mark. With that gone the bar has exactly one child, so centring it is genuine
+ * centring of the composite mark-plus-wordmark box in the bar's content box —
+ * not a mark floated in whatever space two other things left over, and with no
+ * phantom trailing spacer holding it there. The padding is symmetric apart from
+ * the safe-area insets, which are themselves symmetric in portrait.
+ */
 .m2-appbar {
   position: sticky;
   top: 0;
@@ -65,6 +76,7 @@
   height: var(--appbar-height);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   padding: 8px 12px;
   padding-top: calc(8px + env(safe-area-inset-top, 0px));
@@ -80,33 +92,35 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  margin-right: auto;
 }
 
 /*
- * Branding is stated once, at the size of a label rather than a masthead. On
- * the sheet the character's name is the title of the screen; a 19 px wordmark
- * above a 26 px character name read as two competing headings on a 360 px
- * phone, and cost a line of vertical space on every scroll.
+ * Branding is stated once, and it is the one place Bookmania Bold appears. A
+ * wordmark is an identity, not a heading: giving ordinary UI headings the same
+ * face and weight would spend the distinction on flavour and leave the mark with
+ * nothing of its own.
  *
- * It is also the one place Bookmania Bold appears, and it appears nowhere
- * else. A wordmark is an identity, not a heading: giving ordinary UI headings
- * the same face and weight would spend the distinction on flavour and leave the
- * mark with nothing of its own. The size is unchanged at 17 px, so this stays
- * subordinate to a character's name on the sheet — a rule the phone contract
- * asserts rather than trusts.
+ * 20 px rather than 17. The size is measured rather than chosen: Bookmania Bold
+ * sets about 5% smaller than the Georgia it falls back to at the same nominal
+ * size — 14.3 px of cap height at 20 px against Georgia's 15.1 — so it needs the
+ * extra pixels to read at the presence a phone wordmark wants. 20 px is where
+ * that stops: the smallest title in this application is a 21 px creation step
+ * heading in the same family, and a wordmark that matches or outgrows the title
+ * of the screen underneath it has become a masthead. The bar's height is
+ * unchanged, because 33 px of logo inside 60 px of bar was never what set it.
  */
 .m2-appbar-brand strong {
-  font: 700 17px/1.1 var(--wordmark);
+  font: 700 20px/1.1 var(--wordmark);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Scaled with the wordmark: 28/17 held at 20 px is 33. */
 .m2-appbar-brand img {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 33px;
+  height: 33px;
 }
 
 .m2-main {
@@ -2152,13 +2166,11 @@
   .m2-appbar {
     grid-column: 1 / -1;
   }
-  .m2-appbar-brand strong {
-    font-size: 19px;
-  }
-  .m2-appbar-brand img {
-    width: 32px;
-    height: 32px;
-  }
+  /*
+   * No width-based bump. The rule that caps the wordmark is the size of the
+   * smallest screen title in the app, and that title is 21 px at every width, so
+   * a wider window is not a reason for the mark to outgrow it.
+   */
   .m2-rail {
     position: sticky;
     top: var(--appbar-height);

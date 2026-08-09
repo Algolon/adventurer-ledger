@@ -1,27 +1,60 @@
 "use client";
 
 /**
- * The play-first character sheet.
+ * The character sheet: Runefolio's play and character-management workspace.
  *
- * The sheet is Play mode: it mutates transient session state only — hit points,
+ * The sheet is Play mode. It mutates transient session state only — hit points,
  * temporary hit points, hit dice, death saves, conditions, exhaustion,
  * inspiration, spell slots and limited-use resources — one runtime mutation per
- * action, with Undo. Permanent character data changes go through the single
- * Edit character action, which opens the builder.
+ * action, with Undo. Permanent build decisions go through Edit character and
+ * Level up, which live in the Character workspace. That boundary is stated as
+ * data in `sheet-scope.ts` rather than only in prose here, so the screen and the
+ * services cannot drift apart quietly.
  *
  * Presentation follows a clean paper sheet, not a rules console: no override
  * editors, no expressions, no ruleset, source or pack identifiers, and no
  * engine vocabulary. Every headline number can open a details drawer with a
  * human-readable breakdown of what went into it.
  *
- * Structure: a glance header (identity, hit points, armour class, initiative,
- * speed, proficiency, conditions, exhaustion, inspiration) over five sections —
- * Overview, Actions, Spells (only for casters), Inventory and Character.
- * Sections without trustworthy data are hidden rather than filled in.
+ * ## Information architecture
+ *
+ * A glance header over four sections — Overview, Actions, Inventory, Character
+ * — with Spells inserted for a character whose content declares spellcasting.
+ * The tab strip is a fixed grid of exactly that many columns, so nothing is ever
+ * behind a swipe.
+ *
+ * The shape of each section is chosen for how it grows, because a level 1
+ * martial and a level 12 one are the same screen:
+ *
+ * - **A section is a heading over one bordered group**, not a card carrying its
+ *   own heading. The heading sits outside the border, so a screen with five
+ *   groups pays for one boundary each instead of a boundary, a heading and two
+ *   lots of padding each.
+ * - **Rows carry their most important number on the row.** An attack states
+ *   what it hits on beside its name rather than only inside its drawer.
+ * - **Character is progressive disclosure.** Class, Species, Background, Feats,
+ *   Proficiencies and anything else arrive as collapsed rows that state what is
+ *   inside them. Twelve levels of features is a list somebody opens, not a list
+ *   somebody scrolls past on the way to Level up.
+ *
+ * Sections without trustworthy data are hidden rather than filled in, and a
+ * group with nothing in it is not rendered at all.
  */
-import { useCallback, useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Backpack,
+  BookMarked,
+  ChevronDown,
   Heart,
   Minus,
   Pencil,
@@ -34,9 +67,11 @@ import {
 } from "lucide-react";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import { Breakdown, Dialog, DerivedNumber, formatDerived, signed } from "@/src/ui/primitives";
+import { BUILD_BOUNDARY_SENTENCE } from "@/src/ui/sheet-scope";
 import type {
   DerivedAction,
   DerivedCharacterSheet,
+  DerivedEquipmentItem,
   DerivedFeature,
   DerivedResource,
   DerivedSpell,
@@ -53,6 +88,7 @@ type Drawer =
   | { kind: "action"; action: DerivedAction }
   | { kind: "spell"; spell: DerivedSpell }
   | { kind: "feature"; feature: DerivedFeature }
+  | { kind: "item"; item: DerivedEquipmentItem }
   | { kind: "condition"; conditionId: string; label: string; summary?: string }
   | { kind: "state" }
   | { kind: "hp" };
@@ -73,10 +109,30 @@ const ACTION_GROUPS: readonly { kind: DerivedAction["kind"]; label: string }[] =
   { kind: "reaction", label: "Reactions" },
 ];
 
+/**
+ * When a repertoire stops being readable by scrolling.
+ *
+ * Deliberately a count and nothing else: no rule here reads a class, a school
+ * or a spell's name. Below the threshold a filter would be a control with
+ * nothing to do; above it, six level groups do not fit on a phone screen and
+ * finding one spell means scrolling past twenty.
+ */
+const SPELL_FILTER_THRESHOLD = 12;
+
+/** The Character groups this component renders under a name of their own. */
+const NAMED_FEATURE_GROUPS = new Set<DerivedFeature["group"]>(["class", "species", "background", "feat"]);
+
 /** "Rage", "Rage and Giant Ancestry", "Rage, Giant Ancestry and Second Wind". */
 function listConcepts(labels: readonly string[]): string {
   if (labels.length <= 1) return labels[0] ?? "";
   return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/** The recharge every one of these resources shares, or `null` if they differ. */
+function commonRecharge(resources: readonly DerivedResource[]): string | null {
+  if (!resources.length) return null;
+  const first = resources[0].recharge;
+  return resources.every(resource => resource.recharge === first) ? first : null;
 }
 
 export function PlaySheet({
@@ -94,6 +150,7 @@ export function PlaySheet({
   const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
+  const tabsRef = useRef<HTMLDivElement>(null);
 
   const sheet = state.status === "ready" ? state.value : undefined;
 
@@ -166,6 +223,50 @@ export function PlaySheet({
 
   const activeTab: SheetTab = tabs.some(item => item.id === tab) ? tab : "overview";
 
+  /**
+   * Changing section starts at the top of that section.
+   *
+   * A section is a page in every sense the user experiences it, and the panels
+   * are wildly different lengths — Overview is three screens, Actions is often
+   * one. Switching from the bottom of a long Overview to a short Actions used to
+   * leave the viewport past the end of the new content, showing whitespace and
+   * nothing else, because React replaced the panel under a scrolled window.
+   *
+   * The correction is the minimum one: if the new panel's first row would be
+   * behind the app bar and the sticky strip, the page scrolls up by exactly the
+   * amount that puts it below them. Somebody who was reading the top of a
+   * section stays exactly where they were, because for them nothing is wrong.
+   *
+   * The measurement is taken from the *panel*, deliberately. The tab strip is
+   * `position: sticky`, so once it is stuck its own rectangle reports the sticky
+   * position no matter how far the document has scrolled — measuring it would
+   * report "already in place" in precisely the case that needs correcting.
+   *
+   * It runs in a layout effect and without smooth behaviour, for the same
+   * reasons the shell's own workspace reset does: the corrected position is the
+   * first one painted, rather than something the user watches happen.
+   */
+  const panelRef = useRef<HTMLDivElement>(null);
+  const firstPaint = useRef(true);
+  useLayoutEffect(() => {
+    if (firstPaint.current) {
+      firstPaint.current = false;
+      return;
+    }
+    const strip = tabsRef.current;
+    const panel = panelRef.current;
+    if (!strip || !panel) return;
+    const declared = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--appbar-height") || "",
+    );
+    const barHeight = Number.isFinite(declared)
+      ? declared
+      : (document.querySelector(".m2-appbar")?.getBoundingClientRect().height ?? 0);
+    const chrome = barHeight + strip.getBoundingClientRect().height;
+    const deficit = chrome - panel.getBoundingClientRect().top;
+    if (deficit > 1) window.scrollTo({ top: Math.max(0, window.scrollY - deficit), left: 0, behavior: "instant" });
+  }, [activeTab]);
+
   /** Roving arrow-key movement across the tab list, per the tabs pattern. */
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -237,44 +338,61 @@ export function PlaySheet({
         </div>
       ) : null}
 
+      {/*
+       * The glance header answers "who am I, and what matters right now" and
+       * then gets out of the way. It used to take a third of a 780 px phone
+       * screen before a single row of actual content: the vitals were two rows
+       * of tall tiles, the receipt line reserved space whether or not it had
+       * anything to say, and Edit carried a word as well as its pencil. All five
+       * vitals are now one row, and the receipt occupies nothing until it does.
+       */}
       <header className="sheet-glance">
         <div className="sheet-identity">
           <div className="sheet-identity-text">
-            <h2>{sheet.name}</h2>
+            <h2>
+              {sheet.name}
+              {sheet.nickname ? <small className="sheet-alias"> “{sheet.nickname}”</small> : null}
+            </h2>
             <p className="sheet-identity-line">
               {sheet.classLabel ? `${sheet.classLabel} ${sheet.level}` : `Level ${sheet.level}`}
               {sheet.subclassLabel ? ` (${sheet.subclassLabel})` : ""}
               {sheet.speciesLabel ? ` · ${sheet.speciesLabel}` : ""}
             </p>
-            {sheet.mode === "manual" ? (
-              <p className="sheet-quiet-note">
-                <span className="m2-badge m2-badge-manual">Manual</span> This sheet uses values you entered. It is not
-                automatically rules-justified.
-              </p>
-            ) : null}
           </div>
+          {/*
+           * One route to permanent change from anywhere on the sheet, and the
+           * Character workspace carries the labelled pair. The pencil is icon
+           * only because the word "Edit" beside it said nothing the icon and its
+           * accessible name did not, and cost about 40 px of a 360 px row that
+           * the character's own name wanted.
+           */}
           <button type="button" className="m2-button sheet-edit" onClick={onEdit} aria-label={`Edit character ${sheet.name}`}>
             <Pencil aria-hidden="true" />
-            Edit
           </button>
         </div>
+
+        {sheet.mode === "manual" ? (
+          <p className="sheet-quiet-note">
+            <span className="m2-badge m2-badge-manual">Manual</span> This sheet uses values you entered. It is not
+            automatically rules-justified.
+          </p>
+        ) : null}
 
         <div className="sheet-vitals">
           <button
             type="button"
-            className={dying ? "sheet-hp sheet-hp-dying" : "sheet-hp"}
+            className={dying ? "sheet-tile sheet-hp sheet-hp-dying" : "sheet-tile sheet-hp"}
             onClick={() => setDrawer({ kind: "hp" })}
             aria-label={`Hit points ${hitPointsSummary(sheet)}. Open hit point actions`}
           >
             <span className="sheet-tile-label">
-              <Heart aria-hidden="true" /> Hit points
+              <Heart aria-hidden="true" /> {dying ? "Dying" : "HP"}
             </span>
-            <span className="sheet-hp-value">
+            <span className="sheet-tile-value sheet-hp-value">
               <DerivedNumber value={sheet.hitPoints.current} label="Current hit points" />
               <small> / {formatDerived(sheet.hitPoints.maximum)}</small>
             </span>
-            {sheet.hitPoints.temporary > 0 ? <span className="sheet-hp-temp">+{sheet.hitPoints.temporary} temp</span> : null}
-            {dying ? <span className="sheet-hp-state">Dying</span> : null}
+            {sheet.hitPoints.temporary > 0 ? <span className="sheet-hp-temp">+{sheet.hitPoints.temporary}</span> : null}
           </button>
           <GlanceTile label="AC" fullLabel="Armour class" value={sheet.armorClass} onOpen={setDrawer} />
           <GlanceTile label="Init" fullLabel="Initiative" value={sheet.initiative} style="signed" onOpen={setDrawer} />
@@ -343,34 +461,38 @@ export function PlaySheet({
       </header>
 
       {dying ? (
-        <section className="sheet-card sheet-dying" aria-labelledby="dying-heading">
-          <h3 id="dying-heading">Death saves</h3>
-          <div className="sheet-death-tallies">
-            <DeathTally label="Successes" count={sheet.deathSaves.successes} />
-            <DeathTally label="Failures" count={sheet.deathSaves.failures} />
-          </div>
-          <div className="sheet-row-actions">
-            <button
-              type="button"
-              className="m2-play-action"
-              onClick={() => void applyRuntime({ kind: "death-save", result: "success" }, () => "Death save success recorded.")}
-            >
-              Success
-            </button>
-            <button
-              type="button"
-              className="m2-play-action"
-              onClick={() => void applyRuntime({ kind: "death-save", result: "failure" }, () => "Death save failure recorded.")}
-            >
-              Failure
-            </button>
-            <button
-              type="button"
-              className="m2-play-action"
-              onClick={() => void applyRuntime({ kind: "death-saves-clear" }, () => "Death saves reset.")}
-            >
-              Reset
-            </button>
+        <section className="sheet-section sheet-dying" aria-labelledby="dying-heading">
+          <h3 id="dying-heading" className="sheet-section-title">
+            Death saves
+          </h3>
+          <div className="sheet-card">
+            <div className="sheet-death-tallies">
+              <DeathTally label="Successes" count={sheet.deathSaves.successes} />
+              <DeathTally label="Failures" count={sheet.deathSaves.failures} />
+            </div>
+            <div className="sheet-row-actions">
+              <button
+                type="button"
+                className="m2-play-action"
+                onClick={() => void applyRuntime({ kind: "death-save", result: "success" }, () => "Death save success recorded.")}
+              >
+                Success
+              </button>
+              <button
+                type="button"
+                className="m2-play-action"
+                onClick={() => void applyRuntime({ kind: "death-save", result: "failure" }, () => "Death save failure recorded.")}
+              >
+                Failure
+              </button>
+              <button
+                type="button"
+                className="m2-play-action"
+                onClick={() => void applyRuntime({ kind: "death-saves-clear" }, () => "Death saves reset.")}
+              >
+                Reset
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
@@ -380,6 +502,7 @@ export function PlaySheet({
         role="tablist"
         aria-label="Character sheet sections"
         onKeyDown={onTabKeyDown}
+        ref={tabsRef}
         style={{ "--sheet-tab-count": tabs.length } as CSSProperties}
       >
         {tabs.map(item => (
@@ -400,7 +523,13 @@ export function PlaySheet({
         ))}
       </div>
 
-      <div id={`sheet-panel-${activeTab}`} role="tabpanel" aria-labelledby={`sheet-tab-${activeTab}`} className="sheet-panel">
+      <div
+        id={`sheet-panel-${activeTab}`}
+        role="tabpanel"
+        aria-labelledby={`sheet-tab-${activeTab}`}
+        className="sheet-panel"
+        ref={panelRef}
+      >
         {activeTab === "overview" ? <OverviewPanel sheet={sheet} onOpen={setDrawer} /> : null}
         {activeTab === "actions" ? (
           <ActionsPanel sheet={sheet} resources={actionResources} onOpen={setDrawer} applyRuntime={applyRuntime} />
@@ -408,7 +537,7 @@ export function PlaySheet({
         {activeTab === "spells" && sheet.spellcasting ? (
           <SpellsPanel sheet={sheet} slots={slotResources} onOpen={setDrawer} applyRuntime={applyRuntime} />
         ) : null}
-        {activeTab === "inventory" ? <InventoryPanel sheet={sheet} /> : null}
+        {activeTab === "inventory" ? <InventoryPanel sheet={sheet} onOpen={setDrawer} /> : null}
         {activeTab === "character" ? (
           <CharacterPanel
             sheet={sheet}
@@ -433,6 +562,39 @@ function hitPointsSummary(sheet: DerivedCharacterSheet): string {
   const maximum = formatDerived(sheet.hitPoints.maximum);
   const temp = sheet.hitPoints.temporary > 0 ? ` plus ${sheet.hitPoints.temporary} temporary` : "";
   return `${current} of ${maximum}${temp}`;
+}
+
+/**
+ * A heading over one bordered group.
+ *
+ * The heading is deliberately outside the border. Every group used to be a card
+ * carrying its own title, which meant each one paid for a boundary, the title's
+ * own row inside it and padding above and below that row — about 60 px of
+ * chrome per group, on a screen that routinely has five of them.
+ */
+function SheetSection({
+  title,
+  meta,
+  children,
+  bare,
+}: {
+  title: string;
+  /** A short qualifier for the whole group: a count, a shared recharge. */
+  meta?: string;
+  children: ReactNode;
+  /** Renders the group without the inner card, for grids that own their edges. */
+  bare?: boolean;
+}) {
+  const headingId = useId();
+  return (
+    <section className="sheet-section" aria-labelledby={headingId}>
+      <h3 id={headingId} className="sheet-section-title">
+        {title}
+        {meta ? <span className="sheet-section-meta">{meta}</span> : null}
+      </h3>
+      {bare ? children : <div className="sheet-card">{children}</div>}
+    </section>
+  );
 }
 
 function GlanceTile({
@@ -476,12 +638,11 @@ function DeathTally({ label, count }: { label: string; count: number }) {
   );
 }
 
-/** Overview: abilities, saving throws and skills. */
+/** Overview: the quick-reference numbers — abilities, saving throws and skills. */
 function OverviewPanel({ sheet, onOpen }: { sheet: DerivedCharacterSheet; onOpen(drawer: Drawer): void }) {
   return (
     <>
-      <section className="sheet-card" aria-labelledby="abilities-heading">
-        <h3 id="abilities-heading">Abilities</h3>
+      <SheetSection title="Abilities">
         <div className="sheet-abilities">
           {ABILITY_LABELS.map(({ key, label, short }) => {
             const ability = sheet.abilities[key];
@@ -502,23 +663,27 @@ function OverviewPanel({ sheet, onOpen }: { sheet: DerivedCharacterSheet; onOpen
             );
           })}
         </div>
-      </section>
+      </SheetSection>
 
       {sheet.saves.length ? (
-        <section className="sheet-card" aria-labelledby="saves-heading">
-          <h3 id="saves-heading">Saving throws</h3>
+        <SheetSection title="Saving throws" meta={proficientMeta(sheet.saves)}>
           <CheckList entries={sheet.saves} onOpen={onOpen} />
-        </section>
+        </SheetSection>
       ) : null}
 
       {sheet.checks.length ? (
-        <section className="sheet-card" aria-labelledby="skills-heading">
-          <h3 id="skills-heading">Skills</h3>
+        <SheetSection title="Skills" meta={proficientMeta(sheet.checks)}>
           <CheckList entries={sheet.checks} onOpen={onOpen} />
-        </section>
+        </SheetSection>
       ) : null}
     </>
   );
+}
+
+/** "3 proficient" — the one fact a player scans a save or skill list for. */
+function proficientMeta(entries: DerivedCharacterSheet["saves"]): string | undefined {
+  const proficient = entries.filter(entry => entry.proficient).length;
+  return proficient ? `${proficient} proficient` : undefined;
 }
 
 function CheckList({
@@ -549,7 +714,48 @@ function CheckList({
   );
 }
 
-/** Actions: attacks and other granted actions, then limited-use resources. */
+/**
+ * A row that leads with a name and a number.
+ *
+ * The number is on the row rather than only in the drawer, because "what do I
+ * hit on" is the question an attack row exists to answer and opening a details
+ * surface to read a single modifier is not answering it.
+ */
+function SheetRow({
+  title,
+  value,
+  meta,
+  badges,
+  ariaLabel,
+  onOpen,
+}: {
+  title: string;
+  value?: string;
+  meta?: string;
+  badges?: readonly string[];
+  ariaLabel: string;
+  onOpen(): void;
+}) {
+  return (
+    <li>
+      {/* One accessible name, so the row's purpose is announced once. */}
+      <button type="button" className="sheet-row" onClick={onOpen} aria-label={ariaLabel}>
+        <span className="sheet-row-title">
+          {title}
+          {badges?.map(badge => (
+            <span key={badge} className="sheet-badge">
+              {badge}
+            </span>
+          ))}
+        </span>
+        {value ? <span className="sheet-row-value">{value}</span> : null}
+        {meta ? <span className="sheet-row-meta">{meta}</span> : null}
+      </button>
+    </li>
+  );
+}
+
+/** Actions: what this character can do right now, then what it can spend. */
 function ActionsPanel({
   sheet,
   resources,
@@ -569,63 +775,91 @@ function ActionsPanel({
   return (
     <>
       {groups.map(group => (
-        <section key={group.kind} className="sheet-card" aria-labelledby={`actions-${group.kind}-heading`}>
-          <h3 id={`actions-${group.kind}-heading`}>{group.label}</h3>
+        <SheetSection key={group.kind} title={group.label} meta={group.actions.length > 3 ? `${group.actions.length}` : undefined}>
           <ul className="sheet-rows">
             {group.actions.map(action => {
-              const facts = [
-                action.attackBonus.value !== null ? `${signed(action.attackBonus.value)} to hit` : null,
+              const hit = action.attackBonus.value !== null ? signed(action.attackBonus.value) : undefined;
+              const meta = [action.damageExpression, action.range].filter(Boolean).join(" · ");
+              const spoken = [
+                hit ? `${hit} to hit` : null,
                 action.damageExpression,
                 action.range,
               ].filter(Boolean) as string[];
               return (
-                <li key={action.id}>
-                  {/* One accessible name, so the row's purpose is announced once. */}
-                  <button
-                    type="button"
-                    className="sheet-row"
-                    onClick={() => onOpen({ kind: "action", action })}
-                    aria-label={`${action.label}${facts.length ? `, ${facts.join(", ")}` : ""}. Open details`}
-                  >
-                    <span className="sheet-row-title">{action.label}</span>
-                    <span className="sheet-row-meta">{facts.join(" · ")}</span>
-                  </button>
-                </li>
+                <SheetRow
+                  key={action.id}
+                  title={action.label}
+                  {...(hit ? { value: hit } : {})}
+                  {...(meta ? { meta } : {})}
+                  ariaLabel={`${action.label}${spoken.length ? `, ${spoken.join(", ")}` : ""}. Open details`}
+                  onOpen={() => onOpen({ kind: "action", action })}
+                />
               );
             })}
           </ul>
-        </section>
+        </SheetSection>
       ))}
 
       {groups.length === 0 ? (
-        <section className="sheet-card">
-          <h3>Actions</h3>
+        <SheetSection title="Actions">
           <p className="m2-muted">No actions can be shown yet. Use Edit character to finish the build.</p>
-        </section>
+        </SheetSection>
       ) : null}
 
       {resources.length ? (
-        <section className="sheet-card" aria-labelledby="resources-heading">
-          <h3 id="resources-heading">Resources</h3>
-          {resources.map(resource => (
-            <ResourceRow key={resource.id} resource={resource} applyRuntime={applyRuntime} />
-          ))}
-        </section>
+        <ResourceSection title="Resources" resources={resources} applyRuntime={applyRuntime} />
       ) : null}
     </>
   );
 }
 
+/**
+ * A group of spendable resources.
+ *
+ * When every resource in the group recharges the same way — which is exactly
+ * what a set of spell slots is — the recharge is said once, above the group,
+ * rather than repeated verbatim on every row.
+ */
+function ResourceSection({
+  title,
+  resources,
+  applyRuntime,
+}: {
+  title: string;
+  resources: readonly DerivedResource[];
+  applyRuntime(operation: RuntimeOperation, describe: (runtime: CharacterRuntimeStateRecord) => string): Promise<void>;
+}) {
+  const shared = commonRecharge(resources);
+  const sharedLabel = shared ? rechargeLabel(shared) : "";
+  return (
+    <SheetSection title={title} {...(resources.length > 1 && sharedLabel ? { meta: sharedLabel } : {})}>
+      <div className="sheet-resources">
+        {resources.map(resource => (
+          <ResourceRow
+            key={resource.id}
+            resource={resource}
+            showRecharge={!(resources.length > 1 && sharedLabel)}
+            applyRuntime={applyRuntime}
+          />
+        ))}
+      </div>
+    </SheetSection>
+  );
+}
+
 function ResourceRow({
   resource,
+  showRecharge = true,
   applyRuntime,
 }: {
   resource: DerivedResource;
+  showRecharge?: boolean;
   applyRuntime(operation: RuntimeOperation, describe: (runtime: CharacterRuntimeStateRecord) => string): Promise<void>;
 }) {
   const empty = resource.current.value !== null && resource.current.value <= 0;
   const full =
     resource.current.value !== null && resource.maximum.value !== null && resource.current.value >= resource.maximum.value;
+  const recharge = showRecharge ? rechargeLabel(resource.recharge) : "";
   return (
     <div className="sheet-resource">
       <span className="sheet-row-title">{resource.label}</span>
@@ -633,7 +867,7 @@ function ResourceRow({
         <DerivedNumber value={resource.current} label={`${resource.label} remaining`} /> /{" "}
         <DerivedNumber value={resource.maximum} label={`${resource.label} maximum`} />
       </span>
-      <span className="sheet-resource-recharge">{rechargeLabel(resource.recharge)}</span>
+      <span className="sheet-resource-recharge">{recharge}</span>
       <span className="sheet-stepper">
         <button
           type="button"
@@ -679,7 +913,16 @@ function rechargeLabel(recharge: string): string {
   }
 }
 
-/** Spells: casting summary, slots, then the known spells by level. */
+/**
+ * Spells: the casting numbers, the slots, then the repertoire by level.
+ *
+ * The repertoire is what a caster's sheet has that a martial's does not, and it
+ * is the part that grows without limit: a level 1 caster has four spells and a
+ * level 9 one can have thirty across six levels. The filter appears only when
+ * there are enough spells for scrolling to have stopped working, and it is keyed
+ * on that count alone — no rule here knows anything about any particular spell,
+ * class or book.
+ */
 function SpellsPanel({
   sheet,
   slots,
@@ -692,13 +935,20 @@ function SpellsPanel({
   applyRuntime(operation: RuntimeOperation, describe: (runtime: CharacterRuntimeStateRecord) => string): Promise<void>;
 }) {
   const casting = sheet.spellcasting;
+  const [filter, setFilter] = useState("");
+  const filterId = useId();
+
+  // Hooks run before the early return, so the panel's state is unconditional.
+  const all = useMemo(() => casting?.spells ?? [], [casting]);
+  const needle = filter.trim().toLowerCase();
+  const visible = needle ? all.filter(spell => spell.label.toLowerCase().includes(needle)) : all;
+  const levels = [...new Set(visible.map(spell => spell.level))].sort((left, right) => left - right);
+
   if (!casting) return null;
-  const levels = [...new Set(casting.spells.map(spell => spell.level))].sort((left, right) => left - right);
 
   return (
     <>
-      <section className="sheet-card" aria-labelledby="casting-heading">
-        <h3 id="casting-heading">Casting</h3>
+      <SheetSection title="Casting" bare>
         <div className="sheet-casting">
           <p className="sheet-casting-fact">
             <span className="sheet-tile-label">Ability</span>
@@ -731,97 +981,203 @@ function SpellsPanel({
             </button>
           ) : null}
         </div>
-        {slots.map(slot => (
-          <ResourceRow key={slot.id} resource={slot} applyRuntime={applyRuntime} />
-        ))}
-      </section>
+      </SheetSection>
 
-      {levels.map(level => (
-        <section key={level} className="sheet-card" aria-labelledby={`spells-level-${level}-heading`}>
-          <h3 id={`spells-level-${level}-heading`}>{level === 0 ? "Cantrips" : `Level ${level}`}</h3>
-          <ul className="sheet-rows">
-            {casting.spells
-              .filter(spell => spell.level === level)
-              .map(spell => {
-                const facts = [spell.castingTime, spell.range, spell.concentration ? "concentration" : null].filter(
+      {slots.length ? <ResourceSection title="Spell slots" resources={slots} applyRuntime={applyRuntime} /> : null}
+
+      {all.length > SPELL_FILTER_THRESHOLD ? (
+        <div className="sheet-filter">
+          <label htmlFor={filterId}>Find a spell</label>
+          <input
+            id={filterId}
+            type="search"
+            value={filter}
+            placeholder={`${all.length} spells`}
+            onChange={event => setFilter(event.target.value)}
+          />
+        </div>
+      ) : null}
+
+      {levels.map(level => {
+        const inLevel = visible.filter(spell => spell.level === level);
+        return (
+          <SheetSection
+            key={level}
+            title={level === 0 ? "Cantrips" : `Level ${level}`}
+            meta={inLevel.length > 3 ? `${inLevel.length}` : undefined}
+          >
+            <ul className="sheet-rows">
+              {inLevel.map(spell => {
+                const badges = [
+                  spell.concentration ? "Concentration" : null,
+                  spell.ritual ? "Ritual" : null,
+                  spell.alwaysPrepared ? "Always prepared" : null,
+                ].filter(Boolean) as string[];
+                const spoken = [spell.castingTime, spell.range, ...badges.map(badge => badge.toLowerCase())].filter(
                   Boolean,
                 ) as string[];
+                const meta = [spell.castingTime, spell.range].filter(Boolean).join(" · ");
                 return (
-                  <li key={spell.id}>
-                    <button
-                      type="button"
-                      className="sheet-row"
-                      onClick={() => onOpen({ kind: "spell", spell })}
-                      aria-label={`${spell.label}${facts.length ? `, ${facts.join(", ")}` : ""}. Open details`}
-                    >
-                      <span className="sheet-row-title">
-                        {spell.label}
-                        {spell.concentration ? <span className="sheet-badge">Concentration</span> : null}
-                      </span>
-                      <span className="sheet-row-meta">{[spell.castingTime, spell.range].filter(Boolean).join(" · ")}</span>
-                    </button>
-                  </li>
+                  <SheetRow
+                    key={spell.id}
+                    title={spell.label}
+                    badges={badges}
+                    {...(meta ? { meta } : {})}
+                    ariaLabel={`${spell.label}${spoken.length ? `, ${spoken.join(", ")}` : ""}. Open details`}
+                    onOpen={() => onOpen({ kind: "spell", spell })}
+                  />
                 );
               })}
-          </ul>
-        </section>
-      ))}
+            </ul>
+          </SheetSection>
+        );
+      })}
+
+      {needle && !visible.length ? <p className="m2-muted">No spell matches “{filter.trim()}”.</p> : null}
     </>
   );
 }
 
-/** Inventory: equipped gear first, then everything carried. */
-function InventoryPanel({ sheet }: { sheet: DerivedCharacterSheet }) {
+/**
+ * Inventory: equipped gear first, then everything else carried.
+ *
+ * A row carries the name, the count and the facts that change how the item is
+ * used — what it adds to armour class, whether it needs attunement, whether it
+ * is magical. Its description is not on the row: a kit of a dozen items became a
+ * dozen three-line paragraphs, 68 px each, and an inventory is a thing people
+ * scan. The description is one tap away, in the item's own drawer.
+ *
+ * What is *not* here is deliberate: there is no equip, unequip, attune, consume
+ * or quantity control. The runtime service has no operation for any of them and
+ * the durable record stores equipment as the bundle choices that produced it, so
+ * a control here would either write nothing or invent a second, private store of
+ * item state. The IA is built for those controls; the capability is reported in
+ * `docs/CURRENT.md` rather than faked.
+ */
+function InventoryPanel({ sheet, onOpen }: { sheet: DerivedCharacterSheet; onOpen(drawer: Drawer): void }) {
   const equipped = sheet.equipment.filter(item => item.status === "equipped");
   const carried = sheet.equipment.filter(item => item.status !== "equipped");
 
   if (!sheet.equipment.length)
     return (
-      <section className="sheet-card">
-        <h3>Inventory</h3>
+      <SheetSection title="Inventory">
         <p className="m2-muted">Nothing is recorded yet. Use Edit character to change equipment.</p>
-      </section>
+      </SheetSection>
     );
+
+  const group = (title: string, items: readonly DerivedEquipmentItem[]) => (
+    <SheetSection title={title} meta={items.length > 3 ? `${items.length}` : undefined}>
+      <ul className="sheet-rows">
+        {items.map(item => {
+          const badges = [
+            item.armorContribution !== undefined ? `AC ${item.armorContribution}` : null,
+            item.attunementRequired ? "Attunement" : null,
+            item.rarity ? capitalise(item.rarity) : null,
+          ].filter(Boolean) as string[];
+          return (
+            <SheetRow
+              key={item.itemId}
+              title={item.label}
+              badges={badges}
+              {...(item.quantity > 1 ? { value: `×${item.quantity}` } : {})}
+              ariaLabel={`${item.label}${item.quantity > 1 ? `, ${item.quantity}` : ""}${
+                badges.length ? `, ${badges.join(", ")}` : ""
+              }. Open details`}
+              onOpen={() => onOpen({ kind: "item", item })}
+            />
+          );
+        })}
+      </ul>
+    </SheetSection>
+  );
 
   return (
     <>
-      {equipped.length ? (
-        <section className="sheet-card" aria-labelledby="equipped-heading">
-          <h3 id="equipped-heading">Equipped</h3>
-          <ul className="sheet-rows">
-            {equipped.map(item => (
-              <li key={item.itemId} className="sheet-item">
-                <span className="sheet-row-title">
-                  {item.label}
-                  {item.quantity > 1 ? <span className="sheet-quantity">×{item.quantity}</span> : null}
-                </span>
-                {item.armorContribution !== undefined ? <span className="sheet-badge">AC {item.armorContribution}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      {carried.length ? (
-        <section className="sheet-card" aria-labelledby="carried-heading">
-          <h3 id="carried-heading">Carried</h3>
-          <ul className="sheet-rows">
-            {carried.map(item => (
-              <li key={item.itemId} className="sheet-item">
-                <span className="sheet-row-title">
-                  {item.label}
-                  {item.quantity > 1 ? <span className="sheet-quantity">×{item.quantity}</span> : null}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <p className="sheet-quiet-note">Adding, removing or equipping items is part of Edit character.</p>
+      {equipped.length ? group("Equipped", equipped) : null}
+      {carried.length ? group("Carried", carried) : null}
     </>
   );
 }
 
-/** Character: identity, features, proficiencies, and durable-change actions. */
+const capitalise = (value: string) => (value ? `${value[0].toUpperCase()}${value.slice(1)}` : value);
+
+/**
+ * One collapsible group in the Character workspace.
+ *
+ * Collapsed, it states what is inside it. That is the whole point: a player
+ * opening Character is usually looking for one thing, and a flat list of every
+ * feature a twelfth-level character has is the thing they have to scroll past to
+ * reach it. The header is a heading *and* a button, so it is both a landmark to
+ * navigate by and a control to operate — and `aria-controls` names the panel
+ * only while the panel exists, because a reference to an element that is not in
+ * the document is one assistive technology cannot follow.
+ */
+function SheetGroup({
+  title,
+  summary,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  count?: number;
+  open: boolean;
+  onToggle(): void;
+  children: ReactNode;
+}) {
+  const panelId = useId();
+  const detail = [summary, count === undefined ? null : `${count} ${count === 1 ? "entry" : "entries"}`]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <section className={open ? "sheet-group sheet-group-open" : "sheet-group"}>
+      <h3 className="sheet-group-head">
+        <button
+          type="button"
+          aria-expanded={open}
+          {...(open ? { "aria-controls": panelId } : {})}
+          onClick={onToggle}
+        >
+          <span className="sheet-group-title">{title}</span>
+          {detail ? <span className="sheet-group-summary">{detail}</span> : null}
+          <ChevronDown aria-hidden="true" className="sheet-group-mark" />
+        </button>
+      </h3>
+      {open ? (
+        <div id={panelId} className="sheet-card sheet-group-body">
+          {children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function FeatureList({ features, onOpen }: { features: readonly DerivedFeature[]; onOpen(drawer: Drawer): void }) {
+  return (
+    <ul className="sheet-rows">
+      {features.map(feature => (
+        <SheetRow
+          key={feature.id}
+          title={feature.label}
+          {...(feature.summary ? { meta: feature.summary } : {})}
+          ariaLabel={`${feature.label}. Open details`}
+          onOpen={() => onOpen({ kind: "feature", feature })}
+        />
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Character: who this character is, and the two controls that change it.
+ *
+ * Everything durable about the build lives here, grouped by the thing that owns
+ * it and closed until asked for. Edit character and Level up sit under the
+ * groups: discoverable on a screen that is one thumb-length long when nothing is
+ * open, and visually secondary to the character they act on.
+ */
 function CharacterPanel({
   sheet,
   restorePoints,
@@ -837,11 +1193,16 @@ function CharacterPanel({
   onLevelUp(): void;
   onRestore(snapshotId: string): void;
 }) {
-  const featureGroups: readonly { group: DerivedFeature["group"]; label: string }[] = [
-    { group: "class", label: sheet.classLabel ? `${sheet.classLabel} features` : "Class features" },
-    { group: "species", label: sheet.speciesLabel ? `${sheet.speciesLabel} traits` : "Traits" },
-    { group: "background", label: "Background" },
-  ];
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const toggle = (id: string) => setOpenGroup(current => (current === id ? null : id));
+
+  const featuresIn = (group: DerivedFeature["group"]) => sheet.features.filter(feature => feature.group === group);
+  const classFeatures = featuresIn("class");
+  const speciesTraits = featuresIn("species");
+  const backgroundFeatures = featuresIn("background");
+  const feats = featuresIn("feat");
+  const otherFeatures = sheet.features.filter(feature => !NAMED_FEATURE_GROUPS.has(feature.group));
+
   const proficiencyGroups: readonly { type: "armor" | "weapon" | "tool" | "language"; label: string }[] = [
     { type: "armor", label: "Armour" },
     { type: "weapon", label: "Weapons" },
@@ -849,97 +1210,152 @@ function CharacterPanel({
     { type: "language", label: "Languages" },
   ];
 
+  /*
+   * A collapsed group says what is *inside* it, not what the screen already
+   * says. Class, level, subclass and species are all on the glance header a
+   * thumb's width above this list, so restating them here adds a second copy of
+   * the same sentence and nothing else — which is also what made "Vanguard 2"
+   * ambiguous to anything reading the page. Hit dice is the one durable class
+   * fact the header has no room for, so that is what this summary carries.
+   * Background is not on the header at all, so its own name is real information.
+   */
+  const classSummary = sheet.hitDice.value === null ? undefined : `Hit dice ${sheet.hitDice.value}`;
+
   return (
     <>
-      <section className="sheet-card" aria-labelledby="about-heading">
-        <h3 id="about-heading">About</h3>
-        {/*
-         * Class, level, subclass and species are already in the glance header,
-         * so they are not restated here. This card carries what the header does
-         * not have room for.
-         */}
-        <dl className="sheet-facts">
-          {sheet.backgroundLabel ? <IdentityFact label="Background">{sheet.backgroundLabel}</IdentityFact> : null}
-          {sheet.nickname ? <IdentityFact label="Nickname">“{sheet.nickname}”</IdentityFact> : null}
-          {sheet.hitDice.value !== null ? (
-            <IdentityFact label="Hit dice">
-              {sheet.hitDiceRemaining !== null ? `${sheet.hitDiceRemaining} of ${sheet.level} (${sheet.hitDice.value})` : sheet.hitDice.value}
-            </IdentityFact>
-          ) : null}
-        </dl>
-        <div className="sheet-row-actions">
-          <button type="button" className="m2-button m2-button-primary" onClick={onEdit}>
-            <Pencil aria-hidden="true" />
-            Edit character
-          </button>
-          <button type="button" className="m2-button" onClick={onLevelUp}>
-            Level up
-          </button>
+      <div className="sheet-groups">
+        <SheetGroup
+          title="Class & subclass"
+          {...(classSummary ? { summary: classSummary } : {})}
+          count={classFeatures.length || undefined}
+          open={openGroup === "class"}
+          onToggle={() => toggle("class")}
+        >
+          {/*
+           * Straight to the features. Class, subclass and level are on the
+           * glance header and hit dice is on this group's own closed summary, so
+           * a definition list restating all four here was four rows of the same
+           * sentence — about 230 px — before the content anybody opened it for.
+           */}
+          {classFeatures.length ? (
+            <FeatureList features={classFeatures} onOpen={onOpen} />
+          ) : (
+            <p className="m2-muted">This class grants no features at this level.</p>
+          )}
+        </SheetGroup>
+
+        {sheet.speciesLabel || speciesTraits.length ? (
+          <SheetGroup
+            title="Species"
+            count={speciesTraits.length || undefined}
+            open={openGroup === "species"}
+            onToggle={() => toggle("species")}
+          >
+            {speciesTraits.length ? (
+              <FeatureList features={speciesTraits} onOpen={onOpen} />
+            ) : (
+              <p className="m2-muted">This origin grants no traits of its own.</p>
+            )}
+          </SheetGroup>
+        ) : null}
+
+        {sheet.backgroundLabel || backgroundFeatures.length ? (
+          <SheetGroup
+            title="Background"
+            {...(sheet.backgroundLabel ? { summary: sheet.backgroundLabel } : {})}
+            count={backgroundFeatures.length || undefined}
+            open={openGroup === "background"}
+            onToggle={() => toggle("background")}
+          >
+            {backgroundFeatures.length ? (
+              <FeatureList features={backgroundFeatures} onOpen={onOpen} />
+            ) : (
+              <p className="m2-muted">This background grants nothing beyond its own training.</p>
+            )}
+          </SheetGroup>
+        ) : null}
+
+        {feats.length ? (
+          <SheetGroup title="Feats" count={feats.length} open={openGroup === "feats"} onToggle={() => toggle("feats")}>
+            <FeatureList features={feats} onOpen={onOpen} />
+          </SheetGroup>
+        ) : null}
+
+        {otherFeatures.length ? (
+          <SheetGroup
+            title="Features & traits"
+            count={otherFeatures.length}
+            open={openGroup === "other"}
+            onToggle={() => toggle("other")}
+          >
+            <FeatureList features={otherFeatures} onOpen={onOpen} />
+          </SheetGroup>
+        ) : null}
+
+        {sheet.otherProficiencies.length ? (
+          <SheetGroup
+            title="Proficiencies & training"
+            count={sheet.otherProficiencies.length}
+            open={openGroup === "proficiencies"}
+            onToggle={() => toggle("proficiencies")}
+          >
+            <dl className="sheet-facts">
+              {proficiencyGroups.map(({ type, label }) => {
+                const items = sheet.otherProficiencies.filter(entry => entry.type === type);
+                if (!items.length) return null;
+                return (
+                  <IdentityFact key={type} label={label}>
+                    {items.map(entry => entry.label).join(", ")}
+                  </IdentityFact>
+                );
+              })}
+            </dl>
+          </SheetGroup>
+        ) : null}
+      </div>
+
+      <section className="sheet-section sheet-manage" aria-labelledby="manage-heading">
+        <h3 id="manage-heading" className="sheet-section-title">
+          Manage
+        </h3>
+        <div className="sheet-card">
+          <div className="sheet-row-actions">
+            <button type="button" className="m2-button" onClick={onEdit}>
+              <Pencil aria-hidden="true" />
+              Edit character
+            </button>
+            <button type="button" className="m2-button" onClick={onLevelUp}>
+              <BookMarked aria-hidden="true" />
+              Level up
+            </button>
+          </div>
+          <p className="sheet-quiet-note">{BUILD_BOUNDARY_SENTENCE}</p>
         </div>
-        <p className="sheet-quiet-note">Permanent changes — class, scores, equipment, choices — happen in Edit character.</p>
       </section>
 
-      {featureGroups.map(({ group, label }) => {
-        const features = sheet.features.filter(feature => feature.group === group);
-        if (!features.length) return null;
-        return (
-          <section key={group} className="sheet-card" aria-labelledby={`features-${group}-heading`}>
-            <h3 id={`features-${group}-heading`}>{label}</h3>
+      {restorePoints.length ? (
+        <section className="sheet-section" aria-labelledby="history-heading">
+          <h3 id="history-heading" className="sheet-section-title">
+            Restore points
+          </h3>
+          <div className="sheet-card">
             <ul className="sheet-rows">
-              {features.map(feature => (
-                <li key={feature.id}>
+              {restorePoints.map(point => (
+                <li key={point.id} className="sheet-item">
+                  <span className="sheet-row-title">{point.label}</span>
                   <button
                     type="button"
-                    className="sheet-row"
-                    onClick={() => onOpen({ kind: "feature", feature })}
-                    aria-label={`${feature.label}. Open details`}
+                    className="m2-button m2-button-small"
+                    onClick={() => onRestore(point.id)}
+                    aria-label={`Restore ${sheet.name} to the point named ${point.label}`}
                   >
-                    <span className="sheet-row-title">{feature.label}</span>
-                    {feature.summary ? <span className="sheet-row-meta">{feature.summary}</span> : null}
+                    Restore
                   </button>
                 </li>
               ))}
             </ul>
-          </section>
-        );
-      })}
-
-      {sheet.otherProficiencies.length ? (
-        <section className="sheet-card" aria-labelledby="proficiencies-heading">
-          <h3 id="proficiencies-heading">Proficiencies</h3>
-          <dl className="sheet-facts">
-            {proficiencyGroups.map(({ type, label }) => {
-              const items = sheet.otherProficiencies.filter(entry => entry.type === type);
-              if (!items.length) return null;
-              return (
-                <IdentityFact key={type} label={label}>
-                  {items.map(entry => entry.label).join(", ")}
-                </IdentityFact>
-              );
-            })}
-          </dl>
-        </section>
-      ) : null}
-
-      {restorePoints.length ? (
-        <section className="sheet-card" aria-labelledby="history-heading">
-          <h3 id="history-heading">Restore points</h3>
-          <ul className="sheet-rows">
-            {restorePoints.map(point => (
-              <li key={point.id} className="sheet-item">
-                <span className="sheet-row-title">{point.label}</span>
-                <button
-                  type="button"
-                  className="m2-button m2-button-small"
-                  onClick={() => onRestore(point.id)}
-                  aria-label={`Restore ${sheet.name} to the point named ${point.label}`}
-                >
-                  Restore
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="sheet-quiet-note">Restoring appends to history; it never deletes the change it reverses.</p>
+            <p className="sheet-quiet-note">Restoring appends to history; it never deletes the change it reverses.</p>
+          </div>
         </section>
       ) : null}
     </>
@@ -1043,8 +1459,28 @@ function SheetDrawer({
               {spell.concentration ? " (concentration)" : ""}
             </IdentityFact>
           ) : null}
+          {spell.ritual ? <IdentityFact label="Ritual">Can be cast as a ritual</IdentityFact> : null}
+          {spell.alwaysPrepared ? <IdentityFact label="Prepared">Always prepared</IdentityFact> : null}
         </dl>
         {spell.summary ? <p>{spell.summary}</p> : null}
+      </Dialog>
+    );
+  }
+
+  if (drawer.kind === "item") {
+    const item = drawer.item;
+    return (
+      <Dialog title={item.label} onClose={onClose} presentation="sheet">
+        <dl className="sheet-facts">
+          <IdentityFact label="Status">{item.status === "equipped" ? "Equipped" : "Carried"}</IdentityFact>
+          {item.quantity > 1 ? <IdentityFact label="Quantity">{item.quantity}</IdentityFact> : null}
+          {item.armorContribution !== undefined ? <IdentityFact label="Armour class">{item.armorContribution}</IdentityFact> : null}
+          {item.rarity ? <IdentityFact label="Rarity">{capitalise(item.rarity)}</IdentityFact> : null}
+          {item.attunementRequired ? <IdentityFact label="Attunement">Required</IdentityFact> : null}
+          {item.weight !== undefined ? <IdentityFact label="Weight">{item.weight}</IdentityFact> : null}
+        </dl>
+        {item.summary ? <p>{item.summary}</p> : null}
+        <p className="sheet-quiet-note">Adding, removing and equipping items is part of Edit character.</p>
       </Dialog>
     );
   }
@@ -1316,22 +1752,16 @@ function StateControls({
           <h4>Add a condition</h4>
           <ul className="sheet-rows">
             {inactive.map(condition => (
-              <li key={condition.id}>
-                <button
-                  type="button"
-                  className="sheet-row"
-                  onClick={() => {
-                    void applyRuntime({ kind: "condition-add", conditionId: condition.id }, () => `Added ${condition.label}.`);
-                    onClose();
-                  }}
-                  aria-label={`Add the ${condition.label} condition to ${sheet.name}`}
-                >
-                  <span className="sheet-row-title">
-                    <Plus aria-hidden="true" /> {condition.label}
-                  </span>
-                  {condition.summary ? <span className="sheet-row-meta">{condition.summary}</span> : null}
-                </button>
-              </li>
+              <SheetRow
+                key={condition.id}
+                title={condition.label}
+                {...(condition.summary ? { meta: condition.summary } : {})}
+                ariaLabel={`Add the ${condition.label} condition to ${sheet.name}`}
+                onOpen={() => {
+                  void applyRuntime({ kind: "condition-add", conditionId: condition.id }, () => `Added ${condition.label}.`);
+                  onClose();
+                }}
+              />
             ))}
           </ul>
         </>

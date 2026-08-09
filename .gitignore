@@ -8,6 +8,9 @@ next-env.d.ts
 /playwright-report/
 /.playwright-update/
 *.tsbuildinfo
+# Local agent worktrees: full checkouts with their own node_modules, which the
+# privacy scan and the tracked-file drift check both have to see past.
+/.claude/worktrees/
 .DS_Store
 *.log
 .env*

@@ -1,14 +1,21 @@
 /*
- * The play-first character sheet.
+ * The character sheet.
  *
- * The sheet used to carry the app's only dark rules, in two
- * `prefers-color-scheme: dark` blocks that restated a parallel set of
- * `--sh-*` tokens and patched the shell around it. Both blocks are gone: there
- * is one theme now, declared in `theme.css`, and the sheet reads the same
- * tokens as every other surface. Nothing here re-declares a colour.
+ * One theme, declared in `theme.css`; nothing here re-declares a colour. Touch
+ * targets stay at 44 CSS px minimum, play actions 48, no state relies on colour
+ * alone, and nothing scrolls the document sideways from 320 px up.
  *
- * Touch targets stay at 44 CSS px minimum, play actions 48, no state relies on
- * colour alone, and nothing scrolls the document sideways from 320 px up.
+ * ## The density model
+ *
+ * The sheet used to build every group as a card that carried its own heading.
+ * That cost a boundary, a heading row and padding above and below it — about
+ * 60 px of chrome per group — on screens that routinely have five groups. It is
+ * now a heading *over* one bordered group: the heading sits on the page canvas,
+ * the border wraps only the rows, and the rows own their own spacing.
+ *
+ * Sizes are set against the fallback serif, as everywhere else in this app, so a
+ * blocked Adobe Fonts changes how the sheet looks and nothing about whether it
+ * fits.
  */
 
 .sheet :focus-visible,
@@ -19,16 +26,25 @@
 
 /* ---- glance header -------------------------------------------------------- */
 
+/*
+ * "Who am I, and what matters right now" — and then out of the way.
+ *
+ * At 360 x 780 this block used to be 265 px: a third of the screen before one
+ * row of the section the user actually opened. Three things paid for that and
+ * all three are addressed below — two rows of tall vitals, a receipt line that
+ * reserved its height whether or not it had anything to say, and an identity row
+ * carrying a labelled button beside a wrapping name.
+ */
 .sheet-glance {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .sheet-identity {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sheet-identity-text {
@@ -37,132 +53,151 @@
 }
 
 /*
- * The character's name is the title of this screen, so it is the only large
- * type in the header. It wraps rather than truncating: a long name is a real
- * name, and an ellipsis at 360 px hid whole words.
- */
-/*
- * Bookmania Semibold: a character's name is the one piece of type on this
- * screen that is genuinely the user's own, and it is the title of the workspace
- * they are in. It is the same face and weight as a page title for that reason,
- * and it stays larger than the wordmark in the bar above it.
+ * The character's name is the title of this screen, so it is the only large type
+ * in the header, and it is set in Bookmania Semibold — the same face as a page
+ * or step title, because a character is a thing that owns the screen it is on.
+ * It wraps rather than truncating: a long name is a real name, and an ellipsis
+ * at 360 px hid whole words. It stays larger than the wordmark in the bar above.
  */
 .sheet-identity h2 {
   margin: 0;
-  font: 600 26px/1.2 var(--title);
+  font: 600 24px/1.2 var(--title);
   overflow-wrap: anywhere;
+}
+
+/* A nickname is identity, not a heading, so it is quiet and inline. */
+.sheet-alias {
+  font: 400 15px/1.2 var(--ui);
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .sheet-identity-line {
   margin: 2px 0 0;
   color: var(--muted);
+  font-size: 14px;
 }
 
 .sheet-quiet-note {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.45;
 }
 
+/*
+ * Edit is a pencil and nothing else. The word beside it said nothing the icon
+ * and the accessible name did not, and it cost about 40 px of a 360 px row that
+ * the character's own name wanted. It stays a full 44 px target.
+ */
 .sheet-edit {
   flex: none;
+  width: 44px;
+  min-width: 44px;
   min-height: 44px;
+  padding: 0;
+  justify-content: center;
 }
 
+/*
+ * Every vital on one row.
+ *
+ * Hit points keep the widest column because they are the number that changes
+ * most and the control that is pressed most; the other four are equal. At 320 px
+ * that is a 78 px hit-point tile and four 49 px tiles, all above the 44 px
+ * minimum, in place of the two rows this used to take.
+ */
 .sheet-vitals {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.sheet-hp {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  min-width: 0;
-  min-height: 56px;
-  padding: 8px 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  color: inherit;
-  text-align: left;
-}
-
-.sheet-hp-value {
-  font: 700 28px/1.1 var(--display);
-}
-
-.sheet-hp-value small {
-  font: 600 16px var(--ui);
-  color: var(--muted);
-}
-
-.sheet-hp-temp,
-.sheet-badge {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--inset);
-  font-size: 12px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.sheet-hp-dying {
-  border-color: var(--danger-border);
-}
-
-.sheet-hp-state {
-  color: var(--danger);
-  font-weight: 750;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 12px;
+  grid-template-columns: 1.6fr repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .sheet-tile,
 .sheet-ability {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   justify-items: center;
   align-content: center;
   min-width: 0;
-  min-height: 56px;
-  padding: 6px 4px;
+  min-height: 48px;
+  padding: 5px 3px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface);
   color: inherit;
+}
+
+.sheet-hp {
+  position: relative;
+}
+
+.sheet-hp-value small {
+  font: 600 13px var(--ui);
+  color: var(--muted);
+}
+
+/* Temporary hit points ride the corner of the tile rather than taking a row. */
+.sheet-hp-temp {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--inset);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+.sheet-badge {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--inset);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/* Dying is a border, a word in the label and a death-save section, not a hue. */
+.sheet-hp-dying {
+  border-color: var(--danger-border);
+}
+
+.sheet-hp-dying .sheet-tile-label {
+  color: var(--danger);
 }
 
 .sheet-tile-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  max-width: 100%;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .sheet-tile-label svg {
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .sheet-tile-value {
-  font: 700 20px/1.1 var(--display);
+  font: 700 19px/1.1 var(--display);
+  white-space: nowrap;
 }
 
 .sheet-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .sheet-chip {
@@ -171,7 +206,7 @@
   gap: 6px;
   max-width: 100%;
   min-height: 44px;
-  padding: 6px 14px;
+  padding: 4px 13px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--inset);
@@ -202,9 +237,21 @@
   border-style: dashed;
 }
 
+/*
+ * The receipt occupies nothing until it has something to say.
+ *
+ * It used to reserve 20 px whether or not it had a sentence in it, which is a
+ * fifth of the header's saving on every view nobody has acted on yet. The
+ * reservation is gone; the element is not. It is a polite live region, and the
+ * reliable way to make one announce is to leave it in the document and put text
+ * into it — hiding an empty one with `display: none` means the first message
+ * arrives as a node entering the accessibility tree rather than as a change
+ * inside a region already in it, which some assistive technology misses. An
+ * empty flex paragraph with no minimum height costs nothing but the header's own
+ * 8 px row gap, and that is the right price for an announcement that works.
+ */
 .sheet-receipt {
   margin: 0;
-  min-height: 20px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -233,7 +280,7 @@
 
 /* ---- death saves ---------------------------------------------------------- */
 
-.sheet-dying {
+.sheet-dying .sheet-card {
   border-color: var(--danger-border);
 }
 
@@ -267,15 +314,10 @@
 /* ---- tabs ----------------------------------------------------------------- */
 
 /*
- * Sheet sections are a fixed grid, not a scrolling strip.
- *
- * This was `display: flex; overflow-x: auto`, so on a 360 px phone the fifth
- * section of a caster's sheet — Character — sat off the right edge behind a
- * clipped Inventory, findable only by swiping a container with no affordance
- * saying it could be swiped. Every section now has a column: four for a martial
- * sheet, five for a caster, each an equal fraction of the available width. The
- * count comes from the sheet itself through `--sheet-tab-count`, so no width
- * is guessed and no tab is ever cut off.
+ * Sheet sections are a fixed grid, not a scrolling strip. Every section has a
+ * column — four for a martial sheet, five for a caster — and the count comes
+ * from the sheet itself through `--sheet-tab-count`, so no width is guessed and
+ * no tab is ever cut off.
  */
 .sheet-tabs {
   position: sticky;
@@ -287,12 +329,11 @@
   /*
    * Full-bleed: exactly cancels the main region's inline padding, safe-area
    * insets included, so the strip reaches both viewport edges and not a pixel
-   * further. Hard-coding the number here is what let it drift out of step with
-   * the padding it is cancelling.
+   * further.
    */
   margin-left: calc(-1 * (var(--main-pad-x) + env(safe-area-inset-left, 0px)));
   margin-right: calc(-1 * (var(--main-pad-x) + env(safe-area-inset-right, 0px)));
-  padding: 6px 10px;
+  padding: 5px 10px;
   background: var(--paper);
   border-bottom: 1px solid var(--border-soft);
 }
@@ -341,30 +382,65 @@
 
 .sheet-panel {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
 }
 
-/* ---- cards and rows -------------------------------------------------------- */
+/* ---- sections, cards and rows ---------------------------------------------- */
+
+.sheet-section {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+/*
+ * A section heading: Modesto Light Condensed, the same face and size as a
+ * heading inside a creation step, so a category heading reads identically
+ * wherever it appears in Runefolio. It is the display face doing the one job it
+ * is good at — marking a category — and it never appears in a row, a control or
+ * a number.
+ */
+.sheet-section-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  font: 300 19px/1.2 var(--accent);
+  letter-spacing: 0.02em;
+}
+
+/* A count, or a recharge the whole group shares. Never a second heading. */
+.sheet-section-meta {
+  flex: none;
+  color: var(--muted);
+  font: 650 12px/1.2 var(--ui);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 .sheet-card {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
-  padding: 14px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
 }
 
-.sheet-card h3 {
-  margin: 0;
-  font: 600 18px var(--display);
+/* A list owns its own row padding, so the card does not add a second inset. */
+.sheet-card > .sheet-rows:only-child,
+.sheet-card > .sheet-checks:only-child,
+.sheet-card > .sheet-resources:only-child {
+  margin: -4px 0;
 }
 
 .sheet-card h4 {
   margin: 4px 0 0;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -387,13 +463,25 @@
   border-top: none;
 }
 
+/*
+ * A row leads with a name and the number that name is for.
+ *
+ * The value sits on the row rather than only inside the drawer: "what do I hit
+ * on" is the question an attack row exists to answer, and opening a modal to
+ * read one modifier is not answering it.
+ */
 .sheet-row {
   width: 100%;
   display: grid;
-  gap: 2px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title value"
+    "meta value";
+  align-items: center;
+  gap: 0 10px;
   min-width: 0;
   min-height: 48px;
-  padding: 10px 4px;
+  padding: 7px 2px;
   border: none;
   background: transparent;
   color: inherit;
@@ -401,12 +489,15 @@
 }
 
 .sheet-row-title {
+  grid-area: title;
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
   font-weight: 650;
-  font-size: 16px;
+  font-size: 15px;
+  line-height: 1.25;
 }
 
 .sheet-row-title svg {
@@ -415,9 +506,23 @@
   height: 15px;
 }
 
+.sheet-row-value {
+  grid-area: value;
+  align-self: center;
+  font: 700 17px/1.1 var(--display);
+  white-space: nowrap;
+}
+
 .sheet-row-meta {
+  grid-area: meta;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.35;
+  /* Long item summaries stay one scannable line rather than a paragraph. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .sheet-item {
@@ -428,12 +533,7 @@
   gap: 10px;
   min-width: 0;
   min-height: 48px;
-  padding: 8px 4px;
-}
-
-.sheet-quantity {
-  color: var(--muted);
-  font-weight: 600;
+  padding: 6px 2px;
 }
 
 /* ---- overview -------------------------------------------------------------- */
@@ -441,16 +541,16 @@
 .sheet-abilities {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .sheet-ability {
-  min-height: 74px;
+  min-height: 64px;
 }
 
 .sheet-ability-score {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .sheet-checks {
@@ -477,17 +577,21 @@
   gap: 10px;
   min-width: 0;
   min-height: 44px;
-  padding: 6px 4px;
+  padding: 4px 2px;
   border: none;
   background: transparent;
   color: inherit;
   text-align: left;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .sheet-check-label {
   flex: 1;
   min-width: 0;
+}
+
+.sheet-checks b {
+  font: 700 16px/1.1 var(--display);
 }
 
 /* Proficiency is a filled ring, not a colour: it reads at any palette. */
@@ -506,16 +610,35 @@
 
 /* ---- resources and steppers ------------------------------------------------ */
 
+.sheet-resources {
+  display: grid;
+  min-width: 0;
+}
+
+.sheet-resources > .sheet-resource {
+  border-top: 1px solid var(--border-soft);
+}
+
+.sheet-resources > .sheet-resource:first-child {
+  border-top: none;
+}
+
+/*
+ * Name and count on one line, the recharge under them, the stepper beside all of
+ * it. The recharge line is omitted entirely when every resource in the group
+ * shares one — five spell-slot rows do not each need to say "back on a long
+ * rest" — and `:empty` collapses the row it would have occupied.
+ */
 .sheet-resource {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "title stepper"
-    "count stepper"
-    "recharge stepper";
+    "title count stepper"
+    "recharge recharge stepper";
   align-items: center;
   gap: 0 10px;
-  padding: 6px 0;
+  min-height: 48px;
+  padding: 4px 0;
 }
 
 .sheet-resource .sheet-row-title {
@@ -524,13 +647,14 @@
 
 .sheet-resource-count {
   grid-area: count;
-  font: 700 18px var(--display);
+  font: 700 17px/1.2 var(--display);
+  white-space: nowrap;
 }
 
 .sheet-resource-recharge {
   grid-area: recharge;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .sheet-resource-recharge:empty {
@@ -540,10 +664,21 @@
 .sheet-stepper {
   grid-area: stepper;
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
-.sheet-stepper button,
+.sheet-stepper button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--inset);
+  color: inherit;
+}
+
 .sheet-amount button {
   display: grid;
   place-items: center;
@@ -572,24 +707,163 @@
 .sheet-casting {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .sheet-casting-fact {
   margin: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
   justify-items: center;
   align-content: center;
   min-width: 0;
-  min-height: 56px;
-  padding: 6px 4px;
+  min-height: 48px;
+  padding: 5px 3px;
   border: 1px solid var(--border-soft);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--inset);
 }
 
-/* ---- character ------------------------------------------------------------- */
+/*
+ * The casting ability is a word, not a number, and "Intelligence" is a long one.
+ * It is set at reading weight and allowed to wrap inside its own tile rather
+ * than staying on one line and painting past the border that contains it.
+ */
+.sheet-casting .sheet-tile-value {
+  white-space: normal;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.sheet-casting-fact .sheet-tile-value {
+  font: 650 14px/1.2 var(--ui);
+}
+
+/*
+ * The repertoire filter. It exists only above the size at which scrolling stops
+ * working, so when it is on screen it is because there is genuinely something to
+ * find.
+ */
+.sheet-filter {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sheet-filter label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sheet-filter input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--inset);
+  color: var(--ink);
+  font: 400 15px var(--ui);
+}
+
+/* ---- character: progressive disclosure -------------------------------------- */
+
+.sheet-groups {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sheet-group {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+/*
+ * The header is a heading and a button at once: a landmark to navigate by and a
+ * control to operate. Collapsed, it states what is inside — a class and level, a
+ * species, a count of features — because a row that says only "Class & subclass"
+ * makes opening it the only way to find out whether it was the one you wanted.
+ */
+.sheet-group-head {
+  margin: 0;
+  font: inherit;
+}
+
+.sheet-group-head button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20px;
+  grid-template-areas:
+    "title mark"
+    "summary mark";
+  align-items: center;
+  gap: 0 8px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.sheet-group-title {
+  grid-area: title;
+  min-width: 0;
+  font: 300 19px/1.2 var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.sheet-group-summary {
+  grid-area: summary;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.sheet-group-mark {
+  grid-area: mark;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.sheet-group-open .sheet-group-mark {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-group-mark {
+    transition: none;
+  }
+}
+
+/*
+ * The open panel is the group's own body, so it drops the second border and
+ * keeps only the divider that separates it from the header it belongs to.
+ */
+.sheet-group-body {
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0 0 12px 12px;
+  background: transparent;
+}
+
+.sheet-manage .sheet-row-actions .m2-button {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+/* ---- character facts -------------------------------------------------------- */
 
 .sheet-facts {
   margin: 0;
@@ -605,14 +879,14 @@
 .sheet-fact {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  gap: 1px;
   align-items: baseline;
   min-width: 0;
 }
 
 .sheet-fact dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -650,6 +924,21 @@
   max-height: min(85dvh, 640px);
   border-radius: 16px 16px 0 0;
   border-bottom: none;
+}
+
+/*
+ * Modesto Light Text, used deliberately and narrowly.
+ *
+ * A details drawer's title is a short, prominent, entirely non-interactive
+ * heading that names one thing — an attack, a spell, an item, a trait. That is
+ * the brief for this face, and it is the one place on the sheet that matches it:
+ * it is not in a row, not in a control, not on a number and not on body copy,
+ * all of which either need the weight or need the density. The fallback is the
+ * same local serif stack, so a blocked typekit changes the texture and not the
+ * geometry.
+ */
+.m2-backdrop-sheet .m2-dialog-head h2 {
+  font: 300 22px/1.2 var(--display-text);
 }
 
 @media (min-width: 960px) {
@@ -753,16 +1042,18 @@
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
-  .sheet-vitals {
-    grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 1fr));
-  }
-
-  .sheet-hp {
-    grid-column: 1;
-  }
-
   .sheet-tab {
     font-size: 13px;
+  }
+
+  /* Two columns of checks once a column is wide enough for the longest name. */
+  .sheet-checks {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 16px;
+  }
+
+  .sheet-checks > li:nth-child(2) {
+    border-top: none;
   }
 }
 

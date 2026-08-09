@@ -514,7 +514,14 @@ test.describe("levelling one step at a time through the UI", () => {
     // ---- level 3: the subclass decision ------------------------------------
     await openLevelUp(page);
     await expect(page.getByRole("heading", { name: "Level 2 to 3" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Subclass" })).toBeVisible();
+    /*
+     * Scoped to the dialog: the sheet behind it has its own Class & subclass
+     * group, and "the level-up dialog offers a Subclass decision" is what this
+     * line has always meant.
+     */
+    await expect(
+      page.getByRole("dialog", { name: "Level 2 to 3" }).getByRole("heading", { name: "Subclass" }),
+    ).toBeVisible();
     // It cannot be confirmed until the subclass is chosen.
     await expect(page.getByRole("button", { name: "Confirm level 3" })).toBeDisabled();
     await page.getByRole("button", { name: /^Kindled Watch/ }).click();
