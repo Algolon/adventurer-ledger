@@ -35,9 +35,10 @@ record stores equipment as the bundle choices that produced it rather than as a
 mutable inventory. A control on the sheet would therefore either write nothing or
 create a second, private store of item state that no other surface reads. The
 Inventory information architecture is built for those controls; the missing
-capability is registered as GAP-006 in [`CURRENT.md`](../CURRENT.md) rather than
-faked. The same applies to preparation: `alwaysPrepared` is a property of a
-grant and is shown as one, and nothing prepares or unprepares a spell (GAP-007).
+capability is registered as `SHEET-GAP-ITEM-STATE` in
+[`CURRENT.md`](../CURRENT.md) rather than faked. The same applies to
+preparation: `alwaysPrepared` is a property of a grant and is shown as one, and
+nothing prepares or unprepares a spell (`SHEET-GAP-SPELL-PREPARATION`).
 
 The boundary is stated as data, not only as prose, in
 [`src/ui/sheet-scope.ts`](../../src/ui/sheet-scope.ts):
@@ -153,7 +154,7 @@ there are sections.
 1. **Overview** — abilities, saving throws and skills, each group stating how
    many of it the character is proficient in. Senses and movement modes join it
    when the generic model represents them; today it represents one Speed, which
-   is already in the glance (GAP-008).
+   is already in the glance (`SHEET-GAP-SENSES-MOVEMENT`).
 2. **Actions** — attacks, actions, bonus actions, reactions, and limited-use
    resources. Every group is present only if it has something in it.
 3. **Spells** — present only when installed content declares spellcasting for one

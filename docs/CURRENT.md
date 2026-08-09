@@ -85,11 +85,12 @@ These are **open**, not delivered. A pilot will meet them.
 - **Weapon mastery is not shown against attacks.** A mastery may be selected and
   recorded, but it is not surfaced on the attack it modifies. The resolver
   attaches `masteryId` to the action; nothing resolves it to a label.
-- **Item state is read-only on the sheet (GAP-006).** Equip, unequip, attune,
-  consume and charges have no runtime operation and no durable store.
-- **Spell preparation does not exist (GAP-007).** Only a grant's own
-  `alwaysPrepared` is shown; nothing prepares or unprepares a spell, and creation
-  has no spell-selection step.
+- **Item state is read-only on the sheet** (`SHEET-GAP-ITEM-STATE`). Equip,
+  unequip, attune, consume and charges have no runtime operation and no durable
+  store.
+- **Spell preparation does not exist** (`SHEET-GAP-SPELL-PREPARATION`). Only a
+  grant's own `alwaysPrepared` is shown; nothing prepares or unprepares a spell,
+  and creation has no spell-selection step.
 - **Play-sheet rapid-tap handling remains open.** Fast repeated taps on runtime
   actions are not yet debounced or coalesced.
 - **Physical Android install, offline and storage behaviour remain unverified.**
@@ -698,7 +699,7 @@ Measured at 360 × 780, against the baseline at `9b09605`:
 | Spells, level 9 caster | 2870 px | 2384 px, with a filter |
 | Tab strip | fits at 4 and 5 | unchanged |
 
-### Inventory item state is read-only (GAP-006)
+### Inventory item state is read-only (SHEET-GAP-ITEM-STATE)
 
 Equip, unequip, attune, unattune, consume a quantity and spend a charge are all
 reversible day-to-day state that belongs on the sheet by the boundary above.
@@ -721,7 +722,7 @@ composes it over the derived bundle. Charges additionally need an item-owned
 resource, which the item schema already declares (`resourceIds`) and nothing
 reads. Character currency has no model at all and is part of the same change.
 
-### Spell preparation is a property of a grant (GAP-007)
+### Spell preparation is a property of a grant (SHEET-GAP-SPELL-PREPARATION)
 
 The generic model can state exactly one preparation fact truthfully: an
 `addSpell` effect may mark a spell `alwaysPrepared`, and the sheet now shows
@@ -734,7 +735,7 @@ The sheet therefore marks the always-prepared spells and does not imply the rest
 are unprepared. A real prepared/known distinction needs a durable per-character
 spell-state record and a preparation-capacity rule, neither of which exists.
 
-### Senses and movement modes are not modelled (GAP-008)
+### Senses and movement modes are not modelled (SHEET-GAP-SENSES-MOVEMENT)
 
 Overview would show senses and alternative movement modes if the engine
 projected them. It projects one scalar `speed`, which is already in the glance
@@ -742,7 +743,7 @@ header, and no sense at all: `RuleContext` has no senses map and no content
 schema declares one. Nothing is invented to fill the space — the Overview groups
 that exist are the ones with data behind them.
 
-### The Character workspace has no Notes or Companions (GAP-009)
+### The Character workspace has no Notes or Companions (SHEET-GAP-NOTES-COMPANIONS)
 
 `CharacterRecord` has no notes field and no companion, summon or familiar
 relation. `CharacterActionRecord` carries an optional private per-action note,
@@ -750,14 +751,29 @@ which is history rather than a character field. Both groups are absent rather
 than empty, and the progressive-disclosure structure has room for them when the
 records exist.
 
-### Gap numbering
+### Gap identifiers
 
-This repository's own register runs `GAP-003` and `GAP-005` above; `GAP-006`
-onward are the entries this pass added. Identifiers used in external handoffs
-(`GAP-006` level-scaled choice capacity, `GAP-007` unarmoured AC, `GAP-010` full
-spellcasting automation, `GAP-012` roll-rule projection) have never appeared in
-this repository and do not map onto these numbers. The gaps they name are all
-still open; they are simply not tracked here under those identifiers.
+Two naming schemes appear above, and the difference between them matters.
+
+`GAP-003` and `GAP-005` are historical numeric entries in this repository. They
+keep their numbers; nothing renumbers them.
+
+The four gaps this pass recorded — `SHEET-GAP-ITEM-STATE`,
+`SHEET-GAP-SPELL-PREPARATION`, `SHEET-GAP-SENSES-MOVEMENT` and
+`SHEET-GAP-NOTES-COMPANIONS` — use a descriptive, Sheet-scoped namespace instead
+of the next free numbers. **`GAP-###` numbers are allocated across the wider
+Runefolio programme, not within this repository**, and several of them are
+already reserved for engine gaps that have never appeared in this public tree —
+level-scaled choice capacity, unarmoured armour-class formulae, full
+spellcasting automation and roll-rule projection among them. Taking the next
+numbers that looked free from inside this repository would have given four
+different things the same names.
+
+**Do not allocate a new numeric `GAP-###` identifier from this repository
+without first checking the project-wide gap registry.** A gap found here takes a
+descriptive namespaced label — `SHEET-GAP-…` for the character sheet, and the
+same shape for any other surface — which cannot collide with a number allocated
+elsewhere and says what it is without a lookup.
 
 ## Device and installation behavior
 
