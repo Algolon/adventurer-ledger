@@ -106,12 +106,21 @@ async function finishRemainingSteps(page: Page, options: { skills: readonly stri
     Number.parseInt(/Step (\d+) of/.exec((await counter.textContent().catch(() => "")) ?? "")?.[1] ?? "0", 10);
 
   for (let attempt = 0; attempt < 16; attempt += 1) {
+    const advance = page.getByRole("button", { name: "Continue" });
+    /*
+     * Wait for a way forward, not for the step counter.
+     *
+     * The counter is how progress is *detected*, and it is briefly detached
+     * while the builder swaps one step for the next — so requiring it before
+     * acting made a transition into a failure. What has to be on screen is a
+     * control: either Continue, or the Finish that ends the sequence.
+     */
+    if (!(await became(async () => (await isShowing(advance)) || (await isShowing(finish))))) break;
     if (await isShowing(finish)) {
       await finish.click();
       return;
     }
 
-    await expect(counter).toBeVisible();
     const before = await stepNumber();
 
     for (const skill of options.skills) {
@@ -121,7 +130,6 @@ async function finishRemainingSteps(page: Page, options: { skills: readonly stri
     const subclass = page.getByRole("button", { name: options.subclass }).first();
     if (await isShowing(subclass)) await subclass.click();
 
-    const advance = page.getByRole("button", { name: "Continue" });
     // The footer re-enables only once the step's navigation is persisted, so a
     // press before that is a press against a control that is deliberately dead.
     await expect(advance).toBeEnabled();
