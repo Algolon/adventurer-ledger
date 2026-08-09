@@ -3,10 +3,13 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   BookOpen,
+  CheckCircle2,
   Download,
   FileCheck2,
   FolderLock,
   Import,
+  Info,
+  OctagonAlert,
   Save,
   Trash2,
 } from "lucide-react";
@@ -20,12 +23,27 @@ import { packCoveragePresentation } from "@/src/domain/pack-coverage";
 import { effectSchema } from "@/src/domain/content-pack";
 import { savePackEntry } from "@/src/content/save-pack-entry";
 import {
+  describePackRemoval,
+  describeSourceRemoval,
+  describeSourceSaveFailure,
+  validateSourceForm,
+  type SourceField,
+  type SourceSaveProblem,
+} from "@/src/content/source-management";
+import {
   createContentExport,
   RestrictedExportConfirmationError,
 } from "@/src/export/content-export";
+import {
+  summariseImportIssues,
+  summariseImportOutcome,
+  type ImportIssueSummary,
+  type ImportOutcomeSummary,
+} from "@/src/import/issue-presentation";
 import type { InstallPreview, InstallVerdict } from "@/src/services/content-install-service";
 import { useAsync, useServices } from "@/src/ui/services-context";
 import { db } from "@/src/storage/db";
+import { isContentOperationError } from "@/src/storage/content-operation-error";
 import {
   ContentEntryRepository,
   ContentPackRepository,
@@ -36,10 +54,150 @@ const sources = new SourceRepository(db),
   packs = new ContentPackRepository(db),
   entries = new ContentEntryRepository(db);
 const now = () => new Date().toISOString();
+/**
+ * The last resort, and only that.
+ *
+ * It used to be the first and only answer to every failure in this file. A
+ * refusal that knows its own reason now says it — see `describeSourceSaveFailure`
+ * — and this remains for the genuinely unclassified case, where the honest thing
+ * to report is that the write did not happen.
+ */
 const safeMessage = (error: unknown) =>
   error instanceof RestrictedExportConfirmationError
     ? error.message
-    : "The operation could not be completed. Check IDs, versions, and required fields.";
+    : isContentOperationError(error)
+      ? describeSourceSaveFailure(error).message
+      : "The operation could not be completed. Check IDs, versions, and required fields.";
+
+/**
+ * Severity, said in words as well as in colour.
+ *
+ * WCAG aside, the pilot's screen is the argument: every issue row carried the
+ * danger border, so colour was carrying the entire distinction and carrying it
+ * wrongly. A badge that reads "Blocking" or "Review" survives being greyscale,
+ * being read aloud, and being skimmed.
+ */
+function SeverityBadge({ severity }: { severity: "error" | "warning" }) {
+  return severity === "error" ? (
+    <span className="issuebadge blocking">
+      <OctagonAlert aria-hidden="true" />
+      Blocking
+    </span>
+  ) : (
+    <span className="issuebadge advisory">
+      <Info aria-hidden="true" />
+      Review
+    </span>
+  );
+}
+
+/**
+ * Every issue the import raised, one row per *kind*.
+ *
+ * This is the fix for the wall of text. A pack with 480 manually adjudicated
+ * effects produced 480 rows; it now produces one, which says 480 and opens on
+ * demand. Blocking groups start open because they are the reason nothing was
+ * written; advisories start closed because nothing is being asked of the user.
+ * Nothing is dropped: each group keeps its affected records, names how many it
+ * is not listing, and still shows its machine code for reporting.
+ */
+function ImportIssueGroups({ summary }: { summary: ImportIssueSummary }) {
+  if (!summary.groups.length) return null;
+  return (
+    <div className="issuegroups">
+      {summary.groups.map(group => (
+        <details
+          className={`issuegroup ${group.severity === "error" ? "blocking" : "advisory"}`}
+          key={group.code}
+          open={group.severity === "error"}
+        >
+          <summary>
+            <SeverityBadge severity={group.severity} />
+            <span className="issuegroup-label">{group.label}</span>
+            <span className="issuegroup-count">{group.count}</span>
+          </summary>
+          <p>{group.explanation}</p>
+          {group.listedMessages.length ? (
+            <>
+              <p className="m2-muted issuegroup-recordhead">
+                {group.recordIds.length === 1 ? "Affected record" : `Affected records (${group.recordIds.length})`}
+              </p>
+              {/*
+               * The pipeline's own sentences, which is where the diagnosis
+               * lives: a version refusal names both versions, a revision
+               * conflict names both revisions, and a label cannot say either.
+               * Grouping moves them behind a disclosure; it does not discard
+               * them.
+               */}
+              <ul className="issuegroup-records">
+                {group.listedMessages.map(message => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+              {group.hiddenMessageCount ? (
+                <p className="m2-muted">and {group.hiddenMessageCount} more of the same kind</p>
+              ) : null}
+            </>
+          ) : null}
+          <p className="m2-muted issuegroup-code">{group.code}</p>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One number and what it counts.
+ *
+ * Tone rides on a data attribute rather than a second class, so the class name
+ * stays a literal in the markup — which is what the stylesheet audit reads to
+ * prove no rule here has gone unreachable — and so a test can assert the tone
+ * without asserting a class list.
+ */
+function CountCell({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "blocking" | "advisory";
+}) {
+  return (
+    <div className="countcell" data-tone={tone}>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * What the import did, answered before anything is asked of the reader.
+ *
+ * Outcome, then the numbers, then detail on demand. The old panel had this
+ * exactly inverted: the detail was the page, and the outcome was a sentence
+ * somewhere under it.
+ */
+function ImportResult({ outcome }: { outcome: ImportOutcomeSummary }) {
+  const Icon = outcome.tone === "failure" ? OctagonAlert : outcome.tone === "review" ? Info : CheckCircle2;
+  return (
+    <section className="importresult" data-tone={outcome.tone} aria-labelledby="import-result-headline">
+      <h4 id="import-result-headline">
+        <Icon aria-hidden="true" />
+        {outcome.headline}
+      </h4>
+      <p>{outcome.detail}</p>
+      <dl className="countgrid">
+        <CountCell label="Added" value={outcome.counts.added} />
+        <CountCell label="Updated" value={outcome.counts.updated} />
+        <CountCell label="Unchanged" value={outcome.counts.unchanged} />
+        <CountCell label="Errors" value={outcome.issues.errorCount} tone="blocking" />
+        <CountCell label="Need review" value={outcome.issues.warningCount} tone="advisory" />
+      </dl>
+      <ImportIssueGroups summary={outcome.issues} />
+    </section>
+  );
+}
 
 export function ContentWorkspace({ view }: { view: string }) {
   if (view === "Sources") return <SourcesPanel />;
@@ -97,16 +255,43 @@ function SourcesPanel() {
   const listState = useAsync(() => sources.list(), []);
   const list = listState.status === "ready" ? listState.value : [];
   const [editing, setEditing] = useState<string>(),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    /**
+     * The reason a save was refused, and which control owns it.
+     *
+     * Held as a value rather than a sentence so the message can be printed
+     * beside its own field and referenced by `aria-describedby`, instead of
+     * being one unattached line at the bottom of the form.
+     */
+    [problem, setProblem] = useState<SourceSaveProblem>(),
+    /** The row a removal is being confirmed for, with what removal would mean. */
+    [removing, setRemoving] = useState<{ source: Source; removal: ReturnType<typeof describeSourceRemoval> }>();
   const [form, setForm] = useState({
     id: "source:synthetic-local",
     name: "Synthetic local source",
     abbreviation: "SYN",
     version: "1.0.0",
   });
+  /** True when this field is the one the current refusal is about. */
+  const faulted = (field: SourceField) => problem?.field === field;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setMessage("");
+    setProblem(undefined);
+    /*
+     * Checked against installed state before the write, so the overwhelmingly
+     * likely failure — pressing Save again on the ID this form just saved and
+     * then restored as its default — is named as a collision on the ID field
+     * rather than surfacing as an unexplained persistence error.
+     */
+    const check = validateSourceForm(form, {
+      mode: editing ? "edit" : "create",
+      existingIds: list.map(source => source.id),
+    });
+    if (!check.ok) {
+      setProblem(check.problem);
+      return;
+    }
     try {
       if (editing)
         await sources.update(editing, {
@@ -139,7 +324,34 @@ function SourcesPanel() {
       setMessage("Source saved locally.");
       refresh();
     } catch (error) {
-      setMessage(safeMessage(error));
+      // A refusal that reached the database still knows why; it is no longer
+      // flattened into one sentence on the way back out.
+      setProblem(describeSourceSaveFailure(error));
+    }
+  };
+  /**
+   * What removing this source would do, read before anything is offered.
+   *
+   * The dependency count comes from the same query the deletion refuses on, so
+   * "cannot be removed" and "can be removed" are decided by one fact, and the
+   * user is told which of the two they are looking at before they confirm.
+   */
+  const askToRemove = async (source: Source) => {
+    setMessage("");
+    setProblem(undefined);
+    const referencingEntryCount = await sources.dependentEntryCount(source.id);
+    setRemoving({ source, removal: describeSourceRemoval({ sourceName: source.name, sourceId: source.id, referencingEntryCount }) });
+  };
+  const confirmRemove = async () => {
+    if (!removing || removing.removal.kind !== "removable") return;
+    try {
+      await sources.delete(removing.source.id);
+      setMessage(`${removing.source.name} was removed from this device.`);
+      setRemoving(undefined);
+      refresh();
+    } catch (error) {
+      setProblem(describeSourceSaveFailure(error));
+      setRemoving(undefined);
     }
   };
   return (
@@ -156,6 +368,8 @@ function SourcesPanel() {
             value={form.id}
             disabled={Boolean(editing)}
             onChange={(event) => setForm({ ...form, id: event.target.value })}
+            aria-invalid={faulted("id") || undefined}
+            aria-describedby={faulted("id") ? "source-problem" : undefined}
             required
           />
         </label>
@@ -164,6 +378,8 @@ function SourcesPanel() {
           <input
             value={form.name}
             onChange={(event) => setForm({ ...form, name: event.target.value })}
+            aria-invalid={faulted("name") || undefined}
+            aria-describedby={faulted("name") ? "source-problem" : undefined}
             required
           />
         </label>
@@ -175,6 +391,8 @@ function SourcesPanel() {
               onChange={(event) =>
                 setForm({ ...form, abbreviation: event.target.value })
               }
+              aria-invalid={faulted("abbreviation") || undefined}
+              aria-describedby={faulted("abbreviation") ? "source-problem" : undefined}
               required
             />
           </label>
@@ -185,6 +403,8 @@ function SourcesPanel() {
               onChange={(event) =>
                 setForm({ ...form, version: event.target.value })
               }
+              aria-invalid={faulted("version") || undefined}
+              aria-describedby={faulted("version") ? "source-problem" : undefined}
               required
             />
           </label>
@@ -193,6 +413,17 @@ function SourcesPanel() {
           <Save />
           Save source
         </button>
+        {/*
+         * The reason, next to the control that owns it. It is a live region
+         * because it appears in response to a press, and it is announced as an
+         * alert because it is the answer to that press.
+         */}
+        {problem && (
+          <p role="alert" id="source-problem" className="formproblem">
+            <OctagonAlert aria-hidden="true" />
+            {problem.message}
+          </p>
+        )}
         {message && (
           <p role="status" className="formmessage">
             {message}
@@ -216,6 +447,7 @@ function SourcesPanel() {
                 className="btn secondary"
                 onClick={() => {
                   setEditing(source.id);
+                  setProblem(undefined);
                   setForm({
                     id: source.id,
                     name: source.name,
@@ -226,17 +458,15 @@ function SourcesPanel() {
               >
                 Edit
               </button>
+              {/*
+               * Removal asks first. The row control is a request to *see* what
+               * removal means, not the removal itself, so the destructive act
+               * is always preceded by the sentence describing it.
+               */}
               <button
                 className="icon danger"
-                aria-label={`Delete ${source.name}`}
-                onClick={async () => {
-                  try {
-                    await sources.delete(source.id);
-                    refresh();
-                  } catch (error) {
-                    setMessage(safeMessage(error));
-                  }
-                }}
+                aria-label={`Remove ${source.name}`}
+                onClick={() => void askToRemove(source)}
               >
                 <Trash2 />
               </button>
@@ -244,6 +474,23 @@ function SourcesPanel() {
           ))
         )}
       </div>
+      {removing && (
+        <div className="card removalconfirm" role="dialog" aria-modal="false" aria-labelledby="source-removal-title">
+          <h3 id="source-removal-title">{removing.removal.title}</h3>
+          <p>{removing.removal.explanation}</p>
+          <div className="actions">
+            {removing.removal.kind === "removable" ? (
+              <button className="btn danger" onClick={confirmRemove}>
+                <Trash2 />
+                Remove this source
+              </button>
+            ) : null}
+            <button className="btn secondary" onClick={() => setRemoving(undefined)}>
+              {removing.removal.kind === "removable" ? "Keep it" : "Close"}
+            </button>
+          </div>
+        </div>
+      )}
       <Boundary />
     </section>
   );
@@ -320,7 +567,9 @@ function PackEditor() {
   const list = listState.status === "ready" ? listState.value : [];
   const [form, setForm] = useState(initialPack),
     [editing, setEditing] = useState<string>(),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    /** The pack a removal is being confirmed for, with what it would take. */
+    [removing, setRemoving] = useState<ContentPack>();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setMessage("");
@@ -588,10 +837,10 @@ function PackEditor() {
               </button>
               <button
                 className="icon danger"
-                aria-label={`Delete ${pack.name}`}
-                onClick={async () => {
-                  await packs.delete(pack.id);
-                  refresh();
+                aria-label={`Remove ${pack.name}`}
+                onClick={() => {
+                  setMessage("");
+                  setRemoving(pack);
                 }}
               >
                 <Trash2 />
@@ -600,6 +849,35 @@ function PackEditor() {
           ))
         )}
       </div>
+      {removing && (
+        <div className="card removalconfirm" role="dialog" aria-modal="false" aria-labelledby="pack-removal-title">
+          <h3 id="pack-removal-title">
+            {describePackRemoval({ packName: removing.name, entryCount: removing.entryIds.length }).title}
+          </h3>
+          <p>{describePackRemoval({ packName: removing.name, entryCount: removing.entryIds.length }).explanation}</p>
+          <div className="actions">
+            <button
+              className="btn danger"
+              onClick={async () => {
+                try {
+                  await packs.delete(removing.id);
+                  setMessage(`${removing.name} was removed from the installed list.`);
+                } catch (error) {
+                  setMessage(safeMessage(error));
+                }
+                setRemoving(undefined);
+                refresh();
+              }}
+            >
+              <Trash2 />
+              Remove this pack
+            </button>
+            <button className="btn secondary" onClick={() => setRemoving(undefined)}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
       <Boundary />
     </section>
   );
@@ -648,8 +926,25 @@ function ImportExportPanel() {
      * a large pack, during which the button looked idle — so a second press was
      * the natural response, and a second press is a second import attempt.
      */
-    [importing, setImporting] = useState(false);
+    [importing, setImporting] = useState(false),
+    /*
+     * Checking a file is the other operation that takes visible time: schema,
+     * migration, duplicate, reference and revision checks all run here, over
+     * every entry in the file. It looked idle for exactly as long as the write
+     * did, and for the same reason.
+     */
+    [previewing, setPreviewing] = useState(false),
+    /**
+     * What the last completed import did, kept as its own state.
+     *
+     * It outlives the preview deliberately: `clearImport` empties the input the
+     * moment a write lands, and the result is the one thing that must still be
+     * on screen afterwards.
+     */
+    [result, setResult] = useState<ImportOutcomeSummary>();
   const fileRef = useRef<HTMLInputElement>(null);
+  /** True while either long operation is in flight; the panel is busy then. */
+  const busy = previewing || importing;
 
   /**
    * The preview, but only while it still describes what is in the input.
@@ -680,16 +975,30 @@ function ImportExportPanel() {
   // revalidates, and always through the service, so no component installs
   // content by writing tables itself.
   const inspect = async () => {
-    setMessage("");
+    if (busy) return;
+    setResult(undefined);
+    // Acknowledged before the work starts, not after it finishes: this is the
+    // announcement, and the only honest thing to say about duration is that it
+    // depends on the file.
+    setMessage("Checking this file. Large packs take a moment.");
+    setPreviewing(true);
     const source = text;
     try {
-      const result = await install.preview([source]);
-      setPreview({ source, result });
+      const previewed = await install.preview([source]);
+      setPreview({ source, result: previewed });
+      const summary = summariseImportIssues(previewed.issues);
+      setMessage(
+        previewed.canImport
+          ? `File checked. ${previewed.set.plan.entries.add.length + previewed.set.plan.entries.update.length} entries would be written, ${summary.errorCount} errors, ${summary.warningCount} to review.`
+          : `File checked and cannot be imported as it stands: ${summary.errorCount} blocking ${summary.errorCount === 1 ? "problem" : "problems"}.`,
+      );
     } catch (error) {
       // A preview that could not be produced must not leave the previous one
       // standing: the input has already moved on from whatever it described.
       setPreview(undefined);
       setMessage(safeMessage(error));
+    } finally {
+      setPreviewing(false);
     }
   };
   /**
@@ -698,7 +1007,11 @@ function ImportExportPanel() {
    * lands in the same transaction: a rolled-back import leaves no profile behind.
    */
   const commit = async () => {
-    if (!currentPreview || importing) return;
+    if (!currentPreview || busy) return;
+    setResult(undefined);
+    // Said before the transaction opens, so the acknowledgement is not waiting
+    // behind the work it acknowledges.
+    setMessage("Import started. Writing this pack in one transaction; large packs take a moment.");
     setImporting(true);
     try {
       await runCommit(currentPreview);
@@ -715,21 +1028,46 @@ function ImportExportPanel() {
       ...(requested.length === 1 ? { activateRulesetId: creatable[0].rulesetId } : {}),
     });
     if (outcome.status !== "ok") {
+      const refused = summariseImportOutcome({
+        plan: currentPreview.set.plan,
+        issues: currentPreview.issues,
+        applied: false,
+      });
+      setResult(refused);
       setMessage("Import was not applied. No content and no ruleset profile were kept.");
       return;
     }
+    /*
+     * The result, computed from the plan that was actually written and the
+     * issues that were actually raised. It is set before the input is cleared,
+     * because clearing the input discards the preview it came from.
+     */
+    const summary = summariseImportOutcome({
+      plan: currentPreview.set.plan,
+      issues: currentPreview.issues,
+      applied: true,
+    });
+    setResult(summary);
     /*
      * An update creates no profile and must not therefore report that nothing
      * happened to the rulesets. The existing profile advanced to the pack's new
      * membership in the same transaction, and that is the fact the user needs:
      * the content they just added is reachable from the ruleset they already use.
      */
+    /*
+     * One live region, carrying both facts in the order they matter: what the
+     * import did, then what became reachable because of it. A screen reader
+     * hears the counts here because the visual summary conveys them as a row of
+     * small numbers, which reads as nothing at all.
+     */
     setMessage(
-      outcome.result.createdRulesetIds.length
-        ? `Import completed atomically. ${outcome.result.createdRulesetIds.length} ruleset profile(s) created and ready to select.`
-        : outcome.result.updatedRulesetIds.length
-          ? `Import completed atomically. ${outcome.result.updatedRulesetIds.length} existing ruleset(s) updated to include this pack's current entries.`
-          : "Import completed atomically. No ruleset profile was created, so this content is only reachable through an existing ruleset.",
+      `${summary.announcement} ${
+        outcome.result.createdRulesetIds.length
+          ? `Import completed atomically. ${outcome.result.createdRulesetIds.length} ruleset profile(s) created and ready to select.`
+          : outcome.result.updatedRulesetIds.length
+            ? `Import completed atomically. ${outcome.result.updatedRulesetIds.length} existing ruleset(s) updated to include this pack's current entries.`
+            : "Import completed atomically. No ruleset profile was created, so this content is only reachable through an existing ruleset."
+      }`,
     );
     clearImport();
     refresh();
@@ -791,10 +1129,31 @@ function ImportExportPanel() {
             spellCheck={false}
           />
         </label>
-        <button className="btn primary" onClick={inspect} disabled={!text}>
+        <button className="btn primary" onClick={inspect} disabled={!text || busy} aria-busy={previewing || undefined}>
           <Import />
-          Preview import
+          {previewing ? "Checking file…" : "Preview import"}
         </button>
+        {/*
+         * Indeterminate on purpose. The pipeline reports no fraction of the way
+         * through — the write is one transaction — and inventing a percentage
+         * would be a claim about progress nothing here can make. A moving bar
+         * and a sentence saying what is happening is the truthful version.
+         */}
+        {busy ? (
+          <div className="importprogress">
+            <div
+              className="progressbar"
+              role="progressbar"
+              aria-label={previewing ? "Checking the file" : "Importing content"}
+            />
+            <p className="m2-muted">
+              {previewing
+                ? "Checking schema, references, and revisions against what is installed."
+                : "Writing this pack in one transaction. It will be applied in full or not at all."}
+            </p>
+          </div>
+        ) : null}
+        {result ? <ImportResult outcome={result} /> : null}
         {currentPreview && (
           <div className="preview" aria-label="Import preview">
             <h4>{VERDICT_HEADINGS[currentPreview.verdict]}</h4>
@@ -886,19 +1245,17 @@ function ImportExportPanel() {
               </label>
             )}
             {/*
-             * The message leads and the code follows in the small print. The
-             * code is still needed to report a problem precisely, but a user
-             * reading `ENTRY_REVISION_CONFLICT` first learns nothing from it.
+             * Grouped, not enumerated. Rendering one row per issue is what made
+             * a healthy 600-entry pack produce a page of red: the file raises a
+             * notice per adjudicated effect, and there are hundreds of them.
+             * They are the same *kind* of notice, so they are one row that says
+             * how many, opens on demand, and keeps its records inside.
              */}
-            {currentPreview.issues.map((issue, index) => (
-              <p className="issue" key={`${issue.code}-${index}`}>
-                {issue.message} <small className="m2-muted">{issue.code}</small>
-              </p>
-            ))}
+            <ImportIssueGroups summary={summariseImportIssues([...currentPreview.issues])} />
             <div className="actions">
               <button
                 className="btn primary"
-                disabled={!currentPreview.canImport || importing}
+                disabled={!currentPreview.canImport || busy}
                 aria-busy={importing || undefined}
                 onClick={commit}
               >
@@ -907,8 +1264,10 @@ function ImportExportPanel() {
               </button>
               <button
                 className="btn secondary"
+                disabled={busy}
                 onClick={() => {
                   clearImport();
+                  setResult(undefined);
                   setMessage("Import cancelled. The database was not changed.");
                 }}
               >

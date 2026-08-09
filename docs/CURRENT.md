@@ -827,6 +827,85 @@ M2.2 extends the same contracts to levels 3–20 of the synthetic path, adds sub
 
 Deferred risks include browser-profile storage security, unencrypted JSON exports, resumable imports, durable backup/recovery, prepared/known spell merging, pact-slot derivation, unusual spell and monster grammars, real errata pilots, browser-specific storage eviction behavior, and performance profiling on low-end physical phones.
 
+## Settings and content management, after the first private-content pilot
+
+The first human pilot of a private pack found its problems in Settings, not in
+the engine. A substantial import produced hundreds of `EFFECT_REVIEW_REQUIRED`
+rows, each given the same error-like prominence, in one unbroken column. The
+import had in fact succeeded and every one of those notices was non-blocking,
+but nothing on the screen said so, and the honest reading of it was that the app
+was broken. Beside that: no useful feedback while a long import ran, one
+unexplained sentence when Save source failed, and no way to tell what could be
+removed or what removing it would do.
+
+**Severity was already true; only its presentation was not.** Every import issue
+the pipeline raises carries `severity: "error" | "warning"`, and `canImport` is
+decided from the errors alone. `EFFECT_REVIEW_REQUIRED` has always been a
+warning: it marks an entry whose effect the rules engine deliberately does not
+apply on its own, which is a decision for the table, not a defect in the file.
+What the panel did was render `issues.map(...)` — one paragraph per issue, every
+paragraph from the danger palette. The fix is presentation, and it changes
+nothing about what may be imported.
+
+**Outcome first, then counts, then detail on demand.** `summariseImportOutcome`
+in [`../src/import/issue-presentation.ts`](../src/import/issue-presentation.ts)
+turns a plan and an issue list into one headline — completed, completed with
+review, or not applied — plus added, updated, unchanged, error and review counts.
+`summariseImportIssues` collapses the issue list into one row per issue *code*,
+so the primary surface is bounded by the number of kinds of problem rather than
+by the number of records. A 600-entry pack raising 486 notices produces two rows.
+Nothing is dropped: each row states its count, lists a bounded sample of the
+records it touches, says how many more there are, and keeps its machine code.
+Blocking rows sort first and open by default; advisories sort after and stay
+closed, because nothing is being asked of the user.
+
+**Severity is never carried by colour alone.** Each row leads with a badge
+reading "Blocking" or "Review", so the distinction survives greyscale, a screen
+reader, and a glance.
+
+**A long import says that it started.** Both the check and the write acknowledge
+themselves before they begin, disable their control while they run — a second
+press was a second run — and show an indeterminate progress bar. It is
+indeterminate on purpose: the write is one transaction and the pipeline reports
+no fraction of the way through, so a percentage would be a claim nothing here
+can make. The accompanying sentence says what is happening instead.
+
+**A refusal says which refusal it is.** Every content-workspace failure used to
+become "The operation could not be completed. Check IDs, versions, and required
+fields." — the same sentence for a duplicate ID, a source other entries depend
+on, and a genuine write failure. The repositories now throw a typed
+`ContentOperationError` carrying a code and a stable record ID, and
+[`../src/content/source-management.ts`](../src/content/source-management.ts)
+turns that into a specific message attached to the field it is about. The form is
+also checked before the write, which catches the pilot's actual case: the form
+reopens holding the ID it just saved, so the next press is a duplicate-ID
+collision. Nothing was relaxed to make Save succeed — a duplicate ID is still
+refused, and now says so.
+
+**Removal explains itself before it happens.** A source is checked for dependent
+entries first, so "cannot be removed, and here is what to do about it" and "can
+be removed, and this is what that means" are different answers rather than the
+same failed click. Removing a pack states what goes with it. Destructive controls
+open an explanation rather than acting, and the explanation carries one
+destructive button rather than being an afterthought beneath one.
+
+**Settings groups content by its lifecycle.** What is installed, what activates
+it, where it came from, and how to add more were under three unrelated headings;
+they are now one *Local content* group in that order, each row carrying a line
+saying which question it answers. Row labels are unchanged. Device and app
+settings were not touched.
+
+The stress case is public and synthetic:
+[`../tests/fixtures/large-import-fixture.ts`](../tests/fixtures/large-import-fixture.ts)
+generates numbered drills for an invented observatory — no published structure —
+sized to produce many successful entries, many repeated non-blocking notices, a
+one-entry additive update, and, on request, one genuine blocking error.
+
+Nothing in this pass touched caster spell selection, prepared-spell counts,
+maximum spell level, or spell-slot logic. A level-5 prepared caster filling its
+whole allowance from level-3 spells is correct: the allowance is a total, not a
+per-level cap, and spells above the accessible maximum level are not offered.
+
 ## Working conventions
 
 See [`../AGENTS.md`](../AGENTS.md). Update this file when the implemented state or next milestone changes.

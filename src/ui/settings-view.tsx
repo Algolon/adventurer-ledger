@@ -29,24 +29,62 @@ type SettingsPage =
   | "offline"
   | "updates";
 
-const GROUPS: readonly { group: string; items: readonly { id: SettingsPage; label: string; icon: React.ReactNode }[] }[] = [
+/**
+ * Settings, grouped so that content has a visible lifecycle.
+ *
+ * The pilot could not work out what it owned or how to get rid of it, and the
+ * grouping was part of why: what is installed sat under "Content", what makes it
+ * reachable under "Rules", and how it got here under "Data & transfer" beside
+ * character transfer and device backups. Three unrelated headings for one
+ * question.
+ *
+ * They are now one group, ordered as the lifecycle runs — what you have, what
+ * activates it, where it came from, how to add more — with a line under each
+ * saying which of those it answers. Labels are unchanged: they are how every
+ * other surface, and every test, names these destinations. Device and app
+ * settings are untouched; this is not a Settings redesign.
+ */
+const GROUPS: readonly {
+  group: string;
+  /** What this group is for, when the heading alone does not say. */
+  blurb?: string;
+  items: readonly { id: SettingsPage; label: string; hint?: string; icon: React.ReactNode }[];
+}[] = [
   {
-    group: "Content",
+    group: "Local content",
+    blurb: "Everything the app can build a character from, and how it got onto this device.",
     items: [
-      { id: "packs", label: "Content packs", icon: <Archive aria-hidden="true" /> },
-      { id: "sources", label: "Sources", icon: <ScrollText aria-hidden="true" /> },
+      {
+        id: "packs",
+        label: "Content packs",
+        hint: "What is installed, and removing it",
+        icon: <Archive aria-hidden="true" />,
+      },
+      {
+        id: "rulesets",
+        label: "Rulesets",
+        hint: "Which installed content a new character can reach",
+        icon: <ShieldCheck aria-hidden="true" />,
+      },
+      {
+        id: "sources",
+        label: "Sources",
+        hint: "Where installed entries say they came from",
+        icon: <ScrollText aria-hidden="true" />,
+      },
+      {
+        id: "imports-exports",
+        label: "Imports and exports",
+        hint: "Add or update a pack, or export what you have",
+        icon: <Download aria-hidden="true" />,
+      },
     ],
   },
   {
-    group: "Rules",
-    items: [{ id: "rulesets", label: "Rulesets", icon: <ShieldCheck aria-hidden="true" /> }],
-  },
-  {
-    group: "Data & transfer",
+    group: "Characters & data",
     items: [
-      { id: "transfer", label: "Transfer", icon: <Import aria-hidden="true" /> },
-      { id: "imports-exports", label: "Imports and exports", icon: <Download aria-hidden="true" /> },
-      { id: "backups", label: "Backups", icon: <FolderLock aria-hidden="true" /> },
+      { id: "transfer", label: "Transfer", hint: "Move one character to another device", icon: <Import aria-hidden="true" /> },
+      { id: "backups", label: "Backups", hint: "Keeping a copy of your own data", icon: <FolderLock aria-hidden="true" /> },
     ],
   },
   {
@@ -58,6 +96,9 @@ const GROUPS: readonly { group: string; items: readonly { id: SettingsPage; labe
     ],
   },
 ];
+
+/** A group heading's element ID: lower-case, no spaces, no punctuation. */
+const groupHeadingId = (group: string) => `settings-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 
 export function SettingsView({ onOpenCharacter }: { onOpenCharacter(id: string): void }) {
   const [page, setPage] = useState<SettingsPage>("overview");
@@ -76,19 +117,40 @@ export function SettingsView({ onOpenCharacter }: { onOpenCharacter(id: string):
     <section className="m2-page">
       <h2 className="m2-page-title">Settings</h2>
       {GROUPS.map(group => (
-        <section key={group.group} aria-labelledby={`group-${group.group}`}>
-          <h3 className="m2-section-title" id={`group-${group.group}`}>
+        /*
+         * The heading's ID is slugified. `aria-labelledby` is a whitespace-
+         * separated list of IDs, so "group-Device & app" named three elements
+         * that do not exist and the section went unlabelled — which is exactly
+         * the grouping this pass is relying on to be legible.
+         */
+        <section key={group.group} aria-labelledby={groupHeadingId(group.group)}>
+          <h3 className="m2-section-title" id={groupHeadingId(group.group)}>
             {group.group}
           </h3>
+          {group.blurb ? <p className="m2-muted">{group.blurb}</p> : null}
           <ul className="m2-list">
             {group.items.map(item => (
               <li key={item.id} className="m2-row">
-                <button type="button" className="m2-row-primary" onClick={() => setPage(item.id)}>
+                {/*
+                 * The destination's name *is* its label; the hint under it is
+                 * orientation, not part of what the control is called. Naming
+                 * the button explicitly keeps "Sources" the accessible name
+                 * rather than "Sources Where installed entries say they came
+                 * from", which is what every other surface, and every test,
+                 * calls this row.
+                 */}
+                <button
+                  type="button"
+                  className="m2-row-primary"
+                  aria-label={item.label}
+                  onClick={() => setPage(item.id)}
+                >
                   <span className="m2-monogram" aria-hidden="true">
                     {item.icon}
                   </span>
                   <span className="m2-row-text">
                     <b>{item.label}</b>
+                    {item.hint ? <small>{item.hint}</small> : null}
                   </span>
                 </button>
               </li>

@@ -356,3 +356,316 @@
     flex-direction: column;
   }
 }
+
+/*
+ * Import result, grouped issues, and destructive confirmations.
+ *
+ * The pilot's screen was one long column of `.issue` rows: every issue got a
+ * paragraph, and every paragraph got the danger palette, so a pack whose entries
+ * merely want a ruling at the table looked exactly like a pack that failed to
+ * import. What follows is the corrected hierarchy — outcome, then counts, then
+ * detail behind a disclosure — and, underneath it, a real visual distinction
+ * between something that stopped the import and something that did not.
+ *
+ * Severity is never carried by colour alone: each row leads with a badge whose
+ * text says "Blocking" or "Review", so the distinction survives greyscale,
+ * high-contrast mode, and being read aloud.
+ */
+.importresult {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-soft);
+  border-left: 4px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--inset);
+}
+
+.importresult[data-tone="success"] {
+  border-left-color: var(--good-border);
+  background: var(--good-bg);
+}
+
+.importresult[data-tone="review"] {
+  border-left-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.importresult[data-tone="failure"] {
+  border-left-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.importresult h4 {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font: 600 21px var(--display);
+}
+
+.importresult h4 svg {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+}
+
+.importresult > p {
+  margin: 0;
+}
+
+/*
+ * The counts. Auto-fit rather than a fixed track count: at 320 px this is two
+ * columns, and at desktop width it is five, without either end needing its own
+ * breakpoint.
+ */
+.countgrid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+}
+
+.countcell {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.countcell dt {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.countcell dd {
+  margin: 0;
+  font: 600 22px var(--display);
+}
+
+.countcell[data-tone="blocking"] dd {
+  color: var(--danger);
+}
+
+.countcell[data-tone="advisory"] dd {
+  color: var(--warn);
+}
+
+.issuegroups {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+/*
+ * One row per kind of issue. `details` is deliberate: it exposes its own
+ * expanded state to assistive technology and is keyboard-operable without any
+ * script, which a div with a click handler is not.
+ */
+.issuegroup {
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.issuegroup.blocking {
+  border-left-color: var(--danger-border);
+}
+
+.issuegroup.advisory {
+  border-left-color: var(--warn-border);
+}
+
+.issuegroup > summary {
+  min-height: 44px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.issuegroup-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.issuegroup-count {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.issuegroup > :not(summary) {
+  margin: 0 10px 10px;
+}
+
+.issuegroup-recordhead {
+  font-size: 13px;
+}
+
+/*
+ * Record IDs are long, unbroken and machine-generated, so they wrap rather than
+ * set a width. This list is bounded in the markup as well: the presentation
+ * layer lists a fixed sample and reports the rest as a number.
+ */
+.issuegroup-records {
+  min-width: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.issuegroup-code {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.issuebadge {
+  flex: none;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.issuebadge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.issuebadge.blocking {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+.issuebadge.advisory {
+  color: var(--warn);
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+/*
+ * An indeterminate bar, because the pipeline reports no fraction of the way
+ * through: the write is one transaction. It animates only for users who have
+ * not asked it not to; the accompanying sentence carries the meaning either way.
+ */
+.importprogress {
+  display: grid;
+  gap: 8px;
+}
+
+.progressbar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--inset);
+  overflow: hidden;
+}
+
+.progressbar::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brass);
+  animation: progress-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressbar::after {
+    width: 100%;
+    animation: none;
+  }
+}
+
+/* A refusal, next to the control it refuses. */
+.formproblem {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px;
+  border-left: 4px solid var(--danger-border);
+  color: var(--ink);
+  background: var(--danger-bg);
+}
+
+.formproblem svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+/*
+ * The consequence, before the act. Deliberately not styled as a wall of danger:
+ * the destructive control is one button inside an explanation, rather than the
+ * explanation being an afterthought under a large red button.
+ */
+.removalconfirm {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-left: 4px solid var(--warn-border);
+}
+
+.removalconfirm h3 {
+  margin: 0;
+}
+
+.removalconfirm p {
+  margin: 0;
+}
+
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+@media (max-width: 720px) {
+  /*
+   * Stacked, full-width, and each above the 44 px target. A confirmation whose
+   * two controls share a row at 320 px gives each about 130 px and puts the
+   * destructive one under the thumb by accident.
+   */
+  .removalconfirm .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .removalconfirm .actions .btn {
+    width: 100%;
+  }
+}
