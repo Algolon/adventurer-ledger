@@ -58,6 +58,7 @@ import {
   planSpellAvailability,
   type SpellAvailability,
 } from "@/src/services/spell-availability";
+import { planSpellSelections, type RequiredSpellSelection } from "@/src/services/spell-selection";
 import { BUILDER_STEPS, type BuilderStepId } from "@/src/services/builder-steps";
 import type { ServiceIssue } from "@/src/services/contracts";
 
@@ -199,6 +200,16 @@ export interface BuildPlan {
    * spell, which is every non-caster.
    */
   spellAvailability: SpellAvailability;
+  /**
+   * The spell decisions the activated content owes the player.
+   *
+   * Distinct from `spellAvailability` in the way permission is distinct from
+   * obligation: availability is the domain a selection draws from, and this is
+   * what the content says must be drawn. Empty for a build whose class declares
+   * no selections, which includes every non-caster and a caster whose content
+   * grants its spells outright.
+   */
+  spellSelections: readonly RequiredSpellSelection[];
   /** Highest starting level the installed content honestly supports. */
   maxLevel: number;
   /** False when the class defines no progression row for the draft's level. */
@@ -520,6 +531,13 @@ export function planBuild(
   const spellAvailability = manualSheet
     ? EMPTY_SPELL_AVAILABILITY
     : planSpellAvailability(activation, entries, build);
+  /*
+   * The obligations that domain produces, planned from the availability above
+   * rather than from a second expansion. Selection planning is set membership
+   * over an already-computed projection, so a caster with a four-spell list and
+   * one with a four-hundred-spell list cost the same per selection.
+   */
+  const spellSelections = manualSheet ? [] : planSpellSelections(build, entries, spellAvailability);
 
   const stepIssues: Record<BuilderStepId, ServiceIssue[]> = {
     start: [],
@@ -551,10 +569,20 @@ export function planBuild(
     !build.classId ||
     equipmentGrants.length > 0 ||
     equipmentChoices.length > 0;
+  /*
+   * Spells apply when the class reaches spell content *or* owes a selection.
+   *
+   * The second half matters because the two facts can come from different
+   * entries: a class may declare its obligations in a spellcasting rule while a
+   * feature is what actually grants the list. Gating on the class's own effects
+   * alone would then hide the step that owns a decision the planner is about to
+   * report, which is the one arrangement guided creation must never produce.
+   */
+  const spellsApply = hasSpells || spellSelections.length > 0;
   const applicableSteps = new Set<BuilderStepId>(
     BUILDER_STEPS.filter(
       step =>
-        (step.id !== "spells-resources" || hasSpells) && (step.id !== "equipment" || equipmentApplies),
+        (step.id !== "spells-resources" || spellsApply) && (step.id !== "equipment" || equipmentApplies),
     ).map(step => step.id),
   );
 
@@ -655,6 +683,21 @@ export function planBuild(
     stepIssues[step].push({ code: "PROFICIENCY_DUPLICATE_SELECTION", recordId: duplicate.optionId, severity: "error" });
   }
 
+  /*
+   * A spell obligation is reported against the step that presents it, exactly as
+   * an unresolved generic choice is. One code covers under-selection,
+   * over-selection and a stored spell that stopped being legal: they are the same
+   * fact to the user — this decision is not finished — and the step's own surface
+   * is where the counts that distinguish them are shown.
+   */
+  for (const selection of spellSelections)
+    if (!selection.resolved)
+      stepIssues["spells-resources"].push({
+        code: "SPELL_SELECTION_UNRESOLVED",
+        recordId: selection.selectionId,
+        severity: "error",
+      });
+
   // Equipment choices come from whatever bundles the build's entries grant.
   for (const choice of equipmentChoices) {
     const selected = build.equipmentSelections[choice.choiceId] ?? [];
@@ -703,14 +746,15 @@ export function planBuild(
         label: "Spellcasting",
         // Stated on the review rather than as a step, so the absence is
         // recorded without costing the user a screen.
-        value: hasSpells ? "Choices made in Spells & resources" : "None at this level",
-        applicable: hasSpells,
+        value: spellsApply ? "Choices made in Spells & resources" : "None at this level",
+        applicable: spellsApply,
       },
     ],
     ...(activation.subclass ? { subclass: activation.subclass } : {}),
     proficiencies,
     equipmentGrants,
     spellAvailability,
+    spellSelections,
     maxLevel: maxSupportedLevel(entries, build.classId),
     levelCovered: activation.levelCovered,
     levelCoverage: activation.levelCoverage,

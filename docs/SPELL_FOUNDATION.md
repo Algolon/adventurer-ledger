@@ -108,11 +108,20 @@ evaluation per planning pass, holds both counts identical between a four-spell
 and a four-hundred-spell ruleset, and asserts that content without spell effects
 builds no index at all.
 
+## What came next
+
+Player spell *selection* — the step from "what can this build reach" to "what has
+this player chosen" — is built on top of these three contracts and documented in
+[`CASTER_SPELL_SELECTION.md`](./CASTER_SPELL_SELECTION.md). It preserves contract C
+exactly: list membership still establishes neither `known` nor `alwaysPrepared`, and
+`DerivedCharacterSheet.spellcasting.spells` still refuses to list a spell the
+character merely could have learned.
+
 ## Out of scope, and unimplemented
 
 Spell-owned `effects[]` execution, `scaling` runtime consumption, cantrip
 scaling, slot-level upcasting, attack rolls, saving throws, damage, healing,
 temporary hit points, conditions, target and area templates, concentration
 enforcement, casting-action enforcement, detailed material-component mechanics,
-costly or consumed material inventory, summons, bestiary, preparation limits,
-and any caster UI redesign.
+costly or consumed material inventory, summons, bestiary, and any caster UI
+redesign beyond the selection step above.

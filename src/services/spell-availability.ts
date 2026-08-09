@@ -54,6 +54,10 @@ export interface AvailableSpell {
   label: string;
   level: number;
   ritual: boolean;
+  /** Declared school, when the record carries one. Display metadata only. */
+  school?: string;
+  /** The entry's own short summary. Never full rules text. */
+  summary?: string;
   /**
    * The reachable lists this spell is on, sorted.
    *

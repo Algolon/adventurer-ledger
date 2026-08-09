@@ -1370,6 +1370,53 @@
   border-color: var(--sage);
 }
 
+/*
+ * A spell the build already holds, sitting in the list it belongs to.
+ *
+ * It is a `div`, not a `button`, because it is not a decision: the character has
+ * it, and the only honest affordance is none. Keeping it in the same row shape
+ * as its selectable neighbours is what makes the group readable as one
+ * repertoire — a separate box would ask the user to reconcile two lists to find
+ * out what they actually know. The dashed edge and the muted title say "yours,
+ * not chosen here" without borrowing the selected treatment, so a filled mark
+ * still means exactly one thing on this screen.
+ */
+.m2-option-granted {
+  border-style: dashed;
+  background: transparent;
+  cursor: default;
+}
+
+.m2-option-granted b {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.m2-option-granted .m2-option-mark {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+/*
+ * One spell level within a selection.
+ *
+ * The heading is what turns a long list into a navigable one, and it is a real
+ * `h4` so a screen reader can jump between levels the same way the eye does.
+ */
+.m2-spell-group {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.m2-spell-group h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: none;
+}
+
 .m2-why {
   min-height: 44px;
   display: inline-flex;

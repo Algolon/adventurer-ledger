@@ -27,6 +27,8 @@ import type { Category, ContentEntry, ID, RulesetProfile } from "@/src/domain/mo
 import { originIncreasePatternFor, reconcileAbilityAllocation } from "@/src/services/ability-allocation";
 import { maxSupportedLevel, planActivation } from "@/src/services/choice-planner";
 import { requiredChoicesFor, requiredEquipmentChoices } from "@/src/services/build-planner";
+import { planSpellAvailability } from "@/src/services/spell-availability";
+import { planSpellSelections } from "@/src/services/spell-selection";
 
 /** One value the change touches, addressed by its path in the build. */
 export interface RulesetChangeField {
@@ -221,6 +223,29 @@ export function resolveRulesetChange(input: {
   );
   candidate = { ...candidate, choiceSelections, equipmentSelections };
 
+  /*
+   * Spell selections are resolved last, for the same reason equipment is: the
+   * class that owns them may itself have been dropped above, and eligibility is
+   * judged against the availability the *settled* candidate reaches.
+   *
+   * A selection survives only when the target ruleset still owes it and still
+   * offers every spell the draft had chosen — the same all-or-nothing rule the
+   * choice layer uses, so a partially valid answer is never silently trimmed into
+   * a different answer than the user gave.
+   */
+  const spellSelections = survivingSelections(
+    build.spellSelections ?? {},
+    offeredOptionsFor(
+      planSpellSelections(candidate, proposedEntries, planSpellAvailability(activation, proposedEntries, candidate)).map(
+        selection => ({
+          choiceId: selection.selectionId,
+          options: selection.options.filter(option => option.selectable).map(option => ({ id: option.id })),
+        }),
+      ),
+    ),
+  );
+  candidate = { ...candidate, spellSelections };
+
   recordSelectionVerdicts({
     stored: build.choiceSelections,
     kept: choiceSelections,
@@ -235,6 +260,15 @@ export function resolveRulesetChange(input: {
     kept: equipmentSelections,
     fieldPrefix: "equipmentSelections",
     labelPrefix: "Equipment choice",
+    nameOf,
+    retained,
+    cleared,
+  });
+  recordSelectionVerdicts({
+    stored: build.spellSelections ?? {},
+    kept: spellSelections,
+    fieldPrefix: "spellSelections",
+    labelPrefix: "Spell selection",
     nameOf,
     retained,
     cleared,
