@@ -72,6 +72,67 @@ async function importScalePack(page: Page) {
   await expect(page.getByText(/ruleset profile\(s\) created and ready to select/)).toBeVisible();
 }
 
+/** Polls a condition to a deadline and reports whether it became true. */
+async function became(condition: () => Promise<boolean>, timeout = 10000): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await condition()) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+const isShowing = (locator: ReturnType<Page["getByRole"]>) => locator.isVisible().catch(() => false);
+
+/**
+ * Walks whatever creation steps a build still owes, and commits it.
+ *
+ * Which steps those are depends on the class and on the level the character was
+ * created at, so they are answered as they arrive rather than enumerated.
+ *
+ * The loop is driven by the step counter the builder prints, not by a fixed
+ * number of attempts. That distinction is the whole point: the previous version
+ * pressed Continue a set number of times and assumed each press advanced a step,
+ * so on a loaded runner — where a step's options had not painted before the
+ * press — it spent its budget without ever reaching Review and failed twenty
+ * seconds later at a heading assertion that had nothing to do with the cause.
+ * Now an iteration that does not advance simply answers the same step again, and
+ * running out is reported as what it is.
+ */
+async function finishRemainingSteps(page: Page, options: { skills: readonly string[]; subclass: RegExp }) {
+  const counter = page.getByText(/Step \d+ of \d+/).first();
+  const finish = page.getByRole("button", { name: "Finish and open sheet" });
+  const stepNumber = async () =>
+    Number.parseInt(/Step (\d+) of/.exec((await counter.textContent().catch(() => "")) ?? "")?.[1] ?? "0", 10);
+
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (await isShowing(finish)) {
+      await finish.click();
+      return;
+    }
+
+    await expect(counter).toBeVisible();
+    const before = await stepNumber();
+
+    for (const skill of options.skills) {
+      const option = page.getByRole("button", { name: new RegExp(`^${skill}`) }).first();
+      if (await isShowing(option)) await option.click();
+    }
+    const subclass = page.getByRole("button", { name: options.subclass }).first();
+    if (await isShowing(subclass)) await subclass.click();
+
+    const advance = page.getByRole("button", { name: "Continue" });
+    // The footer re-enables only once the step's navigation is persisted, so a
+    // press before that is a press against a control that is deliberately dead.
+    await expect(advance).toBeEnabled();
+    await advance.click();
+
+    // Progress is observed, never assumed.
+    await became(async () => (await isShowing(finish)) || (await stepNumber()) !== before);
+  }
+  throw new Error("the builder never reached Review");
+}
+
 /** Builds one of the scale classes straight at a target level. */
 async function buildScale(
   page: Page,
@@ -100,25 +161,7 @@ async function buildScale(
   await page.getByLabel("+1 to").selectOption("constitution");
   await next(page);
 
-  /*
-   * The remaining steps differ per class and per level, so they are walked
-   * rather than enumerated: answer whatever the step is asking, then Continue,
-   * until Review offers to finish.
-   */
-  for (let guard = 0; guard < 8; guard += 1) {
-    for (const skill of options.skills) {
-      const option = page.getByRole("button", { name: new RegExp(`^${skill}`) }).first();
-      if ((await option.count()) > 0 && (await option.isVisible())) await option.click();
-    }
-    const subclass = page.getByRole("button", { name: options.subclass }).first();
-    if ((await subclass.count()) > 0 && (await subclass.isVisible())) await subclass.click();
-    const finish = page.getByRole("button", { name: "Finish and open sheet" });
-    if ((await finish.count()) > 0 && (await finish.isVisible())) {
-      await finish.click();
-      break;
-    }
-    await next(page);
-  }
+  await finishRemainingSteps(page, options);
   await expect(page.getByRole("heading", { name: options.name, level: 2 })).toBeVisible({ timeout: 20000 });
 }
 

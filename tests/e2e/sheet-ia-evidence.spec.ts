@@ -128,6 +128,55 @@ async function importScalePack(page: Page) {
   await expect(page.getByText(/ruleset profile\(s\) created and ready to select/)).toBeVisible();
 }
 
+/** Polls a condition to a deadline and reports whether it became true. */
+async function became(condition: () => Promise<boolean>, timeout = 10000): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await condition()) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+const isShowing = (locator: ReturnType<Page["getByRole"]>) => locator.isVisible().catch(() => false);
+
+/**
+ * Walks whatever creation steps a build still owes, and commits it.
+ *
+ * Driven by the step counter the builder prints rather than by a fixed number of
+ * presses: an iteration that does not advance answers the same step again
+ * instead of spending one of a small budget, which is how this used to fail on a
+ * loaded runner with a timeout twenty seconds away from its actual cause.
+ */
+async function finishRemainingSteps(page: Page, options: { skills: readonly string[]; subclass: RegExp }) {
+  const counter = page.getByText(/Step \d+ of \d+/).first();
+  const finish = page.getByRole("button", { name: "Finish and open sheet" });
+  const stepNumber = async () =>
+    Number.parseInt(/Step (\d+) of/.exec((await counter.textContent().catch(() => "")) ?? "")?.[1] ?? "0", 10);
+
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (await isShowing(finish)) {
+      await finish.click();
+      return;
+    }
+    await expect(counter).toBeVisible();
+    const before = await stepNumber();
+
+    for (const skill of options.skills) {
+      const option = page.getByRole("button", { name: new RegExp(`^${skill}`) }).first();
+      if (await isShowing(option)) await option.click();
+    }
+    const subclass = page.getByRole("button", { name: options.subclass }).first();
+    if (await isShowing(subclass)) await subclass.click();
+
+    const advance = page.getByRole("button", { name: "Continue" });
+    await expect(advance).toBeEnabled();
+    await advance.click();
+    await became(async () => (await isShowing(finish)) || (await stepNumber()) !== before);
+  }
+  throw new Error("the builder never reached Review");
+}
+
 /** Builds the level 12 Bastionward: fifteen features, four pools, fourteen items. */
 async function buildHighLevelMartial(page: Page, name = "Halric Stonewatch") {
   await page.getByRole("button", { name: "Characters", exact: true }).click();
@@ -146,20 +195,7 @@ async function buildHighLevelMartial(page: Page, name = "Halric Stonewatch") {
   await page.getByLabel("+2 to").selectOption("strength");
   await page.getByLabel("+1 to").selectOption("constitution");
   await next(page);
-  for (let guard = 0; guard < 8; guard += 1) {
-    for (const skill of ["Gatecraft", "Haulage"]) {
-      const option = page.getByRole("button", { name: new RegExp(`^${skill}`) }).first();
-      if ((await option.count()) > 0 && (await option.isVisible())) await option.click();
-    }
-    const subclass = page.getByRole("button", { name: /^Shieldwall/ }).first();
-    if ((await subclass.count()) > 0 && (await subclass.isVisible())) await subclass.click();
-    const finish = page.getByRole("button", { name: "Finish and open sheet" });
-    if ((await finish.count()) > 0 && (await finish.isVisible())) {
-      await finish.click();
-      break;
-    }
-    await next(page);
-  }
+  await finishRemainingSteps(page, { skills: ["Gatecraft", "Haulage"], subclass: /^Shieldwall/ });
   await expect(page.getByRole("heading", { name, level: 2 })).toBeVisible({ timeout: 20000 });
 }
 
