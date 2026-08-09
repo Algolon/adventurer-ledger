@@ -54,6 +54,12 @@ scheduled here.
   titles, character names and section headings. Nothing is self-hosted and
   nothing depends on them loading; the fallback is a local serif and the layout
   is specified against it. See [`BRAND.md`](BRAND.md).
+- **A character sheet that holds at level 12.** The glance header is 164 px
+  rather than 265, Character is a set of closed groups rather than five open
+  cards, and a twelve-level character's Character workspace is 794 px of document
+  rather than 2314. Every section still fits at 320–412 px with no swipe and no
+  control under 44 px, with or without the webfont. Before-and-after evidence is
+  in [`product/SHEET_IA_EVIDENCE.md`](./product/SHEET_IA_EVIDENCE.md).
 - **Global destinations.** Characters, Sheet, Compendium and Settings are the
   four items of the bottom bar. Entering Settings pushes one history entry, so
   the Android Back gesture returns to the screen it was entered from rather than
@@ -77,7 +83,15 @@ These are **open**, not delivered. A pilot will meet them.
   derived from what the character is actually carrying.
 - **Extra Attack is not represented.** No attack-count progression is applied.
 - **Weapon mastery is not shown against attacks.** A mastery may be selected and
-  recorded, but it is not surfaced on the attack it modifies.
+  recorded, but it is not surfaced on the attack it modifies. The resolver
+  attaches `masteryId` to the action; nothing resolves it to a label.
+- **Item state is read-only on the sheet** (`SHEET-GAP-ITEM-STATE`). Equip,
+  unequip, attune, consume and charges have no runtime operation and no durable
+  store.
+- **Preparation cannot be changed during play**
+  (`SHEET-GAP-SPELL-PREPARATION-MANAGEMENT`). A character carries truthful
+  prepared state from the builder and the sheet shows it, but there is no runtime
+  operation for preparing or unpreparing, so re-preparing means Edit character.
 - **Play-sheet rapid-tap handling remains open.** Fast repeated taps on runtime
   actions are not yet debounced or coalesced.
 - **Physical Android install, offline and storage behaviour remain unverified.**
@@ -635,6 +649,156 @@ These are recorded as follow-up dependencies and are deliberately absent here:
 The reasoning for the last three, and for the inventory-provenance and
 hit-point-finalisation items above, is recorded in
 [`docs/product/M2.1A_DEFERRED_DESIGN_NOTES.md`](./product/M2.1A_DEFERRED_DESIGN_NOTES.md).
+
+## Character management and the sheet's information architecture
+
+The sheet is the primary play and character-management workspace, and the
+problem this pass addressed is **scale**: a level 1 martial, a level 12 martial
+and a high-level full caster have to stay understandable and fast to operate on a
+phone. The shapes that only appear at that size are not producible from the
+content this repository ships — the seeded synthetic slice stops at level 2 with
+four spells and one resource — so they are built as original public material in
+[`tests/fixtures/sheet-scale-ruleset.ts`](../tests/fixtures/sheet-scale-ruleset.ts)
+and imported through the ordinary pipeline: a twelve-level martial with fifteen
+features, four resource pools recharging four different ways and a fourteen-line
+kit, and a nine-level caster with five slot pools and thirty spells over six
+spell levels.
+
+**The top-level split is unchanged**, because nothing in the repository
+contradicted it: Overview · Actions · Inventory · Character, with Spells inserted
+only when installed content declares spellcasting for one of the character's
+classes. The strip stays a fixed grid of exactly that many columns, so no section
+is ever behind a swipe.
+
+**A section is now a heading over one bordered group** rather than a card
+carrying its own heading. The old model paid for a boundary, a heading row and
+padding above and below it — around 60 px of chrome — for every group, on screens
+that routinely have five.
+
+**Character is progressive disclosure.** Class & subclass, Species, Background,
+Feats, Features & traits and Proficiencies & training arrive as closed rows that
+state what is inside them, one open at a time, with Edit character and Level up
+under them. A feat is filed under Background only when the background entry's own
+`featId` names it; every other active feat is its own group. The full structure
+is in [`product/MOBILE_SHEET_SPEC.md`](./product/MOBILE_SHEET_SPEC.md).
+
+**The management boundary is data, not prose.**
+[`src/ui/sheet-scope.ts`](../src/ui/sheet-scope.ts) classifies every runtime
+operation, keyed by `RuntimeOperation["kind"]`, so a new operation does not
+compile until somebody has decided whether the sheet owns it.
+
+Measured at 360 × 780, against the baseline at `9b09605`:
+
+| | before | after |
+| --- | --- | --- |
+| Glance header | 265 px (283 at level 12) | 164 px |
+| First screen that is section content | 44–46% | 50–59% |
+| Action row | 57 px | 50 px |
+| Inventory row | 48 px | 48 px, description moved to the drawer |
+| Character, level 12 | 2314 px, five open cards | 794 px, four closed groups |
+| Character, level 1 | 1636 px | 798 px |
+| Spells, level 9 caster | 2870 px | 2384 px, with a filter |
+| Tab strip | fits at 4 and 5 | unchanged |
+
+### Inventory item state is read-only (SHEET-GAP-ITEM-STATE)
+
+Equip, unequip, attune, unattune, consume a quantity and spend a charge are all
+reversible day-to-day state that belongs on the sheet by the boundary above.
+None of them is implemented, and none is faked. `CharacterRuntimeService` has no
+operation for item state; `CharacterRecord` stores `equipmentSelections` — the
+bundle choices that produced the kit — rather than a mutable inventory; and the
+sheet's equipment list is derived from those choices on every read. A control
+here would either write nothing or create a second, private store of item state
+that no other surface reads.
+
+What this pass did instead: the Inventory information architecture is built for
+those controls, and the read-only facts the item schema already carries are
+surfaced — armour contribution, attunement requirement, rarity, weight, quantity
+and the item's own summary. Weight is shown as the number the content declares
+and with no unit, because the schema declares none; a unit, a carrying capacity
+and an encumbrance rule are all part of the same missing model. Closing the gap is an engine change: a typed
+`item-equip` / `item-attune` / `item-quantity` family on the runtime service, a
+durable per-character item-state record keyed by item ID, and a resolver that
+composes it over the derived bundle. Charges additionally need an item-owned
+resource, which the item schema already declares (`resourceIds`) and nothing
+reads. Character currency has no model at all and is part of the same change.
+
+### Preparation cannot be changed during play (SHEET-GAP-SPELL-PREPARATION-MANAGEMENT)
+
+Preparation exists. The caster spell-selection slice
+([`CASTER_SPELL_SELECTION.md`](CASTER_SPELL_SELECTION.md)) added a declarative
+`prepared` selection model, and a committed character carries truthful prepared
+state that the sheet reads: `DerivedSpell` distinguishes `granted`,
+`alwaysPrepared`, `known` and `prepared`, and the Spells workspace shows the
+strongest of those on each row with the whole picture in the spell's drawer.
+
+What is missing is narrower, and it is a Sheet gap rather than an engine one.
+Four things have to be told apart:
+
+1. **Build-time `prepared-from-list` selection.** Implemented. A pack declares a
+   `prepared` selection with a cumulative progression and the builder collects it.
+2. **Prepared state on a committed character.** Implemented, and projected.
+3. **Changing what is prepared during play.** *Absent.* There is no runtime
+   operation for preparation — `RuntimeOperation` has no member for it and
+   `CharacterRuntimeStateRecord` has no field for it — so the only way to change
+   a prepared spell is Edit character, which reopens the builder and rewrites the
+   durable `spellSelections`.
+4. **Learned collection feeding a prepared subset.** Deferred by the slice that
+   added the other three, and documented there: it needs a durable learned layer
+   distinct from both availability and preparation.
+
+Point 3 is the one that matters here, because preparation is exactly the kind of
+reversible day-to-day state the [Sheet-versus-Edit boundary](#the-management-boundary)
+says belongs on the sheet. A player re-preparing after a long rest currently goes
+back through the build. Closing it is a runtime change: a typed
+`spell-prepare` / `spell-unprepare` pair on `CharacterRuntimeService`, a durable
+per-character prepared set in runtime state, a capacity rule read from the same
+declaration the builder already reads, and a resolver that composes the runtime
+set over the committed selections. The sheet's IA has the row state to carry it.
+
+Nothing is faked in the meantime. The sheet never implies an unbadged spell is
+unprepared — under a `known` model no spell is prepared at all — and list
+membership still never makes a spell known or prepared.
+
+### Senses and movement modes are not modelled (SHEET-GAP-SENSES-MOVEMENT)
+
+Overview would show senses and alternative movement modes if the engine
+projected them. It projects one scalar `speed`, which is already in the glance
+header, and no sense at all: `RuleContext` has no senses map and no content
+schema declares one. Nothing is invented to fill the space — the Overview groups
+that exist are the ones with data behind them.
+
+### The Character workspace has no Notes or Companions (SHEET-GAP-NOTES-COMPANIONS)
+
+`CharacterRecord` has no notes field and no companion, summon or familiar
+relation. `CharacterActionRecord` carries an optional private per-action note,
+which is history rather than a character field. Both groups are absent rather
+than empty, and the progressive-disclosure structure has room for them when the
+records exist.
+
+### Gap identifiers
+
+Two naming schemes appear above, and the difference between them matters.
+
+`GAP-003` and `GAP-005` are historical numeric entries in this repository. They
+keep their numbers; nothing renumbers them.
+
+The four gaps this pass recorded — `SHEET-GAP-ITEM-STATE`,
+`SHEET-GAP-SPELL-PREPARATION-MANAGEMENT`, `SHEET-GAP-SENSES-MOVEMENT` and
+`SHEET-GAP-NOTES-COMPANIONS` — use a descriptive, Sheet-scoped namespace instead
+of the next free numbers. **`GAP-###` numbers are allocated across the wider
+Runefolio programme, not within this repository**, and several of them are
+already reserved for engine gaps that have never appeared in this public tree —
+level-scaled choice capacity, unarmoured armour-class formulae, full
+spellcasting automation and roll-rule projection among them. Taking the next
+numbers that looked free from inside this repository would have given four
+different things the same names.
+
+**Do not allocate a new numeric `GAP-###` identifier from this repository
+without first checking the project-wide gap registry.** A gap found here takes a
+descriptive namespaced label — `SHEET-GAP-…` for the character sheet, and the
+same shape for any other surface — which cannot collide with a number allocated
+elsewhere and says what it is without a lookup.
 
 ## Device and installation behavior
 

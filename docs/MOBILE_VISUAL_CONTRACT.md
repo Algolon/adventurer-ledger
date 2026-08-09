@@ -196,7 +196,16 @@ After deployment, on a real Android phone:
     display typefaces to be a local serif and everything else to be unchanged:
     no sideways scroll, no trimmed navigation label, no control that has become
     too small to hit.
-10. Repeat 2–5 on iOS Safari's "Add to Home Screen", where the lock API is absent
+12. Confirm the logo and wordmark sit as one centred unit in the app bar, with
+    the same geometry on Characters, Sheet, Compendium, Settings and inside a
+    build, and that the bar is still a bar rather than a banner.
+13. On a character sheet, open and close each Character group with a thumb and
+    then with an external keyboard. Expect one open at a time, no sideways
+    movement while a group opens, and every header comfortably hittable.
+14. Scroll to the bottom of a long section, switch to another section, and
+    confirm the new one starts under the section strip rather than part-way down
+    itself.
+15. Repeat 2–5 on iOS Safari's "Add to Home Screen", where the lock API is absent
     and the guard is the only layer in force.
 
 Record the device, OS version and browser version with the result.

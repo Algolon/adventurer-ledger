@@ -81,10 +81,41 @@ directly.
 | --- | --- | --- | --- |
 | `--wordmark` | Bookmania | 700 | The Runefolio wordmark, and nothing else |
 | `--title` | Bookmania | 600 | Page titles, creation step titles, character names |
-| `--accent` | Modesto Light Condensed | 300 | Section headings and compact category headings, never below 14 px |
-| `--display-text` | Modesto Light | 300 | A secondary display face; currently only the empty-state headings |
-| `--display` | Georgia | 600/700 | Dialog titles, stat values, and other headings that are neither |
+| `--accent` | Modesto Light Condensed | 300 | Section and category headings, in creation and on the sheet; never below 14 px |
+| `--display-text` | Modesto Light | 300 | Empty-state headings and the sheet's details-drawer titles |
+| `--display` | Georgia | 600/700 | Stat values, resource counts and other numeric display |
 | `--ui` | Inter / system UI | — | Body copy, controls, options, equipment, numbers, dense lists |
+
+### The wordmark's size is measured, not chosen
+
+The mark sits centred in the app bar as one unit — the logo and the word, with
+equal space either side of the pair and no trailing spacer holding it there —
+at 20 px over a 33 px logo.
+
+Twenty is a ceiling rather than a preference. Bookmania Bold sets about 5%
+smaller than the Georgia it falls back to: 14.3 px of cap height at 20 px
+against Georgia's 15.1 px, measured on the running app rather than assumed. So
+it needs those extra pixels to carry the presence a phone wordmark wants. It
+cannot have more of them, because the smallest title in this application is a
+21 px creation step heading in the same family, and a wordmark that matches or
+outgrows the title of the screen underneath it has stopped being a label and
+become a masthead. `tests/e2e/sheet-ia-evidence.spec.ts` reads both sizes off
+the painted page and fails if the wordmark ever reaches the step title, so the
+rule is checked rather than remembered.
+
+### Where Modesto Light Text was, and was not, adopted
+
+`--display-text` is deliberately narrow. It carries the sheet's details-drawer
+titles — a short, prominent, entirely non-interactive heading naming one thing —
+and the empty-state headings it already had.
+
+It was evaluated and rejected for three other places, for reasons worth keeping:
+feature and spell row titles (a 300 weight at 15 px on a dark surface reads
+lighter than the muted line under it, which inverts the row); long descriptions
+(a light serif at body size costs measurable reading comfort in dark mode for no
+hierarchy gain); and any control label (a control's text has to hold at the
+weight the control is drawn at). Density was the constraint in each case, and
+this pass was not willing to spend it on flavour.
 
 ### The webfont is an enhancement, not a dependency
 

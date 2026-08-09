@@ -99,6 +99,27 @@ test("the play sheet and its details surface have no serious or critical violati
   await scan(page, "value details drawer");
 });
 
+/**
+ * The Character workspace in both of its states.
+ *
+ * Closed is already covered incidentally by the level-up scan below, which
+ * leaves the collapsed groups in the document behind its dialog. Open is the
+ * state this pass introduced and the one worth naming: a heading that is also a
+ * disclosure button, with its panel referenced only while the panel exists.
+ */
+test("the Character workspace has no serious or critical violations, open or closed", async ({ page }) => {
+  await page.goto(APP_ROOT);
+  await page.getByRole("button", { name: "New character" }).last().click();
+  await buildBrammel(page);
+  await page.getByRole("tab", { name: "Character" }).click();
+  await expect(page.getByRole("heading", { name: /Class & subclass/ })).toBeVisible();
+  await scan(page, "Character workspace, groups closed");
+
+  await page.getByRole("button", { name: /^Class & subclass/ }).first().click();
+  await expect(page.getByRole("button", { name: /^Hold the Line/ })).toBeVisible();
+  await scan(page, "Character workspace, one group open");
+});
+
 test("the level-up dialog has no serious or critical violations", async ({ page }) => {
   await page.goto(APP_ROOT);
   await page.getByRole("button", { name: "New character" }).last().click();

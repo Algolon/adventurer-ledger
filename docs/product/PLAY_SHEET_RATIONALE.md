@@ -57,12 +57,17 @@ nothing is filled with an invented value.
 
 **The glance header answers "what is true right now?" without scrolling.**
 Name, class and level, hit points, AC, initiative, speed, proficiency, then
-conditions, exhaustion and inspiration as chips. Hit points get a full-width
-tile and the largest type on the screen because it is the number that changes
-most and matters most; the other four sit in one row of equal tiles because they
-are read, not edited. The chip row is where transient state lives, so a
+conditions, exhaustion and inspiration as chips. All five vitals are one row:
+hit points keep the widest column, because they are the number that changes most
+and the control that is pressed most, and the other four are equal because they
+are read rather than edited. The chip row is where transient state lives, so a
 condition and an exhaustion level are visible in the same glance as the hit
 points they are affecting.
+
+That row used to be two, and the block used to be a third of a phone screen
+before anything the user opened it for. What replaced it, what it now measures,
+and the before-and-after captures are in
+[`SHEET_IA_EVIDENCE.md`](SHEET_IA_EVIDENCE.md).
 
 **Session actions are one tap from the value they change.** Tapping hit points
 opens a drawer with amount, a live preview of both outcomes, Damage, Heal, Set
@@ -76,6 +81,13 @@ re-read the number and infer it.
 features are rows with a name and the one or two facts you scan for; the rest is
 behind the row. That keeps five sections navigable on a phone without the long
 section menu the reference products use.
+
+**A character is bigger than a screen, so Character is a set of closed doors.**
+Class & subclass, Species, Background, Feats and Proficiencies & training arrive
+collapsed, each stating what is inside it. A twelfth-level character has fifteen
+features; a flat list of them is the thing a player scrolls past on the way to
+Level up rather than the thing they came for. Sizes and reasoning:
+[`MOBILE_SHEET_SPEC.md`](MOBILE_SHEET_SPEC.md).
 
 **Dying is a state, not a negative number.** At 0 hit points the sheet grows a
 Death saves card with three-pip success and failure tallies, and healing above 0

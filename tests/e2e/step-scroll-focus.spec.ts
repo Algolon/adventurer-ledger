@@ -54,16 +54,34 @@ const settledAtTop = async (page: Page) => {
  * the assertion is still that the viewport ends up genuinely scrolled, which is
  * the precondition the travel tests below depend on.
  */
-async function scrollToBottom(page: Page) {
+async function scrollToBottom(page: Page): Promise<number> {
+  let settled = 0;
   await expect
     .poll(
       async () => {
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        return scrollY(page);
+        /*
+         * The offset only counts once it survives a second read.
+         *
+         * A single read can be taken in the gap before the app corrects the
+         * scroll straight back, which is exactly what it is entitled to do while
+         * the step is still settling. The callers below carry this number
+         * forward and compare the whole navigation against it, so a value that
+         * has already stopped being true takes the failure somewhere else: the
+         * travel test reported a precondition of 0 having just polled its way
+         * past 40. Requiring two agreeing reads closes that window without
+         * relaxing anything — the assertion is still that the viewport ends up
+         * genuinely scrolled.
+         */
+        const first = await scrollY(page);
+        const second = await scrollY(page);
+        settled = second;
+        return first === second ? second : 0;
       },
       { timeout: 5000 },
     )
     .toBeGreaterThan(40);
+  return settled;
 }
 
 /** One programmatic scroll the app asked for, as it asked for it. */
@@ -313,8 +331,9 @@ test.describe("step navigation resets scroll and focus", () => {
     await reachClass(page);
     await page.getByRole("button", { name: /^Vanguard/ }).click();
 
-    await scrollToBottom(page);
-    const from = await scrollY(page);
+    // The settled offset, taken from the poll that established it rather than
+    // re-read afterwards, so what the navigation is judged against is still true.
+    const from = await scrollToBottom(page);
     expect(from, "the precondition — the outgoing step really is scrolled").toBeGreaterThan(40);
 
     await watchNavigation(page);
@@ -334,8 +353,9 @@ test.describe("step navigation resets scroll and focus", () => {
     await next(page);
     await expect(page.getByRole("heading", { level: 2 })).toHaveText("Species");
 
-    await scrollToBottom(page);
-    const from = await scrollY(page);
+    // The settled offset, taken from the poll that established it rather than
+    // re-read afterwards, so what the navigation is judged against is still true.
+    const from = await scrollToBottom(page);
     expect(from, "the precondition — the outgoing step really is scrolled").toBeGreaterThan(40);
 
     await watchNavigation(page);

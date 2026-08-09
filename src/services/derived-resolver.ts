@@ -129,14 +129,34 @@ export interface DerivedEquipmentItem {
   status: "granted" | "carried" | "equipped";
   /** Numeric contribution to armour class, when the item provides one. */
   armorContribution?: number;
+  /** The item's own public summary, for the details surface. */
+  summary?: string;
+  /**
+   * Facts the item schema already carries. They are read, never inferred: an
+   * item that declares no weight has none here rather than a zero, and
+   * attunement is present only when the content says the item requires it.
+   */
+  attunementRequired?: boolean;
+  weight?: number;
+  /** Omitted for `none`, which is the schema's way of saying "not magical". */
+  rarity?: string;
 }
 
-/** A granted feature, trait or feat, with its public/synthetic summary. */
+/**
+ * A granted feature, trait or feat, with its public/synthetic summary.
+ *
+ * `group` is what the Character workspace organises by, so the four values are
+ * the four owners a reader would name. `feat` is separate from `background`
+ * because a feat is not a property of a background: only the one feat a
+ * background's own `featId` declares belongs to it, and everything else — a
+ * class boon, a level-based selection — is a feat in its own right. Grouping
+ * them all under Background put a class's chosen feat under the wrong heading.
+ */
 export interface DerivedFeature {
   id: ID;
   label: string;
   summary?: string;
-  group: "class" | "species" | "background";
+  group: "class" | "species" | "background" | "feat";
 }
 
 /** A non-skill, non-save proficiency the build grants. */
@@ -169,6 +189,11 @@ export interface DerivedSpell {
    * spell is not one the player may drop, and a known spell is not necessarily a
    * prepared one. A spell that is merely *available* is not here at all —
    * reaching a list is permission, not possession.
+   *
+   * The sheet reads all four and claims no more than they say. `prepared: false`
+   * means only "not currently prepared", which under a `known` selection model is
+   * every spell the character has — so the Spells workspace marks what is true
+   * and never labels the remainder unprepared.
    */
   granted: boolean;
   alwaysPrepared: boolean;
@@ -592,12 +617,22 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
     const definition = byId.get(item.itemId);
     if (!definition) missingDependencyIds.add(item.itemId);
     const worn = wornArmourByItemId.get(item.itemId);
+    // Read from the item's own typed mechanics, never guessed from its name.
+    const mechanics = (definition?.mechanics ?? {}) as {
+      attunement?: { required?: unknown };
+      weight?: unknown;
+      rarity?: unknown;
+    };
     return {
       itemId: item.itemId,
       label: definition?.name ?? item.itemId,
       quantity: item.quantity,
       status: item.status,
       ...(worn ? { armorContribution: worn.baseArmorClass } : {}),
+      ...(definition?.summary ? { summary: definition.summary } : {}),
+      ...(mechanics.attunement?.required === true ? { attunementRequired: true } : {}),
+      ...(typeof mechanics.weight === "number" ? { weight: mechanics.weight } : {}),
+      ...(typeof mechanics.rarity === "string" && mechanics.rarity !== "none" ? { rarity: mechanics.rarity } : {}),
     };
   });
 
@@ -889,9 +924,20 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         pushFeature(id, "class");
     }
     for (const id of state.identityTraitIds) pushFeature(id, "species");
+    /*
+     * A background owns exactly the feat it declares, and no others.
+     *
+     * The link is the background entry's own `featId`, so this is read from
+     * content rather than assumed from a category. Every other active feat —
+     * one chosen as a class boon, one taken at a level — is its own thing and
+     * says so, instead of being filed under an origin that did not grant it.
+     */
+    const backgroundEntry = character.backgroundId ? byId.get(character.backgroundId) : undefined;
+    const backgroundFeatId = (backgroundEntry?.mechanics as { featId?: unknown } | undefined)?.featId;
     for (const id of state.activeEntryIds) {
       const definition = byId.get(id);
-      if (definition && definition.category === "feat" && !state.identityTraitIds.has(id)) pushFeature(id, "background");
+      if (!definition || definition.category !== "feat" || state.identityTraitIds.has(id)) continue;
+      pushFeature(id, id === backgroundFeatId ? "background" : "feat");
     }
   }
   features.sort((left, right) => left.group.localeCompare(right.group) || left.label.localeCompare(right.label));
@@ -988,6 +1034,8 @@ export function resolveDerivedCharacter(input: ResolveInput): DerivedCharacterSh
         ...(durationText ? { duration: durationText } : {}),
         concentration: meta.duration?.concentration ?? false,
         ritual: spellIsRitual(definition.mechanics),
+        // Every state fact comes from the merged grant-and-selection projection,
+        // never from the fact that a reachable list happens to contain this spell.
         granted: spellState.granted,
         alwaysPrepared: spellState.alwaysPrepared,
         known: spellState.known,
