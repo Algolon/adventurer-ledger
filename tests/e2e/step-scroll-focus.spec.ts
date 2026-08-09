@@ -66,15 +66,37 @@ async function scrollToBottom(page: Page) {
     .toBeGreaterThan(40);
 }
 
+/** One programmatic scroll the app asked for, as it asked for it. */
+interface ScrollRequest {
+  /** `behavior` as passed, `"auto"` when omitted, `"positional"` for `scrollTo(x, y)`. */
+  readonly behavior: string;
+  /** The requested offset, or `null` for a positional call. */
+  readonly top: number | null;
+}
+
 /**
- * Records every scroll position the viewport actually visits, and the
- * `behavior` of every programmatic scroll the app asks for.
+ * Records what the app *asked* the viewport to do, and where the viewport
+ * actually went.
  *
- * Scroll events are the right instrument for this, and animation frames are
- * not. A smooth scroll is delivered as a run of scroll events with decreasing
- * offsets — that run *is* the travel the pilot saw — while an instant one
- * delivers a single event at the destination. Sampling frames instead measures
- * how fast the test machine paints, which is not the property under test.
+ * Two instruments, because they answer two different questions and only one of
+ * them is reliable.
+ *
+ * `__requests` is the app's own intent, captured by wrapping `window.scrollTo`.
+ * Every reset the application performs appears here exactly once, on every
+ * engine, whatever the incoming page's height turns out to be. This is the
+ * signal that proves the app reset the viewport deliberately.
+ *
+ * `__visited` is what the user could have seen, captured from scroll events. A
+ * smooth scroll is delivered as a run of events with decreasing offsets — that
+ * run *is* the travel the pilot reported — while an instant one delivers at
+ * most a single event at the destination. It is the right instrument for
+ * "nothing intermediate was ever painted" and the wrong one for "a reset
+ * happened at all": when the incoming step is shorter than the outgoing offset
+ * the browser clamps the position during layout, and a subsequent
+ * `scrollTo(0, 0)` from an already-clamped zero moves nothing and dispatches
+ * nothing. That is a correct page-like navigation with an empty event log, and
+ * it is what failed this file on CI while the application was behaving
+ * perfectly.
  *
  * Both hooks are installed before any application script runs, because the
  * thing being measured happens inside the commit that swaps the step in; there
@@ -82,18 +104,23 @@ async function scrollToBottom(page: Page) {
  */
 async function instrumentScrolling(page: Page) {
   await page.addInitScript(() => {
-    const probe = window as unknown as { __visited: number[]; __behaviours: string[]; __watch: boolean };
+    const probe = window as unknown as {
+      __visited: number[];
+      __requests: { behavior: string; top: number | null }[];
+      __watch: boolean;
+    };
     probe.__visited = [];
-    probe.__behaviours = [];
+    probe.__requests = [];
     probe.__watch = false;
 
     const original = window.scrollTo.bind(window);
     window.scrollTo = ((...args: unknown[]) => {
       const [first] = args;
-      probe.__behaviours.push(
-        args.length === 1 && typeof first === "object" && first !== null
-          ? String((first as ScrollToOptions).behavior ?? "auto")
-          : "positional",
+      const options = args.length === 1 && typeof first === "object" && first !== null ? (first as ScrollToOptions) : null;
+      probe.__requests.push(
+        options
+          ? { behavior: String(options.behavior ?? "auto"), top: typeof options.top === "number" ? options.top : null }
+          : { behavior: "positional", top: null },
       );
       return (original as (...rest: unknown[]) => void)(...args);
     }) as typeof window.scrollTo;
@@ -108,49 +135,109 @@ async function instrumentScrolling(page: Page) {
   });
 }
 
-const startWatching = (page: Page) =>
+/**
+ * Opens a fresh window over one navigation.
+ *
+ * Both logs are cleared, not just the offsets. The tests scroll the outgoing
+ * step to its bottom themselves, and that setup scroll is a `scrollTo` call
+ * like any other — left in the log it would satisfy "the app requested a
+ * reset" without the app having done anything at all. Scoping the window to
+ * the navigation is what makes the request assertions mean what they say.
+ */
+const watchNavigation = (page: Page) =>
   page.evaluate(() => {
-    const probe = window as unknown as { __visited: number[]; __watch: boolean };
+    const probe = window as unknown as { __visited: number[]; __requests: unknown[]; __watch: boolean };
     probe.__visited = [];
+    probe.__requests = [];
     probe.__watch = true;
   });
 
 /**
- * Stops watching and returns the offsets visited.
+ * Closes the window and returns everything recorded in it.
  *
  * Two animation frames are awaited first. `window.scrollY` updates
  * synchronously but the matching scroll *event* is only dispatched at the next
  * rendering opportunity, so reading the log the instant the position settles
  * reports an empty list for a scroll that plainly happened.
  */
-const visitedOffsets = (page: Page) =>
+const navigationRecord = (page: Page) =>
   page.evaluate(async () => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const probe = window as unknown as { __visited: number[]; __watch: boolean };
+    const probe = window as unknown as {
+      __visited: number[];
+      __requests: { behavior: string; top: number | null }[];
+      __watch: boolean;
+    };
     probe.__watch = false;
-    return probe.__visited;
+    return { visited: probe.__visited, requests: probe.__requests };
   });
 
 const requestedBehaviours = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __behaviours: string[] }).__behaviours);
+  page.evaluate(() => (window as unknown as { __requests: { behavior: string }[] }).__requests.map(r => r.behavior));
 
 /**
- * A step change may visit the old offset or the new top, and nothing between.
+ * The behaviours that move the viewport in one go rather than over time.
  *
- * Any intermediate offset is scroll travel the user can see, which is the whole
- * complaint. The tolerance covers sub-pixel settling and the browser clamping
- * the old offset when the incoming step is shorter than the outgoing one.
+ * `instant` is what the application asks for. `auto` is accepted because with
+ * no `scroll-behavior: smooth` anywhere in the stylesheets it resolves to the
+ * same jump — but the app must still be *asking* for a reset, and the assertion
+ * below requires one of these on a request that targets the top.
  */
-function expectNoVisibleTravel(visited: readonly number[], from: number, where: string) {
-  const travelling = visited.filter(offset => offset > 4 && offset < from - 4);
+const NON_ANIMATED = new Set(["instant", "auto"]);
+
+/**
+ * One page-like navigation, proved from what the app asked for and from what
+ * the viewport could have shown.
+ *
+ * The invariant is not "a scroll event fired". It is:
+ *
+ *   - the outgoing surface really was scrolled (the caller's precondition);
+ *   - the app made a *new* reset request during this navigation;
+ *   - that request targets the top and is not animated;
+ *   - nothing in the window asked for a smooth scroll;
+ *   - the viewport ended at the top;
+ *   - and if any scroll events were dispatched, none of them shows an
+ *     intermediate position between the old offset and the top.
+ *
+ * The last clause is conditional on purpose, and it is the only thing that
+ * changed about the strength of this file. An empty event log is a legitimate
+ * outcome — the browser can clamp a too-large offset during layout, leaving the
+ * app's reset with nothing left to move — and it is not evidence of anything,
+ * good or bad. The evidence that the app did its job is the request log, which
+ * is deterministic; the evidence that no travel was visible is the event log,
+ * which only speaks when it has something to say.
+ */
+function expectPageLikeNavigation(
+  record: { visited: readonly number[]; requests: readonly ScrollRequest[] },
+  from: number,
+  where: string,
+) {
+  const { visited, requests } = record;
+  const described = `requests ${JSON.stringify(requests)}, visited ${visited.join(", ") || "nothing"}`;
+
+  // The app asked, during this navigation, rather than at some earlier point.
+  expect(requests.length, `${where} made no programmatic scroll request at all (${described})`).toBeGreaterThan(0);
+  const resets = requests.filter(request => request.top !== null && request.top <= 4);
+  expect(resets.length, `${where} requested no reset to the top (${described})`).toBeGreaterThan(0);
   expect(
-    travelling,
-    `${where} travelled through ${travelling.join(", ")} on its way to the top (visited ${visited.join(", ")})`,
+    resets.filter(request => !NON_ANIMATED.has(request.behavior)),
+    `${where} asked for an animated reset (${described})`,
   ).toEqual([]);
-  // The reset must be observable at all: a step change that scrolled nothing is
-  // the original defect, not a fix for it.
-  expect(visited.length, `${where} produced no scroll at all`).toBeGreaterThan(0);
-  expect(visited.at(-1), `${where} did not land at the top; visited ${visited.join(", ")}`).toBeLessThanOrEqual(4);
+  // Nothing in the whole window may animate, not merely the reset itself.
+  expect(
+    requests.filter(request => request.behavior === "smooth"),
+    `${where} requested a smooth scroll (${described})`,
+  ).toEqual([]);
+
+  // Nothing between the old offset and the top was ever painted. The tolerance
+  // covers sub-pixel settling and the browser clamping the old offset when the
+  // incoming step is shorter than the outgoing one.
+  const travelling = visited.filter(offset => offset > 4 && offset < from - 4);
+  expect(travelling, `${where} travelled through ${travelling.join(", ")} on its way to the top (${described})`).toEqual(
+    [],
+  );
+  if (visited.length)
+    expect(visited.at(-1), `${where} did not land at the top (${described})`).toBeLessThanOrEqual(4);
 }
 
 test.describe("step navigation resets scroll and focus", () => {
@@ -215,9 +302,11 @@ test.describe("step navigation resets scroll and focus", () => {
   /**
    * The pilot's actual complaint, on the viewport it was reported from.
    *
-   * Continue is pressed from the bottom of a scrolled step and every painted
-   * frame is inspected. An animated reset would paint the whole way up; a
-   * page-like one paints the old offset, then the top.
+   * Continue is pressed from the bottom of a scrolled step, and the whole
+   * navigation is inspected: what the app asked the viewport to do, what the
+   * viewport could have shown on the way, where it ended, and where focus went.
+   * An animated reset would paint the whole way up and would show in the
+   * request log; a page-like one asks once, instantly, for the top.
    */
   test("Continue shows no scroll travel on a phone viewport", async ({ page }) => {
     await instrumentScrolling(page);
@@ -226,13 +315,16 @@ test.describe("step navigation resets scroll and focus", () => {
 
     await scrollToBottom(page);
     const from = await scrollY(page);
+    expect(from, "the precondition — the outgoing step really is scrolled").toBeGreaterThan(40);
 
-    await startWatching(page);
+    await watchNavigation(page);
     await next(page);
     await expect(page.getByRole("heading", { level: 2 })).toHaveText("Species");
     await settledAtTop(page);
 
-    expectNoVisibleTravel(await visitedOffsets(page), from, "Continue");
+    expectPageLikeNavigation(await navigationRecord(page), from, "Continue");
+    // The step change is still a landmark, not merely a scroll.
+    await expect(page.getByRole("heading", { level: 2 })).toBeFocused();
   });
 
   test("Back shows no scroll travel either", async ({ page }) => {
@@ -244,13 +336,15 @@ test.describe("step navigation resets scroll and focus", () => {
 
     await scrollToBottom(page);
     const from = await scrollY(page);
+    expect(from, "the precondition — the outgoing step really is scrolled").toBeGreaterThan(40);
 
-    await startWatching(page);
+    await watchNavigation(page);
     await page.getByRole("button", { name: "Back" }).click();
     await expect(page.getByRole("heading", { level: 2 })).toHaveText("Class & level");
     await settledAtTop(page);
 
-    expectNoVisibleTravel(await visitedOffsets(page), from, "Back");
+    expectPageLikeNavigation(await navigationRecord(page), from, "Back");
+    await expect(page.getByRole("heading", { level: 2 })).toBeFocused();
   });
 
   /**
@@ -283,5 +377,153 @@ test.describe("step navigation resets scroll and focus", () => {
       .getByRole("heading", { level: 2 })
       .evaluate(node => getComputedStyle(node).outlineStyle);
     expect(outline).toBe("none");
+  });
+});
+
+/**
+ * Builds the martial fixture and stops on Review, without committing.
+ *
+ * The same walk the rest of the suite uses; it lives here rather than being
+ * imported so this file stays runnable on its own.
+ */
+async function reachReview(page: Page) {
+  await openBuilder(page);
+  await page.getByLabel("Character name", { exact: true }).fill("Brammel Voss");
+  await next(page);
+  await page.getByRole("button", { name: /^Vanguard/ }).click();
+  await next(page);
+  await page.getByRole("button", { name: /^Riverborn/ }).click();
+  await next(page);
+  await page.getByRole("button", { name: /^Caravan Warden/ }).click();
+  await page.getByRole("button", { name: /^Trade Cant/ }).click();
+  await next(page);
+  for (const [ability, value] of [
+    ["Strength", "14"],
+    ["Dexterity", "15"],
+    ["Constitution", "13"],
+    ["Intelligence", "12"],
+    ["Wisdom", "10"],
+    ["Charisma", "8"],
+  ] as const)
+    await page.getByLabel(ability, { exact: true }).selectOption(value);
+  await page.getByLabel("+2 to").selectOption("strength");
+  await page.getByLabel("+1 to").selectOption("constitution");
+  await next(page);
+  await page.getByRole("button", { name: /^Guarded Hand/ }).click();
+  await page.getByRole("button", { name: /^Riverlore/ }).click();
+  await page.getByRole("button", { name: /^Haulage/ }).click();
+  await next(page);
+  await page.getByRole("button", { name: /^Warden pack/ }).click();
+  await next(page);
+  await next(page); // Identity
+  await expect(page.getByRole("heading", { level: 2 })).toHaveText("Review");
+}
+
+/**
+ * Leaving creation for the sheet is navigation to a different workspace.
+ *
+ * The pilot's report: scroll part-way down Review, commit, and the character
+ * opens half way down its own sheet. It is the step-transition defect one level
+ * up — the builder reset the viewport between its own steps and then handed the
+ * user to an entirely different screen without doing it again — so the fix and
+ * these tests are deliberately the same shape as the ones above.
+ */
+test.describe("committing a character opens the sheet at its top", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    test.slow();
+  });
+
+  /**
+   * A floor under the document height, for the whole session.
+   *
+   * Without it these tests cannot fail, and would therefore prove nothing. The
+   * sheet paints a short "Opening the sheet…" frame while its record loads, and
+   * a document that suddenly becomes shorter than the current offset has that
+   * offset *clamped* by the browser — so on this engine the viewport happened to
+   * land at zero whether or not the app asked for it, which is exactly why the
+   * defect survived to a physical device. Pinning the document tall removes the
+   * accident from the measurement: whatever the offset ends up being after the
+   * commit, the app is the only thing that can have chosen it.
+   */
+  const pinDocumentHeight = (page: Page) =>
+    page.addInitScript(() => {
+      const style = document.createElement("style");
+      style.textContent = "body { min-height: 4000px; }";
+      document.addEventListener("DOMContentLoaded", () => document.head.append(style));
+    });
+
+  test("a scrolled Review cannot transfer its scroll position to the sheet", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await reachReview(page);
+
+    // Part-way down, which is how the defect was reported: not at an end, where
+    // a clamp or a coincidence could produce the right answer for free.
+    await page.evaluate(() => window.scrollTo(0, 320));
+    expect(await scrollY(page), "the precondition — Review really is scrolled").toBeGreaterThan(300);
+
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+
+    // The first thing true of the sheet is where it starts.
+    expect(await scrollY(page), "the sheet opened at Review's offset").toBeLessThanOrEqual(4);
+    await settledAtTop(page);
+  });
+
+  test("the sheet arrives without any visible scroll travel", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await instrumentScrolling(page);
+    await reachReview(page);
+
+    await page.evaluate(() => window.scrollTo(0, 320));
+    const from = await scrollY(page);
+    expect(from, "the precondition — Review really is scrolled").toBeGreaterThan(40);
+
+    await watchNavigation(page);
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+    await settledAtTop(page);
+
+    expectPageLikeNavigation(await navigationRecord(page), from, "Opening the sheet");
+  });
+
+  test("the app never animates its way from Review to the sheet", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await instrumentScrolling(page);
+    await reachReview(page);
+    await page.evaluate(() => window.scrollTo(0, 320));
+
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+
+    const behaviours = await requestedBehaviours(page);
+    expect(behaviours.length, "no programmatic scroll was recorded at all").toBeGreaterThan(0);
+    expect(behaviours.filter(value => value === "smooth")).toEqual([]);
+  });
+
+  /**
+   * The workspace is still a workspace: nothing about starting at the top may
+   * cost the user the navigation or the heading they arrived at.
+   */
+  test("the sheet is navigable and announced after the commit", async ({ page }) => {
+    await pinDocumentHeight(page);
+    await reachReview(page);
+    await page.evaluate(() => window.scrollTo(0, 320));
+    await page.getByRole("button", { name: "Finish and open sheet" }).click();
+
+    await expect(page.getByRole("heading", { name: "Brammel Voss", level: 2 })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sheet" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+
+    // Every root destination is reachable, and each one also starts at its top.
+    await page.evaluate(() => window.scrollTo(0, 320));
+    await page.getByRole("button", { name: "Compendium" }).click();
+    await expect(page.getByRole("heading", { name: "Compendium", level: 2 })).toBeVisible();
+    await settledAtTop(page);
+
+    await page.evaluate(() => window.scrollTo(0, 320));
+    await page.getByRole("button", { name: "Characters" }).click();
+    await expect(page.getByRole("heading", { name: "Characters", level: 2 })).toBeVisible();
+    await settledAtTop(page);
   });
 });

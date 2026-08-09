@@ -268,20 +268,23 @@ body :where(h1, h2, h3, h4, h5, h6, p, li, dd, dt, b, small, code, td, th, figca
 }
 
 /*
- * The offline-readiness indicator, as it appears in the app bar.
+ * The offline-readiness status, as it appears under Settings · Offline.
  *
- * The visible sentence is hidden below 600 px and the accessible copy in
- * `.m2-visually-hidden` carries the name instead, so the status is announced
- * identically at every width while the bar keeps its height.
+ * In the app bar this was a dot whose sentence was hidden below 600 px, so on
+ * every phone it read as an unlabelled mark rather than as status, and it
+ * needed a visually-hidden duplicate to have an accessible name at all. On a
+ * settings page there is a full line to work with: the mark and the sentence
+ * are always both present, which means the visible text and the announced text
+ * are the same string at every width and there is nothing to keep in step.
  */
 .offline {
-  flex: 0 1 auto;
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .offline-dot {
@@ -291,22 +294,14 @@ body :where(h1, h2, h3, h4, h5, h6, p, li, dd, dt, b, small, code, td, th, figca
 }
 
 .offline-label {
-  display: none;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-@media (min-width: 600px) {
-  .offline-label {
-    display: inline;
-  }
-
-  /* Once the sentence is visible the duplicate would be read twice. */
-  .offline .m2-visually-hidden {
-    display: none;
-  }
+/* A second signal beside the sentence, never instead of it: the line says
+   "Offline ready" in words whether or not the mark beside it is read. */
+.offline[data-state="ready"] .offline-dot {
+  color: var(--sage);
 }
 
 @media (max-width: 720px) {

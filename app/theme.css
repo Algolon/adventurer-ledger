@@ -87,6 +87,43 @@
   --shadow-floating: 0 8px 30px rgb(0 0 0 / 60%);
   --scrim: rgb(3 7 11 / 85%);
 
+  /*
+   * Type.
+   *
+   * Four of these families are hosted by Adobe Fonts and arrive through the
+   * stylesheet linked in `app/layout.tsx`. Every one of them is followed by a
+   * stack that is already on the device, and the sizes, line heights and
+   * measures in this app are chosen against the *fallback* — so a blocked,
+   * slow or unreachable typekit changes how Runefolio looks and changes nothing
+   * about whether it works. Nothing here is a runtime dependency.
+   *
+   * The families are used as hierarchy, not as decoration:
+   *
+   *   --wordmark      Bookmania Bold. The Runefolio wordmark, and nothing else.
+   *   --title         Bookmania Semibold. Character names and major page and
+   *                   step titles — the handful of places that genuinely own
+   *                   the screen they are on.
+   *   --accent        Modesto Light Condensed. The fantasy display face:
+   *                   section headings and compact category headings, at sizes
+   *                   where a light condensed weight is still comfortable on a
+   *                   dark surface. Never in 10–12 px utility text.
+   *   --display-text  Modesto Light. A secondary display face, available for
+   *                   larger secondary headings and feature titles. Deliberately
+   *                   barely used in this pass; it is a token for the character
+   *                   surfaces to reach for, not a new body font.
+   *   --display       The pre-existing serif, still the default for headings
+   *                   that are neither a major title nor a section heading.
+   *   --ui            The workhorse. Body copy, controls, options, equipment
+   *                   descriptions, numbers, metadata and every dense list.
+   *
+   * `serif` closes each display stack because these are serif faces and a
+   * sans-serif substitute would change the texture of the page more than a
+   * different serif does.
+   */
+  --wordmark: bookmania, Georgia, "Times New Roman", serif;
+  --title: bookmania, Georgia, "Times New Roman", serif;
+  --accent: modesto-condensed, "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --display-text: modesto-text, "Iowan Old Style", Georgia, "Times New Roman", serif;
   --display: Georgia, "Times New Roman", serif;
   --ui: Inter, system-ui, sans-serif;
 }

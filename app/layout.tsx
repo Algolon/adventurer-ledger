@@ -4,6 +4,7 @@ import "./globals.css";
 import "./m1.css";
 import { PwaProvider } from "@/src/ui/pwa-status";
 import { withBasePath } from "@/src/config/base-path";
+import { ADOBE_FONTS_STYLESHEET } from "@/src/config/fonts";
 
 export const INSTALL_METADATA_VERSION = "runefolio-2";
 
@@ -60,6 +61,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <html lang="en" style={{ colorScheme: "dark", background: SHELL_BACKGROUND }}>
       <head>
         <link rel="manifest" href={`${withBasePath("/manifest.webmanifest")}?v=${INSTALL_METADATA_VERSION}`} />
+        {/*
+         * Runefolio's licensed Adobe Fonts web project.
+         *
+         * Adobe hosts the fonts and this is the whole integration: no font
+         * binary is downloaded, converted, self-hosted or committed here, and
+         * nothing caches Adobe's files on the user's behalf.
+         *
+         * It is a progressive enhancement. Every family it supplies is declared
+         * in `theme.css` in front of a stack that is already on the device, and
+         * the layout is specified against that fallback — see the font-fallback
+         * checks in `tests/e2e/typography.spec.ts`, which load the app with this
+         * host blocked and assert the same overflow, nav-label and touch-target
+         * contracts as the rest of the suite. An installed Runefolio that has
+         * never reached the network is a fully usable Runefolio in a local
+         * serif; it is not a broken one.
+         */}
+        <link rel="stylesheet" href={ADOBE_FONTS_STYLESHEET} />
       </head>
       <body data-app-build={process.env.NEXT_PUBLIC_BUILD_LABEL ?? "production"}>
         <PwaProvider>{children}</PwaProvider>

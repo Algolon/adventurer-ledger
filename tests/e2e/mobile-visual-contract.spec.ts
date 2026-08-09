@@ -632,6 +632,84 @@ test.describe("the app bar, sticky tabs and bottom bar coexist", () => {
   });
 
   /**
+   * The app bar is the same bar on every surface.
+   *
+   * It used to carry an offline-readiness dot on its trailing edge whose label
+   * was hidden below 600 px, so on a phone it was a small unlabelled mark alone
+   * in the top-right — the artefact the second pilot reported. Removing it took
+   * the only flexible item out of the bar, and a header laid out around two
+   * children can quietly change shape when it has one: the wordmark stretching,
+   * the bar collapsing, the brand drifting off the leading edge.
+   *
+   * So the geometry is asserted on all five surfaces at once rather than
+   * eyeballed on the one that was screenshotted. The bar keeps its height, the
+   * wordmark stays at the leading edge and is not trimmed, and nothing else is
+   * in there.
+   */
+  test("every surface keeps the same app-bar geometry after the status mark was removed", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "This is the phone chrome contract.");
+    test.slow();
+    await page.setViewportSize({ width: 360, height: 780 });
+
+    const geometry = async (surface: string) =>
+      page.evaluate(name => {
+        const bar = document.querySelector(".m2-appbar");
+        const brand = document.querySelector(".m2-appbar-brand");
+        const wordmark = document.querySelector(".m2-appbar-brand strong");
+        if (!bar || !brand || !wordmark) return { surface: name, missing: true };
+        const barBox = bar.getBoundingClientRect();
+        const brandBox = brand.getBoundingClientRect();
+        return {
+          surface: name,
+          missing: false,
+          top: Math.round(barBox.top),
+          height: Math.round(barBox.height),
+          // Distance from the bar's leading edge to the brand's.
+          leadingGap: Math.round(brandBox.left - barBox.left),
+          trimmed: wordmark.scrollWidth > wordmark.clientWidth + 1,
+          // Everything in the bar that renders text, wordmark included.
+          contents: Array.from(bar.querySelectorAll("*"))
+            .filter(node => node.children.length === 0 && (node.textContent ?? "").trim().length > 0)
+            .map(node => (node.textContent ?? "").trim()),
+          overhang: Math.round(barBox.right - document.documentElement.clientWidth),
+        };
+      }, surface);
+
+    const measured = [];
+
+    await page.goto(APP_ROOT);
+    measured.push(await geometry("Characters"));
+
+    await openBuilder(page);
+    measured.push(await geometry("Creation"));
+    await page.getByRole("button", { name: "Save & close" }).click();
+
+    await buildMartial(page, "Brammel Voss");
+    measured.push(await geometry("Sheet"));
+
+    await page.getByRole("button", { name: "Compendium" }).click();
+    await expect(page.locator(".entrycard").first()).toBeVisible();
+    measured.push(await geometry("Compendium"));
+
+    await openSettings(page);
+    measured.push(await geometry("Settings"));
+
+    for (const surface of measured) {
+      expect(surface.missing, `${surface.surface} did not render an app bar`).toBe(false);
+      expect(surface.top, `${surface.surface} does not pin its app bar to the top`).toBe(0);
+      expect(surface.contents, `${surface.surface} states something other than the wordmark`).toEqual(["Runefolio"]);
+      expect(surface.trimmed, `${surface.surface} trims the wordmark`).toBe(false);
+      expect(surface.overhang, `${surface.surface} overhangs the viewport`).toBeLessThanOrEqual(0);
+    }
+    // Identical on every surface, rather than merely valid on each of them.
+    expect(new Set(measured.map(surface => surface.height)).size, "the app bar changes height between surfaces").toBe(1);
+    expect(new Set(measured.map(surface => surface.leadingGap)).size, "the brand moves between surfaces").toBe(1);
+    expect(measured[0]?.height, "the app bar lost its height when the status mark was removed").toBeGreaterThanOrEqual(
+      56,
+    );
+  });
+
+  /**
    * Branding is stated once.
    *
    * The wordmark is a label in the app bar, not a masthead. On the sheet the

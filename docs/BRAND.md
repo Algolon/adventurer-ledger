@@ -60,6 +60,49 @@ The monochrome SVG uses `currentColor`. Standalone SVG files include a title;
 React instances adjacent to visible Runefolio text use empty alt text and
 `aria-hidden`, while a meaningful standalone instance can use `alt="Runefolio"`.
 
+## Typography
+
+Runefolio licenses an Adobe Fonts web project. Adobe hosts the files. This
+repository contains no font binary, declares no `@font-face`, and the service
+worker never precaches anything from Adobe's host — `tests/typography.test.ts`
+fails if any of those three stops being true. The project is linked once, from
+the document head, using the URL exported by
+[`src/config/fonts.ts`](../src/config/fonts.ts):
+
+```html
+<link rel="stylesheet" href="https://use.typekit.net/xlu6nmm.css">
+```
+
+Type is used as hierarchy, not as decoration. Each family is a token in
+[`app/theme.css`](../app/theme.css) and nothing outside that file names a family
+directly.
+
+| Token | Family | Weight | Where it is used |
+| --- | --- | --- | --- |
+| `--wordmark` | Bookmania | 700 | The Runefolio wordmark, and nothing else |
+| `--title` | Bookmania | 600 | Page titles, creation step titles, character names |
+| `--accent` | Modesto Light Condensed | 300 | Section headings and compact category headings, never below 14 px |
+| `--display-text` | Modesto Light | 300 | A secondary display face; currently only the empty-state headings |
+| `--display` | Georgia | 600/700 | Dialog titles, stat values, and other headings that are neither |
+| `--ui` | Inter / system UI | — | Body copy, controls, options, equipment, numbers, dense lists |
+
+### The webfont is an enhancement, not a dependency
+
+Every token above ends in a stack that is already on the device, and every size,
+line height and measure in the app is chosen against that fallback. An installed
+Runefolio that has never reached the network renders in a local serif and
+behaves identically: `tests/e2e/typography.spec.ts` loads the app with Adobe's
+host refused, proves nothing loaded, and then asserts the same contract as
+the rest of the suite — no sideways scroll at 320/360/375/390/412 px, no
+navigation label trimmed to fit, every control still a 44 px target, and every
+heading still outranking the options beneath it.
+
+The one cost is that the stylesheet is render-blocking while the browser
+resolves it, which is what the ordinary Adobe integration does. With no route to
+the host the request fails immediately and the app paints in its fallback; the
+offline suite asserts that this is the *only* request allowed to fail with the
+network off.
+
 ## Assets and regeneration
 
 Canonical vectors live in `public/brand/`. Production PNGs and the ICO live in

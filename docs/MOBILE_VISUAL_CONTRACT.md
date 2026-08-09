@@ -190,6 +190,12 @@ After deployment, on a real Android phone:
    from Compendium and from an open build.
 9. Overscroll the top and bottom of a long sheet and confirm no light band
    appears.
+10. Scroll part-way down Review, commit the character, and confirm the sheet
+    opens at its own top with no visible upward travel on the way there.
+11. Put the phone in flight mode and cold-launch the installed app. Expect the
+    display typefaces to be a local serif and everything else to be unchanged:
+    no sideways scroll, no trimmed navigation label, no control that has become
+    too small to hit.
 10. Repeat 2–5 on iOS Safari's "Add to Home Screen", where the lock API is absent
     and the guard is the only layer in force.
 

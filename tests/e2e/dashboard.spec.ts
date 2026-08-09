@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { ADOBE_FONTS_ORIGIN, ADOBE_FONTS_STYLESHEET } from "@/src/config/fonts";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "",
   APP_ROOT = `${BASE_PATH}/`,
@@ -223,7 +224,7 @@ test("works offline with local compendium edit, search, and export", async ({
   const failed: string[] = [],
     responses: Array<{ url: string; fromWorker: boolean }> = [];
   await page.goto(APP_ROOT);
-  await expect(page.locator(".offline")).toContainText("Offline ready");
+  await expect(page.locator("html")).toHaveAttribute("data-offline-state", "ready");
   await navigate(page, "Imports and exports");
   const original = "Original offline-safe synthetic text without markup.";
   await page
@@ -275,7 +276,23 @@ test("works offline with local compendium edit, search, and export", async ({
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: /Create local export/ }).click();
   await download;
-  expect(failed).toEqual([]);
+  /*
+   * Nothing Runefolio needs fails with the network off.
+   *
+   * This used to require an empty failure list outright, which is the same
+   * assertion for as long as the document reaches only its own origin. It now
+   * links one stylesheet from Adobe Fonts, and that request is *supposed* to
+   * fail here: the typekit is a progressive enhancement in front of a local
+   * fallback stack, not something the app waits for. So the rule is stated as
+   * what it always meant — every same-origin request is served, and the only
+   * permitted failure is the enhancement, named rather than tolerated. A
+   * regression that broke a real asset still fails this, because it would
+   * appear in the first list.
+   */
+  expect(
+    failed.filter((url) => !url.startsWith(ADOBE_FONTS_ORIGIN)),
+    "every request except the font enhancement must be served with the network off",
+  ).toEqual([]);
   expect(
     responses.filter((response) =>
       response.url.startsWith("http://127.0.0.1:4173"),
@@ -292,7 +309,7 @@ test("serves a scoped versioned worker through the preview contract", async ({
   const requested: string[] = [];
   page.on("request", (request) => requested.push(new URL(request.url()).pathname));
   await page.goto(APP_ROOT);
-  await expect(page.locator(".offline")).toContainText("Offline ready");
+  await expect(page.locator("html")).toHaveAttribute("data-offline-state", "ready");
   const worker = await page.request.get(scoped("/sw.js")),
     source = await worker.text();
   expect(worker.headers()["content-type"]).toContain("application/javascript");
@@ -351,7 +368,19 @@ test("serves a scoped versioned worker through the preview contract", async ({
     (elements) => elements.map((element) => element.getAttribute("src") ?? element.getAttribute("href")),
   );
   expect(shellAssets.length).toBeGreaterThan(0);
-  expect(shellAssets.every((asset) => asset?.startsWith(`${BASE_PATH}/_next/`))).toBe(true);
+  /*
+   * Every asset the shell serves itself is base-path scoped, which is what
+   * makes the same build work at the root and under `/adventurer-ledger`. The
+   * one absolute URL in the document is Adobe's font stylesheet, which is not a
+   * shell asset at all: it is hosted elsewhere, never precached, and the app
+   * renders without it. It is named here rather than allowed through by a
+   * loosened rule, so any *other* absolute asset still fails this.
+   */
+  const external = shellAssets.filter((asset) => asset?.startsWith("http"));
+  expect(external, "the only absolute asset is the font enhancement").toEqual([ADOBE_FONTS_STYLESHEET]);
+  expect(
+    shellAssets.filter((asset) => !external.includes(asset)).every((asset) => asset?.startsWith(`${BASE_PATH}/_next/`)),
+  ).toBe(true);
   if (BASE_PATH) {
     expect((await page.request.get("/")).status()).toBe(404);
     expect(requested).not.toContain("/sw.js");

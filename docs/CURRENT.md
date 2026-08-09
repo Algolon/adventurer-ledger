@@ -40,6 +40,20 @@ scheduled here.
   than being covered by it, and the task carries its own Save & close. Step
   changes are page-like — the next step is painted at its top with no visible
   scroll travel — and the mode, discard and exit controls share one compact row.
+- **Workspace changes are page changes.** The same rule applies one level up,
+  between whole surfaces rather than only between creation steps: committing
+  from a part-scrolled Review opens the sheet at the sheet's own top, and moving
+  between Characters, Sheet, Compendium and Settings does the same. Nothing
+  animates on the way.
+- **Compact choices with full-size targets.** An option row is visually about a
+  fifth shorter than it was, and its title sits a step below the legend that
+  owns it, while the row itself stays a 44 px target. The target contract is
+  measured on every control on the screen at 320–412 px, not sampled.
+- **Licensed display type, as an enhancement.** Bookmania and Modesto arrive
+  from a hosted Adobe Fonts web project and carry the wordmark, page and step
+  titles, character names and section headings. Nothing is self-hosted and
+  nothing depends on them loading; the fallback is a local serif and the layout
+  is specified against it. See [`BRAND.md`](BRAND.md).
 - **Global destinations.** Characters, Sheet, Compendium and Settings are the
   four items of the bottom bar. Entering Settings pushes one history entry, so
   the Android Back gesture returns to the screen it was entered from rather than
@@ -237,6 +251,17 @@ character from inside it — unwinds that one entry; entering Settings while
 already there does nothing. A reload replaces any Settings marker on the current
 entry, because the app always restarts at Characters and an entry claiming
 otherwise would leave a Back press with nothing behind it.
+
+**The app bar states the wordmark and nothing else.** It also carried an
+offline-readiness indicator on its trailing edge, whose label did not fit below
+600 px and was hidden — so on every phone it was a small unlabelled dot in the
+top-right, and once the gear moved to the bottom bar it was the only thing left
+up there. Physical testing read it as a visual artefact, which with its label
+removed is what it had become. Offline readiness is still reported, in full and
+in words, under Settings · Offline beside the paragraph explaining what offline
+means here. Anything that needs to *wait* for the shell to be cached, including
+the tests, reads `data-offline-state` on the document element rather than the
+text of a piece of interface.
 
 ## Character management
 
